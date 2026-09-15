@@ -558,6 +558,21 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         explanation: "Value identifiers must resolve to a visible parameter, local binding, with-bound resource, or pattern binding before Rust lowering.",
     },
     DiagnosticExplanation {
+        code: code::MESSAGE_PAYLOAD_NOT_TRANSFERABLE,
+        title: "message payload not transferable",
+        explanation: "A value sent across an isolate boundary — a channel message, a spawned task's payload — must be transferable: plain data with no managed identity, no handle or weak field, and no resource. Classes, resources, and types containing them stay inside the isolate that owns them.",
+    },
+    DiagnosticExplanation {
+        code: code::CHAR_LITERAL_NOT_SINGLE_SCALAR,
+        title: "char literal is not a single scalar value",
+        explanation: "A `Char` is one Unicode scalar value. A `'...'` literal holding zero, two, or more scalars — including a grapheme cluster written as base plus combining mark — is not a `Char`; use a `String` for text of any other length.",
+    },
+    DiagnosticExplanation {
+        code: code::CYCLIC_TYPE_ALIAS,
+        title: "cyclic type alias",
+        explanation: "Type aliases are expanded wherever a type is classified, so a cycle (`type A = B` with `type B = A`, directly or through a chain) has no fixed point and would make expansion diverge. Break the cycle by pointing one alias at a declared type.",
+    },
+    DiagnosticExplanation {
         code: code::VARIANT_PATTERN_ARITY_MISMATCH,
         title: "variant pattern arity mismatch",
         explanation: "A positional variant pattern must bind exactly as many sub-patterns as the variant declares fields, in declared order (`V(a, b)` for a two-field variant, `V(a, b, c)` for three). A payload-free variant may still be matched by its bare name (`V`), but once a parenthesised payload is written its arity must match the declaration. Positional binding is allowed only for declared sum-variant fields; it does not reintroduce anonymous positional records (spec §20.1).",
@@ -696,6 +711,16 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::ASSIGNMENT_TYPE_MISMATCH,
         title: "assignment type mismatch",
         explanation: "When both sides are known, the value assigned to a place must match the place's type. Like the other type checks (`RS0207`/`RS0208`), this is checked before Rust lowering so an `Int = String` style error is reported in RSScript instead of leaking from rustc. Assignments whose value type cannot be determined are left to the existing checks.",
+    },
+    DiagnosticExplanation {
+        code: code::MANAGED_FIELD_SPLIT_CONFLICT,
+        title: "managed field split conflict",
+        explanation: "Field splitting into disjoint paths is a local-only affordance. A managed object is a single runtime value behind one write guard, so two mutable accesses to its inline fields conflict even though the paths are disjoint; the conflict root is the managed object itself.",
+    },
+    DiagnosticExplanation {
+        code: code::CLOSURE_CAPTURE_CONTRACT,
+        title: "explicit closure capture contract",
+        explanation: "An explicit `captures(...)` clause is the closure's capture contract: every name it lists must actually be captured, every captured name must be listed, and each capture's effect must match how the body uses it. The clause is what makes a closure's ownership reviewable without reading its body.",
     },
     DiagnosticExplanation {
         code: code::READ_VIEW_MUTATION,
@@ -868,6 +893,86 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         explanation: "`[implements.\"<interface-package>\"]` provider declarations must bind a provider to one interface package version, selected interface feature set, and effective interface hash.",
     },
     DiagnosticExplanation {
+        code: code::REVIEW_FEATURES_CHANGED,
+        title: "review: file features changed",
+        explanation: "Source-review finding. The advanced language features a file enables changed between the two revisions being compared. Review whether the file should carry the changed feature set.",
+    },
+    DiagnosticExplanation {
+        code: code::REVIEW_FUNCTION_REMOVED,
+        title: "review: function removed",
+        explanation: "Source-review finding. A function present in the old revision is gone from the new one. Restore it or migrate every call site.",
+    },
+    DiagnosticExplanation {
+        code: code::REVIEW_FUNCTION_ADDED,
+        title: "review: function added",
+        explanation: "Source-review finding. The new revision adds a function. Review its API surface and ownership contract before it becomes part of the reviewed boundary.",
+    },
+    DiagnosticExplanation {
+        code: code::REVIEW_PARAMS_CHANGED,
+        title: "review: parameter contract changed",
+        explanation: "Source-review finding. A function's parameters changed — names, types, or data effects. Update call sites for the new contract.",
+    },
+    DiagnosticExplanation {
+        code: code::REVIEW_RETURN_CHANGED,
+        title: "review: return contract changed",
+        explanation: "Source-review finding. A function's return type or return freshness changed. Review callers that depend on the old contract.",
+    },
+    DiagnosticExplanation {
+        code: code::REVIEW_RETENTION_CHANGED,
+        title: "review: retention contract changed",
+        explanation: "Source-review finding. A function's `retains(...)` set changed, so which arguments may outlive the call changed with it. Review callers that pass local values.",
+    },
+    DiagnosticExplanation {
+        code: code::REVIEW_TYPE_REMOVED,
+        title: "review: type removed",
+        explanation: "Source-review finding. A type present in the old revision is gone from the new one. Restore it or migrate every consumer.",
+    },
+    DiagnosticExplanation {
+        code: code::REVIEW_TYPE_ADDED,
+        title: "review: type added",
+        explanation: "Source-review finding. The new revision adds a type. Review its ownership mode and whether it contains resource or handle fields.",
+    },
+    DiagnosticExplanation {
+        code: code::REVIEW_TYPE_KIND_CHANGED,
+        title: "review: type kind changed",
+        explanation: "Source-review finding. A type changed between `struct`, `class`, and `resource`. The three have different identity and lifetime semantics, so every use of the type is affected.",
+    },
+    DiagnosticExplanation {
+        code: code::REVIEW_TYPE_FIELDS_CHANGED,
+        title: "review: type fields changed",
+        explanation: "Source-review finding. A type's fields changed. Review field ownership, `handle`/`weak` markers, and whether the type now contains a resource.",
+    },
+    DiagnosticExplanation {
+        code: code::REVIEW_BOUNDARY_CHANGED,
+        title: "review: ownership boundary changed",
+        explanation: "Source-review finding. The local/managed boundary of a declaration changed, so which values are exclusively owned and which are managed changed with it.",
+    },
+    DiagnosticExplanation {
+        code: code::REVIEW_FUNCTION_KIND_CHANGED,
+        title: "review: function kind changed",
+        explanation: "Source-review finding. A function changed kind — for example between synchronous and `async`, or between a body and an external declaration. Review callers and scheduling assumptions.",
+    },
+    DiagnosticExplanation {
+        code: code::REVIEW_PROTOCOL_IMPL_CHANGED,
+        title: "review: protocol implementation changed",
+        explanation: "Source-review finding. An `impl P for T` mapping changed, was added, or was removed, so dynamic and generic dispatch for that pair resolves differently.",
+    },
+    DiagnosticExplanation {
+        code: code::REVIEW_SUM_TYPE_CHANGED,
+        title: "review: sum type changed",
+        explanation: "Source-review finding. A sum type's variants or variant fields changed. Every `match` over it has to be revisited, including ones that relied on exhaustiveness.",
+    },
+    DiagnosticExplanation {
+        code: code::REVIEW_CONST_CHANGED,
+        title: "review: constant changed",
+        explanation: "Source-review finding. A declared constant's value or type changed.",
+    },
+    DiagnosticExplanation {
+        code: code::REVIEW_TYPE_ALIAS_CHANGED,
+        title: "review: type alias changed",
+        explanation: "Source-review finding. A `type` alias now expands to a different target, so every position that spells the alias resolves to a different type.",
+    },
+    DiagnosticExplanation {
         code: code::LINT_SIGNATURE_COMPLEXITY,
         title: "signature complexity lint",
         explanation: "Public signatures should remain reviewable in one screen. The linter warns when public parameters, generic parameters, effect clauses, or nested type shapes exceed the current review budget.",
@@ -1007,6 +1112,54 @@ fn source_context_for_span(source: &str, span: &Span) -> Option<JsonSourceContex
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// Every code the registry declares must carry an explanation, because the
+    /// generated catalog (`docs/generated/diagnostic-catalog.{md,json}`) is a
+    /// pure projection of `diagnostic_explanations()`: a code with no entry is
+    /// simply absent from the published catalog, with nothing to notice it.
+    ///
+    /// The code module is the only place in this file that declares
+    /// `pub const NAME: &str = "…";`, so reading the source back is an exact
+    /// enumeration — and one that cannot be satisfied by a second hand-kept list
+    /// drifting alongside the first.
+    #[test]
+    fn every_declared_code_has_a_catalog_explanation() {
+        let source = include_str!("implementation.rs");
+        let declared = source
+            .lines()
+            .filter_map(|line| {
+                let line = line.trim();
+                let rest = line.strip_prefix("pub const ")?;
+                let (_, value) = rest.split_once("&str = \"")?;
+                value.strip_suffix("\";")
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            declared.len() > 100,
+            "the code scan found only {} codes; the declaration shape must have changed",
+            declared.len()
+        );
+        let missing = declared
+            .iter()
+            .filter(|code| explain_diagnostic_code(code).is_none())
+            .collect::<Vec<_>>();
+        assert!(
+            missing.is_empty(),
+            "codes with no catalog explanation: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn the_catalog_explains_each_code_once() {
+        let mut seen = std::collections::BTreeSet::new();
+        for explanation in diagnostic_explanations() {
+            assert!(
+                seen.insert(explanation.code),
+                "duplicate catalog entry for {}",
+                explanation.code
+            );
+        }
+    }
 
     fn temp_source(name: &str, contents: &str) -> String {
         let nanos = SystemTime::now()

@@ -4206,25 +4206,17 @@ or the package manager, not by the language rules described here.
 | `PKG0101` `PKG0102` `PKG0501` `PKG0601` `PKG0901` | package manager: feature resolution, dependency sources, review policy, native binding metadata, provider declarations |
 | `RSR001`–`RSR020` | package review / API-diff codes (features, functions, params, returns, retention, types, boundaries, protocol impls, sums, consts, aliases) |
 
-### 11.9 Codes in the registry but not in the published catalog
+### 11.9 The published catalog is complete
 
-`docs/generated/diagnostic-catalog.md` publishes 83 entries. The registry
-(`crates/rsscript-diagnostics/src/implementation.rs`) defines these additional
-codes, all of which the front end really does emit (each is exercised by a
-fixture or by an example in this document):
+`docs/generated/diagnostic-catalog.{md,json}` is a pure projection of
+`diagnostic_explanations()` in
+`crates/rsscript-diagnostics/src/implementation.rs`, and every code the registry
+declares now has an entry — `RS0036`, `RS0038`, `RS0039`, `RS0309`, `RS0805` and
+the whole `RSR0xx` family were missing and have been added. A test in that crate
+reads its own source back and fails if a declared code has no explanation, so a
+new code cannot be added without a catalog entry.
 
-| Code | Meaning | Section |
-| --- | --- | --- |
-| `RS0036` | message payload not cross-isolate transferable | §9.5 |
-| `RS0038` | char literal is not exactly one Unicode scalar | §1.2 |
-| `RS0039` | cyclic type alias | §2.8 |
-| `RS0309` | managed field split conflict | §5.4 |
-| `RS0805` | explicit-closure capture contract | §5.9 |
-| `RSR001`–`RSR020` | package review codes | §11.8 |
-
-This is a documentation gap in the generated catalog, not a language gap (§12).
-
-Note also that the code space has holes: `RS0004`, `RS0006`, `RS0008`–`RS0012`,
+Note that the code space has holes: `RS0004`, `RS0006`, `RS0008`–`RS0012`,
 `RS0014`, `RS0019`, `RS0020`, `RS0703`, and `RS0705` are not defined.
 
 ---
@@ -4297,9 +4289,6 @@ These are findings for the maintainer, not features.
 
 ### 12.4 Documentation drift found while writing this reference
 
-* `docs/generated/diagnostic-catalog.md` is missing `RS0036`, `RS0038`,
-  `RS0039`, `RS0309`, `RS0805`, and the whole `RSR0xx` family, all of which are
-  defined in `crates/rsscript-diagnostics/src/implementation.rs` (§11.9).
 * `docs/generated/core-interfaces.md` documents only `CORE_INTERFACES` (35
   files). The four `STANDARD_PACKAGE_INTERFACES` under
   `packages/async/interface/` are equally prelude-visible to a single-file check

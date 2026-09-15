@@ -14,7 +14,7 @@
   "reserved_keyword_count": 30,
   "contextual_keyword_count": 2,
   "builtin_constant_count": 7,
-  "diagnostic_count": 86,
+  "diagnostic_count": 107,
   "core_interface_count": 35,
   "diagnostic_fixes": {
     "scope": "instance_only",
