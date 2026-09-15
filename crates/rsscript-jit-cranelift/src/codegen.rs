@@ -20,7 +20,7 @@ use crate::codegen_deopt::*;
 /// In-generated-code `VmLimits` enforcement requested for this compile. Each flag
 /// is set only when the corresponding limit is armed and the generated region can
 /// enforce it. Whole-function, OSR, and continuation entries share these controls.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct LimitChecks {
     /// Emit basic-block/guard-segment source-cost reservation and a steps write-back
     /// on every native exit. A segment is split after every possibly-deopting
@@ -1119,10 +1119,31 @@ pub(crate) fn build_function(
             }
             JitInstr::CallNative { callee, dst, args } => {
                 let meta = native_callee(*callee);
+                // Native-to-native accounting: the caller keeps its running source
+                // count in an SSA variable and the callee reads/writes the shared
+                // limits cell, so publish the caller's count before the edge. The
+                // flushed value already includes this call instruction's own tick
+                // (the interpreter charges `CallKnown` before entering the callee),
+                // and the callee charges its body on top of it.
+                //
+                // Roll-back is structural rather than explicit: `CallNative` is not
+                // `step_batch_safe`, so it always ends its accounting segment and
+                // `steps_resume` holds the count as of the instruction *before* the
+                // call. Every bail at this site funnels through `fallback`, which
+                // writes `steps_resume` back over whatever the callee charged — the
+                // interpreter then re-executes the whole call instruction.
+                if let Some(steps_var) = steps_var {
+                    let s = bcx.use_var(steps_var);
+                    bcx.ins().store(MemFlags::trusted(), s, limits_ptr, 0);
+                }
                 if meta.direct_scalar_func_id.is_some() {
                     // Proven-infallible scalar leaves use their private direct
                     // signature. No child frame, args/lens windows, safepoint or
                     // deopt payload is needed on this edge.
+                    debug_assert!(
+                        !limit_checks.any(),
+                        "the frame-free direct scalar edge carries no limits cell"
+                    );
                     let direct_args: Vec<_> =
                         args.iter().map(|arg| bcx.use_var(reg(*arg))).collect();
                     let call = bcx.ins().call(native_ref(*callee), &direct_args);
@@ -1257,6 +1278,15 @@ pub(crate) fn build_function(
                         deopt!(i),
                     );
                     bcx.switch_to_block(cont);
+                    // The callee completed and wrote the shared count back. Adopt it
+                    // as the caller's running total; the next segment entry publishes
+                    // it as the new precise-resume point.
+                    if let Some(steps_var) = steps_var {
+                        let charged =
+                            bcx.ins()
+                                .load(types::I64, MemFlags::trusted(), limits_ptr, 0);
+                        bcx.def_var(steps_var, charged);
+                    }
                     let result = if meta.return_type == JitValueType::Float {
                         bcx.ins().stack_load(types::F64, out_slot, 0)
                     } else {

@@ -68,6 +68,19 @@ interpreter. Four mechanisms make that exact:
   count as of the last precisely-resumable segment entry — rather than the
   running count. A guard bail elsewhere likewise excludes the pre-charged cost of
   the one instruction the interpreter is about to execute again.
+- **A native-to-native edge shares one limits cell.** The callee is compiled with
+  the caller's `RegionCompileControls`, the caller flushes its running count to
+  the call-owned `[steps, step_budget, cancel_addr]` cell before the edge, and the
+  callee charges its own source cost on top of it
+  (`JitInstr::CallNative` lowering in
+  `crates/rsscript-jit-cranelift/src/codegen.rs`). `CallNative` is never
+  `step_batch_safe`, so it always ends its accounting segment and the caller's
+  `steps_resume` holds the count as of the instruction before the call: a bail
+  anywhere in the chain funnels through the caller's `fallback`, whose write-back
+  rolls the callee's charge back for the interpreter to re-execute the whole call.
+  An armed callee never gets the frame-free direct scalar entry, which carries no
+  limits pointer, and `NativeModule::resolve_native_callees` refuses an edge whose
+  caller and callee disagree on the controls.
 - **Constant key-hash work is billed.** `map_key_from_value`
   (`crates/rsscript-vm/src/reg_vm/value_ops.rs`) bills one unit for a scalar map
   key on top of the instruction's own tick, so an `Int`-keyed map insert, get, or
@@ -77,16 +90,23 @@ interpreter. Four mechanisms make that exact:
   constant onto the owning native item. Sorted maps and sorted sets are
   list-backed, hash nothing, and are deliberately absent from that set.
 
-Three shapes **decline** instead of running natively while a control is armed,
+Two shapes **decline** instead of running natively while a control is armed,
 because their source cost is not attributable:
 
-- a region that would reach a callee over a native-to-native call edge
-  (`RegVm::attempt_native` builds no compiled-callee edges when
-  `RegionCompileControls` are non-default);
 - an OSR region whose loop body contains a call the inliner would dissolve
   (`RegVm::build_osr_plan`);
 - a region that hashes a key whose cost is proportional to its size
-  (`native_source_cost_is_static`).
+  (`native_source_cost_is_static`), including one reached over a call edge.
+
+A whole-region hand-back that is **not** a precise resume (a failed heap commit,
+an unresolvable handle, a mismatched outcome, or a deopt whose precise resume
+cannot be reconstructed) makes the interpreter re-run the function from its first
+instruction, so `RegVm::attempt_native` restores the pre-entry count on those
+exits rather than reporting the region's charge twice. For the same reason an
+accounted region takes the plain precise resume at its call instruction rather
+than reconstructing a child frame through `try_resume_native_child_deopt_chain`:
+generated code publishes one roll-back point per region, and for a metered edge
+that point is the caller's call instruction.
 
 ### Allocation bytes
 
@@ -126,17 +146,7 @@ accounting segment rather than by one instruction.
 
 ### Remaining gap list
 
-1. **Native-to-native call edges carry no meter.**
-   `NativeModule::compile_native_callee`
-   (`crates/rsscript-jit-cranelift/src/module.rs`) compiles with
-   `LimitChecks::default()` unconditionally, and the child entry neither charges
-   nor rolls back the shared limits cell. Needed: accept `RegionCompileControls`
-   there, thread the caller's limits cell through the child frame, and roll the
-   callee's charge back when the caller deopts at the call site. Until then
-   `RegVm::attempt_native`
-   (`crates/rsscript-vm/src/reg_vm/tier/attempt_native.rs`) declines to build
-   those edges under armed controls, so such functions lose native execution.
-2. **OSR origins carry no inline accounting.** `native_jit_origins`
+1. **OSR origins carry no inline accounting.** `native_jit_origins`
    (`crates/rsscript-vm/src/reg_vm/native/translate/jit_post.rs`) derives cost
    from `source_ip` uniqueness, and the OSR pass chain in `RegVm::build_osr_plan`
    (`crates/rsscript-vm/src/reg_vm/tier/osr_plan_builder.rs`) composes ip maps
@@ -144,13 +154,13 @@ accounting segment rather than by one instruction.
    through that chain the way `NativePipelineState` already does for
    whole-function translation. Until then an armed OSR region containing a call
    declines.
-3. **Data-dependent key hashing cannot be charged from generated code.**
+2. **Data-dependent key hashing cannot be charged from generated code.**
    `map_key_from_value` bills `1 + len / 64` for a String/Bytes key and recurses
    for a structural one. The region's step counter is a Cranelift register
    variable, so a host helper cannot add to it. Needed: a limits-cell ABI a
    helper can charge against. Until then `native_source_cost_is_static` declines
    `MapInsertHandleKeyInt` and `SetInsertHandle` regions under armed controls.
-4. **Unarmed native execution reports zero steps.** With no step, cancellation,
+3. **Unarmed native execution reports zero steps.** With no step, cancellation,
    or deadline control armed, `LimitChecks::default()` emits no accounting at
    all, so `ExecutionUsage::steps_consumed` for a natively executed region is
    `0` — no limit is bypassed, but the reported usage fact is not equivalent.
@@ -158,17 +168,17 @@ accounting segment rather than by one instruction.
    `compile_controls` (the limits cell already represents a missing ceiling as
    `i64::MAX`) and re-measure the release gate; the cost is one add and one
    compare per accounting segment and has not been measured.
-5. **Closure sinking drops the deleted instruction's step.**
+4. **Closure sinking drops the deleted instruction's step.**
    `native_inline_leaf_calls_inner` emits nothing for `sinkable.dead_defs`, so a
    sunk `MakeClosure` and its dead copy `Move`s own no source cost even though
    the interpreter ticks them. Needed: attribute each empty span's cost to the
    next emitted item, or decline when a span is empty and a control is armed.
-6. **Intrinsic and Provider call meters stay interpreter-owned.**
+5. **Intrinsic and Provider call meters stay interpreter-owned.**
    `RegVm::native_preemption_controls_supported`
    (`crates/rsscript-vm/src/reg_vm/exec.rs`) refuses native dispatch whenever
    `intrinsic_call_budget` or `provider_call_budget` is armed, because native
    code does not route intrinsic dispatch through `charge_intrinsic_call`.
-7. **A custom `max_depth` refuses whole-function native entry.** The internal ABI
+6. **A custom `max_depth` refuses whole-function native entry.** The internal ABI
    carries a host-stack cap, not the language's logical frame limit
    (`RegVm::attempt_native`). OSR entry already forwards the configured limit.
 
@@ -180,7 +190,15 @@ accounting segment rather than by one instruction.
 `native_step_accounting_is_exact_when_a_guard_deopts`,
 `cancellation_and_deadline_stop_native_execution_with_the_interpreter_reason`,
 and `native_kernel_corpus_reports_the_interpreter_step_count_under_a_budget`,
-which replays the whole native kernel corpus under armed step budgets.
+which replays the whole native kernel corpus under armed step budgets. The first
+two replay `STEP_PARITY_CASES`, whose `callee-owns-the-loop`,
+`nested-compiled-callee`, and `deopt-inside-compiled-callee` shapes hold a loop
+the leaf inliner refuses to dissolve and therefore reach generated code only over
+a compiled native-to-native edge.
+
+`crates/rsscript-jit-cranelift/src/tests/calls_and_abi.rs` pins the edge ABI
+directly: `armed_native_to_native_edge_shares_and_rolls_back_the_step_cell` and
+`a_native_call_edge_requires_matching_generated_code_controls`.
 
 ## Stable invariants
 
@@ -216,9 +234,11 @@ which replays the whole native kernel corpus under armed step budgets.
   returns the helper type's zero/default value; the VM then aborts the transaction
   and resumes through the interpreter contract.
 - A native-to-native edge may use the private frame-free scalar ABI only when the
-  callee is a bounded, non-recursive leaf over `Int`/`Bool`/`Float` and every
+  callee is a bounded, non-recursive leaf over `Int`/`Bool`/`Float`, every
   reachable instruction is proven unable to deopt, allocate, call a helper,
-  suspend, touch a resource, or invoke another function. Checked integer
+  suspend, touch a resource, or invoke another function, **and** no generated-code
+  limit control is armed: that ABI carries no limits pointer, so an accounted
+  callee keeps the versioned child frame and charges the caller's limits cell. Checked integer
   arithmetic and shifts therefore retain the full child-frame path. Direct
   entries are emitted lazily only for compiled callees; ordinary top-level VM
   entries do not duplicate machine code. This internal ABI is process-local and

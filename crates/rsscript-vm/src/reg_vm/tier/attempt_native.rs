@@ -112,6 +112,7 @@ impl RegVm {
         let version_key = NativeVersionKey {
             instance: instance.clone(),
             shape,
+            controls: compile_controls,
         };
         // Phase 1: tiering + resolve (and lazily compile) the native function.
         // `None` in the cache means "known not native-eligible".
@@ -163,23 +164,19 @@ impl RegVm {
                         }
                         return NativeAttempt::Fallback;
                     }
-                    // Native-to-native call edges are compiled by
-                    // `compile_native_callee`, which emits no step/cancellation/
-                    // deadline accounting at all: a callee reached over that edge
-                    // runs entirely off the meter, so a hot callee loop could pass
-                    // an armed step budget while reporting zero usage. Until the
-                    // child ABI charges (and rolls back) the shared limits cell,
-                    // an armed region must not build those edges. Every call then
-                    // either dissolves through the origin-aware leaf inliner, which
-                    // does account the callee body exactly, or the function declines
-                    // native and runs on the interpreter.
-                    let compiled_call_sites = if compile_controls
-                        == vm_jit::RegionCompileControls::default()
-                    {
-                        native_compiled_call_sites(&self.jit_state, native, &unit, func, native_key)
-                    } else {
-                        std::collections::HashMap::new()
-                    };
+                    // Native-to-native call edges are metered: the callee is
+                    // compiled with the caller's controls, charges its own source
+                    // cost against the caller's limits cell, and a bail anywhere in
+                    // the chain resumes the interpreter at the caller's call
+                    // instruction with the pre-call count reported.
+                    let compiled_call_sites = native_compiled_call_sites(
+                        &self.jit_state,
+                        native,
+                        &unit,
+                        func,
+                        native_key,
+                        compile_controls,
+                    );
                     let translated = native.measure_translation(|| {
                         if compiled_call_sites.is_empty() {
                             translate_to_native_jit(
@@ -866,6 +863,11 @@ impl RegVm {
         // `flat_guards` (the pinned shared borrows of the flat list args) drops
         // immediately after, before the scratch buffers are returned to the pool.
         let initial_depth = self.frames.len();
+        // Step-accounting roll-back anchor. Generated code publishes the count it
+        // actually paid for, but every hand-back that is not a precise resume makes
+        // the interpreter re-run this function from the top, which charges the whole
+        // region again. Such an exit must therefore report the pre-entry count.
+        let steps_before_native = self.steps;
         let (result, elapsed, native_steps) = {
             let Some(native_ref) = self.native.as_mut() else {
                 heap_tx.abort();
@@ -930,6 +932,17 @@ impl RegVm {
         if compile_controls.step {
             self.steps = native_steps.max(0) as u64;
         }
+        // Every post-call exit that returns `Fallback` re-runs the function from its
+        // first instruction on the interpreter, so the region's charge is rolled
+        // back here rather than at each individual exit.
+        macro_rules! native_fallback {
+            () => {{
+                if compile_controls.step {
+                    self.steps = steps_before_native;
+                }
+                NativeAttempt::Fallback
+            }};
+        }
         drop(flat_guards);
         drop(flat_mut_guards);
         // The pooled scratch buffers stay available through result handling because
@@ -950,7 +963,7 @@ impl RegVm {
                         native.record_bail(&version_key);
                     }
                     scratch.restore(self.native.as_mut());
-                    return NativeAttempt::Fallback;
+                    return native_fallback!();
                 };
                 for (slot, value) in writebacks {
                     self.set_reg(slot, value);
@@ -1036,7 +1049,7 @@ impl RegVm {
                             native.record_bail(&version_key);
                         }
                         scratch.restore(self.native.as_mut());
-                        NativeAttempt::Fallback
+                        native_fallback!()
                     }
                 }
             }
@@ -1049,7 +1062,7 @@ impl RegVm {
                     native.record_bail(&version_key);
                 }
                 scratch.restore(self.native.as_mut());
-                NativeAttempt::Fallback
+                native_fallback!()
             }
             vm_jit::NativeOutcome::Deopt {
                 safepoint_id,
@@ -1098,7 +1111,17 @@ impl RegVm {
                         .and_then(|m| m.sites.get(safepoint_id.0 as usize - 1))
                         .map(|site| site.resume_ip);
                     if let Some(resume_ip) = resume_ip {
-                        if let Some(child) = child.as_deref() {
+                        // Child-chain reconstruction resumes *inside* the callee, at
+                        // the child's own bail ip, and advances the caller past the
+                        // call. Generated code reports one roll-back point per
+                        // region, and for a metered edge that point is the caller's
+                        // call instruction (which the interpreter then re-executes in
+                        // full). Reconstructing the child frame instead would leave
+                        // the callee's already-charged prefix unattributed, so an
+                        // accounted region takes the plain precise resume at the call
+                        // site rather than the deeper chain.
+                        let rebuild_child_chain = !compile_controls.step;
+                        if let Some(child) = child.as_deref().filter(|_| rebuild_child_chain) {
                             if self.try_resume_native_child_deopt_chain(NativeChildDeoptResume {
                                 unit: &unit,
                                 function: func,
@@ -1117,7 +1140,7 @@ impl RegVm {
                                 return NativeAttempt::Resumed;
                             }
                             scratch.restore(self.native.as_mut());
-                            return NativeAttempt::Fallback;
+                            return native_fallback!();
                         }
                         // Restore the live register window from the captured values,
                         // SKIPPING parameter registers: their window slots
@@ -1130,7 +1153,7 @@ impl RegVm {
                             heap_tx.host_ctx(),
                         ) {
                             scratch.restore(self.native.as_mut());
-                            return NativeAttempt::Fallback;
+                            return native_fallback!();
                         }
                         // Resume interpretation AT the bailing instruction.
                         self.frames.last_mut().expect("active frame").ip = resume_ip as usize;
@@ -1139,7 +1162,7 @@ impl RegVm {
                     }
                 }
                 scratch.restore(self.native.as_mut());
-                NativeAttempt::Fallback
+                native_fallback!()
             }
         }
     }

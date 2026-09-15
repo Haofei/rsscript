@@ -875,9 +875,15 @@ fn native_region_entries(report: &ExecutionReport) -> u64 {
 
 /// Program shapes whose natively executed regions must account source steps
 /// exactly. `native_under_limits` records whether the shape can still reach
-/// generated code once a preemption control is armed: a region whose callee body
-/// cannot be attributed exactly declines to the interpreter instead of
-/// under-reporting, and that decline is itself part of the contract.
+/// generated code once a preemption control is armed: a region whose cost cannot
+/// be attributed exactly declines to the interpreter instead of under-reporting,
+/// and that decline is itself part of the contract.
+///
+/// The shapes whose callee owns a loop are deliberately too large for the leaf
+/// inliner (`controlled_static_inline_candidate` refuses a callee containing a
+/// backedge), so they can only reach generated code through a compiled
+/// native-to-native call edge. Pinning `native_under_limits: true` for them is
+/// therefore a pin on that edge being built and metered under an armed control.
 struct StepParityCase {
     name: &'static str,
     source: &'static str,
@@ -890,12 +896,34 @@ const STEP_PARITY_CASES: &[StepParityCase] = &[
         source: "fn main() -> Int { let mut i = 0; let mut total = 0; while i < 3000 { total = total + i * 3 - i / 2; i = i + 1 }; return total }",
         native_under_limits: true,
     },
-    // The callee owns the loop. Its body cannot be attributed to a single caller
-    // instruction, so an armed region declines rather than run 57k unmetered
-    // source steps behind one `CallKnown`.
+    // The callee owns the loop, so it is too big to dissolve through the leaf
+    // inliner and the caller reaches it over a real native-to-native call edge.
+    // The callee is compiled with the caller's controls and charges its 57k source
+    // steps against the caller's limits cell, so the edge now runs natively under
+    // an armed budget instead of declining.
     StepParityCase {
         name: "callee-owns-the-loop.rss",
         source: "fn hot(limit: Int) -> Int { let mut i = 0; let mut total = 0; while i < 3000 { total = total + i * 3 - i / 2; i = i + 1 }; return total } fn main() -> Int { return hot(limit: 3000) }",
+        native_under_limits: true,
+    },
+    // A two-deep compiled-callee chain: `main` -> `outer` -> `inner`, with the
+    // innermost frame owning the loop. Each frame flushes its running count to the
+    // shared cell before its edge and adopts the callee's count on return, so the
+    // whole chain reports one interpreter-equivalent step stream.
+    StepParityCase {
+        name: "nested-compiled-callee.rss",
+        source: "fn inner(limit: Int) -> Int { let mut i = 0; let mut total = 0; while i < limit { total = total + i * 3 - i / 2; i = i + 1 }; return total } fn outer(limit: Int) -> Int { let mut r = 0; let mut sum = 0; while r < 3 { sum = sum + inner(limit: limit); r = r + 1 }; return sum } fn main() -> Int { return outer(limit: 400) }",
+        native_under_limits: true,
+    },
+    // A guard deopts *inside* the callee reached over the edge. The interpreter
+    // re-executes the caller's whole call instruction, so the region must report
+    // the count as of the instruction before the call — the callee's own charge
+    // is rolled back by the caller's bail write-back. The region is entered and
+    // metered, but the overflow is fatal on both engines, so it never *completes*
+    // natively and contributes no completed-region entry.
+    StepParityCase {
+        name: "deopt-inside-compiled-callee.rss",
+        source: "fn hot(limit: Int) -> Int { let mut i = 0; let mut total = 1; while i < limit { total = total * 3 + 1; i = i + 1 }; return total } fn main() -> Int { return hot(limit: 2000) }",
         native_under_limits: false,
     },
     // Repeated whole-function native entry: each call's own region is metered and
@@ -999,17 +1027,28 @@ fn native_step_accounting_is_exact_when_a_guard_deopts() {
     // failing multiply is counted. Generated code reserves its segment up front,
     // so the count it reports on a guard bail must exclude the instruction the
     // interpreter is about to re-execute.
-    let cases: &[(&str, &str)] = &[
+    let cases: &[(&str, &str, bool)] = &[
         (
             "guard-deopt-inline-free.rss",
             "fn main() -> Int { let mut i = 0; let mut total = 1; while i < 200 { total = total * 3 + 1; i = i + 1 }; return total }",
+            false,
         ),
         (
             "guard-deopt-through-callee.rss",
             "fn step(v: Int) -> Int { return v * 3 + 1 } fn main() -> Int { let mut i = 0; let mut total = 1; while i < 200 { total = step(v: total); i = i + 1 }; return total }",
+            false,
+        ),
+        // The overflowing loop lives in a callee reached over a compiled
+        // native-to-native edge, so the guard bails inside the child frame. The
+        // caller's bail write-back must roll the child's charge back to the count
+        // as of the call instruction the interpreter re-executes.
+        (
+            "guard-deopt-inside-compiled-callee.rss",
+            "fn hot(limit: Int) -> Int { let mut i = 0; let mut total = 1; while i < limit { total = total * 3 + 1; i = i + 1 }; return total } fn main() -> Int { return hot(limit: 2000) }",
+            true,
         ),
     ];
-    for (name, source) in cases {
+    for (name, source, expect_native_bail) in cases {
         for eager_osr in [false, true] {
             let limits = RunLimits::unbounded_for_trusted_host().with_step_budget(10_000);
             let (interpreter, native) = accounting_pair(
@@ -1032,6 +1071,17 @@ fn native_step_accounting_is_exact_when_a_guard_deopts() {
                 native.usage.steps_consumed, interpreter.usage.steps_consumed,
                 "{name} (eager_osr={eager_osr}) must report the interpreter's step count"
             );
+            if *expect_native_bail {
+                // The loop lives behind a compiled native-to-native edge, so the
+                // only way this shape can bail out of generated code is by running
+                // it first. Pinning the bail keeps the case from silently degrading
+                // into "the region declined and the interpreter did everything",
+                // which would make the step equality above vacuous.
+                assert!(
+                    native_telemetry(&native).native_bails > 0,
+                    "{name} (eager_osr={eager_osr}) must actually enter and bail out of generated code"
+                );
+            }
         }
     }
 }

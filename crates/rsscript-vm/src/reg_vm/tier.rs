@@ -245,16 +245,30 @@ fn controlled_static_inline_candidate(
         })
 }
 
+/// Read-only context shared by every step of one compiled-callee scan: the
+/// profile source, the unit the callees are resolved in, and the generated-code
+/// controls the whole native call chain must agree on.
+#[cfg(feature = "native-jit")]
+struct NativeCalleeScan<'a> {
+    jit_state: &'a JitState,
+    unit: &'a RegUnit,
+    controls: vm_jit::RegionCompileControls,
+}
+
 #[cfg(feature = "native-jit")]
 fn native_compile_direct_scalar_callee(
-    jit_state: &JitState,
+    scan: &NativeCalleeScan<'_>,
     native: &mut NativeState,
-    unit: &RegUnit,
     callee: &RegFunction,
     callee_key: usize,
     call_site: Option<&VerifiedCallSite>,
     stack: &mut std::collections::HashSet<usize>,
 ) -> Option<NativeCompiledCallee> {
+    let NativeCalleeScan {
+        jit_state,
+        unit,
+        controls,
+    } = *scan;
     let facts = Rc::clone(native.verified_facts.as_ref()?);
     let base_facts = facts.function(callee_key)?;
     let specialized;
@@ -275,6 +289,7 @@ fn native_compile_direct_scalar_callee(
     let version_key = NativeVersionKey {
         instance: instance.clone(),
         shape: ShapeKey::default(),
+        controls,
     };
     if let Some(cached) = native.cache.get(&version_key) {
         return cached
@@ -289,7 +304,7 @@ fn native_compile_direct_scalar_callee(
     }
 
     let nested_call_sites =
-        native_compiled_call_sites_inner(jit_state, native, unit, callee, callee_key, stack);
+        native_compiled_call_sites_inner(scan, native, callee, callee_key, stack);
     let profile = jit_state.profile(callee);
     let call_count = jit_state.call_count(callee);
     let translated = if nested_call_sites.is_empty() {
@@ -324,6 +339,21 @@ fn native_compile_direct_scalar_callee(
         stack.remove(&callee_key);
         return None;
     }
+    // The callee charges its own source cost against the caller's limits cell, so
+    // it must be able to attribute that cost exactly. A key whose hash work is
+    // proportional to its size cannot be charged from generated code; decline the
+    // edge and let the caller's `CallKnown` stay interpreted.
+    if controls.step && !native_source_cost_is_static(&jit_fn.code) {
+        stack.remove(&callee_key);
+        return None;
+    }
+    // A bail inside the callee resumes the interpreter at the caller's call
+    // instruction, which re-executes the call in full. That is only sound when the
+    // caller's precise-resume contract holds for the child's own region too.
+    if controls != vm_jit::RegionCompileControls::default() && !precise_resume_safe {
+        stack.remove(&callee_key);
+        return None;
+    }
 
     if native.collect_stats {
         native.stats.translated += 1;
@@ -337,7 +367,9 @@ fn native_compile_direct_scalar_callee(
     } else {
         match native.forced_safepoint {
             Some(site) => native.baseline_module.compile_forcing_bail(&jit_fn, site),
-            None => native.baseline_module.compile_native_callee(&jit_fn),
+            None => native
+                .baseline_module
+                .compile_native_callee(&jit_fn, controls),
         }
     };
     let id = match compiled {
@@ -411,21 +443,27 @@ fn native_compiled_call_sites(
     unit: &RegUnit,
     func: &RegFunction,
     self_key: usize,
+    controls: vm_jit::RegionCompileControls,
 ) -> std::collections::HashMap<usize, NativeCompiledCallee> {
     let mut stack = std::collections::HashSet::new();
     stack.insert(self_key);
-    native_compiled_call_sites_inner(jit_state, native, unit, func, self_key, &mut stack)
+    let scan = NativeCalleeScan {
+        jit_state,
+        unit,
+        controls,
+    };
+    native_compiled_call_sites_inner(&scan, native, func, self_key, &mut stack)
 }
 
 #[cfg(feature = "native-jit")]
 fn native_compiled_call_sites_inner(
-    jit_state: &JitState,
+    scan: &NativeCalleeScan<'_>,
     native: &mut NativeState,
-    unit: &RegUnit,
     func: &RegFunction,
     self_key: usize,
     stack: &mut std::collections::HashSet<usize>,
 ) -> std::collections::HashMap<usize, NativeCompiledCallee> {
+    let unit = scan.unit;
     let mut out = std::collections::HashMap::new();
     for (ip, instr) in func.code.iter().enumerate() {
         let RegInstr::CallKnown {
@@ -467,9 +505,8 @@ fn native_compiled_call_sites_inner(
             continue;
         }
         let Some(descriptor) = native_compile_direct_scalar_callee(
-            jit_state,
+            scan,
             native,
-            unit,
             callee,
             callee_key,
             call_site.as_ref(),
