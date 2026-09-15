@@ -1593,9 +1593,13 @@ fn main() -> Unit {
   `return`, `break`, and `continue` cannot fall through; an `if` with **both**
   branches can fall through iff either branch can; a non-empty `match` or
   `select` can fall through iff any arm can; a `with` can fall through iff its
-  body can. Everything else — including `loop` and `while` — is treated as
-  falling through, so an infinite `loop { }` with no trailing `return` still
-  produces `RS0208`.
+  body can. A `loop { … }` — the unconditional form only — can fall through iff
+  its body contains a `break` that targets *it*; with no such `break` the loop
+  is diverging, the statements after it are unreachable, and the function needs
+  no trailing `return`. `break` is unlabelled, so a `break` inside a nested
+  `loop`/`while`/`for`, or inside a closure body, does not target the outer
+  loop. Everything else — including `while` and `for`, whose condition or
+  iterator may be false or empty on entry — is treated as falling through.
 * A function whose return type mentions one of its own generic parameters is
   exempt from the fall-through check.
 * An explicit bare `return` in a non-`Unit` function is `RS0208`.
@@ -2535,10 +2539,10 @@ Three loop forms (`ast.rs`):
 `loop`/`while`/`for` *of the same control-flow region*; a closure body starts a
 new region, so a `break` written inside a closure does not reach a loop around
 the closure. With no such enclosing loop the statement is `RS0016`
-(`control_flow.rs::loop_control_flow_diagnostics`). Note that a `loop` is
-treated as *possibly falling through* by the return check (§4.7), so an
-unconditional `loop { }` at the end of a non-`Unit` function still produces
-`RS0208`.
+(`control_flow.rs::loop_control_flow_diagnostics`). Because `break` is the only
+way out of an unconditional `loop`, a `loop { … }` whose body contains no
+`break` targeting it is *diverging*: the return check (§4.7) treats it as not
+falling through, so it may end a non-`Unit` function with no trailing `return`.
 
 The `for` element binding is a read view for non-Copy struct elements (§5.6).
 
@@ -2574,6 +2578,31 @@ fn main() -> Unit {
         break
     }
     return Unit
+}
+```
+
+**Accepted** — a diverging `loop` ends a non-`Unit` function
+
+```rsscript
+fn serve(start: Int) -> Int {
+    let mut count = start
+    loop {
+        count = count + 1
+    }
+}
+```
+
+**Rejected — `RS0208`** — the `break` makes the loop completable
+
+```rsscript
+fn serve(start: Int) -> Int {
+    let mut count = start
+    loop {
+        count = count + 1
+        if count > 10 {
+            break
+        }
+    }
 }
 ```
 
@@ -4282,9 +4311,6 @@ These are findings for the maintainer, not features.
 * **Structured patterns need a scrutinee effect, variant patterns do not.**
   `match value { Some(n) => … }` is fine; `match point { Point { x } => … }` is
   `RS0202` (§6.5).
-* **`loop { }` does not count as diverging** for the return check, so an
-  intentional infinite loop at the end of a non-`Unit` function produces
-  `RS0208` (§4.7).
 * **`Type.method` dispatch is by inferred receiver type**, not by method name,
   so a receiver whose type is unknown makes `x.m()` unresolvable — `RS0206`
   (§4.2).

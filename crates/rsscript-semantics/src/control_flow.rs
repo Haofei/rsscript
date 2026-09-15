@@ -1020,7 +1020,112 @@ fn statement_may_fall_through(statement: &HirStmt) -> bool {
             arms.iter().any(|arm| block_may_fall_through(&arm.body))
         }
         HirStmt::With { body, .. } => block_may_fall_through(body),
+        // `loop { … }` with no `break` targeting it never completes, so the
+        // statements after it are unreachable and the function needs no
+        // trailing `return` (spec §4.7, §6.3). `while`/`for` always may fall
+        // through: their condition or iterator can be false/empty on entry.
+        HirStmt::Loop {
+            condition: None,
+            body,
+            ..
+        } => block_breaks_enclosing_loop(body),
         _ => true,
+    }
+}
+
+/// Whether `block` contains a `break` that targets the loop whose body it is.
+///
+/// `break` is unlabelled, so it binds to the innermost enclosing loop: a
+/// `break` inside a nested `loop`/`while`/`for` does not target the outer one,
+/// and a `break` inside a closure body cannot escape the closure at all.
+fn block_breaks_enclosing_loop(block: &HirBlock) -> bool {
+    block.statements.iter().any(statement_breaks_enclosing_loop)
+}
+
+fn statement_breaks_enclosing_loop(statement: &HirStmt) -> bool {
+    match statement {
+        HirStmt::Break(_) => true,
+        // A `break` below this point targets the nested loop, not ours.
+        HirStmt::Loop { .. } | HirStmt::For { .. } => false,
+        HirStmt::Continue(_) | HirStmt::Unknown(_) => false,
+        HirStmt::Let { value, .. } | HirStmt::Return { value, .. } => {
+            value.as_ref().is_some_and(expr_breaks_enclosing_loop)
+        }
+        HirStmt::Expr(value) => expr_breaks_enclosing_loop(value),
+        HirStmt::Assign { target, value, .. } => {
+            expr_breaks_enclosing_loop(target) || expr_breaks_enclosing_loop(value)
+        }
+        HirStmt::With { resource, body, .. } => {
+            expr_breaks_enclosing_loop(resource) || block_breaks_enclosing_loop(body)
+        }
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            expr_breaks_enclosing_loop(condition)
+                || block_breaks_enclosing_loop(then_body)
+                || else_body.as_ref().is_some_and(block_breaks_enclosing_loop)
+        }
+        HirStmt::Match { value, arms, .. } => {
+            expr_breaks_enclosing_loop(value)
+                || arms.iter().any(|arm| {
+                    arm.guard.as_ref().is_some_and(expr_breaks_enclosing_loop)
+                        || block_breaks_enclosing_loop(&arm.body)
+                })
+        }
+        HirStmt::Select { arms, .. } => arms.iter().any(|arm| {
+            expr_breaks_enclosing_loop(&arm.operation) || block_breaks_enclosing_loop(&arm.body)
+        }),
+    }
+}
+
+/// `break` is a statement, so an expression can only hold one inside a block it
+/// carries: a `match` arm (which belongs to the enclosing loop) or a closure
+/// body (which does not).
+fn expr_breaks_enclosing_loop(expr: &HirExpr) -> bool {
+    match expr {
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Char { .. }
+        | HirExpr::Closure { .. }
+        | HirExpr::Unknown(_) => false,
+        HirExpr::ObjectLiteral { fields, .. } => fields
+            .iter()
+            .any(|field| expr_breaks_enclosing_loop(&field.value)),
+        HirExpr::MapLiteral { entries, .. } => entries.iter().any(|entry| {
+            expr_breaks_enclosing_loop(&entry.key) || expr_breaks_enclosing_loop(&entry.value)
+        }),
+        HirExpr::ArrayLiteral { items, .. } => items.iter().any(expr_breaks_enclosing_loop),
+        HirExpr::Binary { left, right, .. } => {
+            expr_breaks_enclosing_loop(left) || expr_breaks_enclosing_loop(right)
+        }
+        HirExpr::Field { base, .. } => expr_breaks_enclosing_loop(base),
+        HirExpr::Index { base, index, .. } => {
+            expr_breaks_enclosing_loop(base) || expr_breaks_enclosing_loop(index)
+        }
+        HirExpr::Call { receiver, args, .. } => {
+            receiver
+                .as_ref()
+                .is_some_and(|receiver| expr_breaks_enclosing_loop(&receiver.value))
+                || args
+                    .iter()
+                    .any(|arg| expr_breaks_enclosing_loop(&arg.value))
+        }
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. }
+        | HirExpr::Try { value, .. } => expr_breaks_enclosing_loop(value),
+        HirExpr::Match { value, arms, .. } => {
+            expr_breaks_enclosing_loop(value)
+                || arms.iter().any(|arm| {
+                    arm.guard.as_ref().is_some_and(expr_breaks_enclosing_loop)
+                        || block_breaks_enclosing_loop(&arm.body)
+                })
+        }
     }
 }
 fn type_mentions_generic(ty: &TypeRef, generics: &HashSet<&str>) -> bool {
@@ -1271,6 +1376,60 @@ mod tests {
         let program = parse_source(
             "fallthrough.rss",
             "fn value() -> Int { let answer: Int = 1 }",
+        );
+        let hir = Hir::from_syntax(&program);
+        let diagnostics = function_fallthrough_diagnostics(&program, &hir);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, code::RETURN_TYPE_MISMATCH);
+    }
+
+    #[test]
+    fn infinite_loop_without_break_is_diverging() {
+        let program = parse_source(
+            "diverging-loop.rss",
+            "fn serve(start: Int) -> Int {\n    let mut count = start\n    loop {\n        count = count + 1\n    }\n}",
+        );
+        let hir = Hir::from_syntax(&program);
+        assert!(function_fallthrough_diagnostics(&program, &hir).is_empty());
+    }
+
+    #[test]
+    fn infinite_loop_with_break_still_falls_through() {
+        let program = parse_source(
+            "breaking-loop.rss",
+            "fn serve(start: Int) -> Int {\n    let mut count = start\n    loop {\n        if count > 1 {\n            break\n        }\n        count = count + 1\n    }\n}",
+        );
+        let hir = Hir::from_syntax(&program);
+        let diagnostics = function_fallthrough_diagnostics(&program, &hir);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, code::RETURN_TYPE_MISMATCH);
+    }
+
+    #[test]
+    fn break_in_a_nested_loop_does_not_target_the_outer_loop() {
+        let program = parse_source(
+            "nested-break.rss",
+            "fn serve(start: Int) -> Int {\n    let mut count = start\n    loop {\n        loop {\n            break\n        }\n        count = count + 1\n    }\n}",
+        );
+        let hir = Hir::from_syntax(&program);
+        assert!(function_fallthrough_diagnostics(&program, &hir).is_empty());
+    }
+
+    #[test]
+    fn break_in_a_closure_does_not_target_the_enclosing_loop() {
+        let program = parse_source(
+            "closure-break.rss",
+            "fn serve(start: Int) -> Int {\n    let mut count = start\n    loop {\n        let step = || {\n            break\n        }\n        count = count + 1\n    }\n}",
+        );
+        let hir = Hir::from_syntax(&program);
+        assert!(function_fallthrough_diagnostics(&program, &hir).is_empty());
+    }
+
+    #[test]
+    fn while_loop_still_falls_through() {
+        let program = parse_source(
+            "while-loop.rss",
+            "fn serve(start: Int) -> Int {\n    let mut count = start\n    while count < 10 {\n        count = count + 1\n    }\n}",
         );
         let hir = Hir::from_syntax(&program);
         let diagnostics = function_fallthrough_diagnostics(&program, &hir);

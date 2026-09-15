@@ -1,0 +1,14 @@
+// expect: RS0208
+
+// A `loop` whose body can `break` out of it completes, so control reaches the
+// end of `serve` with no value to return.
+
+fn serve(start: Int) -> Int {
+    let mut count = start
+    loop {
+        count = count + 1
+        if count > 10 {
+            break
+        }
+    }
+}

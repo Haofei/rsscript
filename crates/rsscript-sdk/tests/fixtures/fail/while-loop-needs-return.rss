@@ -1,0 +1,10 @@
+// expect: RS0208
+
+// `while` is never diverging: the condition can be false on entry.
+
+fn serve(start: Int) -> Int {
+    let mut count = start
+    while count < 10 {
+        count = count + 1
+    }
+}

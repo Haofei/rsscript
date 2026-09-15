@@ -1,0 +1,21 @@
+// `loop { }` with no `break` targeting it never completes, so `serve` needs no
+// trailing `return` even though it returns `Int`. A `break` in a nested loop
+// targets that loop, and a `break` inside a closure cannot escape the closure,
+// so neither makes the outer `loop` completable.
+
+fn serve(start: Int) -> Int {
+    let mut count = start
+    loop {
+        count = count + 1
+    }
+}
+
+fn serve_nested(start: Int) -> Int {
+    let mut count = start
+    loop {
+        loop {
+            break
+        }
+        count = count + 1
+    }
+}
