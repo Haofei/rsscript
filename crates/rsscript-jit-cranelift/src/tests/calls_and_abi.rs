@@ -346,18 +346,21 @@ fn native_scalar_call_invokes_compiled_float_leaf() {
     let mut m = module();
     // callee(a: Float, b: Float) = a * b
     let callee = m
-        .compile_native_callee(&ft(
-            2,
-            vec![Float, Float, Float],
-            vec![
-                JitInstr::Mul {
-                    dst: 2,
-                    lhs: 0,
-                    rhs: 1,
-                },
-                JitInstr::Return { src: 2 },
-            ],
-        ))
+        .compile_native_callee(
+            &ft(
+                2,
+                vec![Float, Float, Float],
+                vec![
+                    JitInstr::Mul {
+                        dst: 2,
+                        lhs: 0,
+                        rhs: 1,
+                    },
+                    JitInstr::Return { src: 2 },
+                ],
+            ),
+            RegionCompileControls::default(),
+        )
         .unwrap();
     assert!(m.has_direct_scalar_entry(callee));
     // The public frame entry is now a compact adapter around the same direct
@@ -1528,3 +1531,130 @@ fn direct_flat_reads_index_in_register() {
     );
 }
 use super::*;
+
+#[test]
+fn armed_native_to_native_edge_shares_and_rolls_back_the_step_cell() {
+    use JitValueType::Int;
+    let controls = RegionCompileControls {
+        step: true,
+        step_ceiling: true,
+        cancel: false,
+        deadline: false,
+    };
+    let mut m = module();
+    // callee(a: Int) = a + a — two source instructions.
+    let callee = m
+        .compile_native_callee(
+            &ft(
+                1,
+                vec![Int, Int],
+                vec![
+                    JitInstr::Add {
+                        dst: 1,
+                        lhs: 0,
+                        rhs: 0,
+                    },
+                    JitInstr::Return { src: 1 },
+                ],
+            ),
+            controls,
+        )
+        .expect("armed callee compiles");
+    // The frame-free direct scalar entry carries no limits pointer, so an armed
+    // callee must keep the full child-frame path.
+    assert!(!m.has_direct_scalar_entry(callee));
+
+    // caller(x: Int) = callee(x) — two more source instructions.
+    let caller = m
+        .compile_with_controls(
+            &ft(
+                1,
+                vec![Int, Int],
+                vec![
+                    JitInstr::CallNative {
+                        callee,
+                        dst: 1,
+                        args: vec![0],
+                    },
+                    JitInstr::Return { src: 1 },
+                ],
+            ),
+            controls,
+        )
+        .expect("armed caller compiles");
+    assert_eq!(m.direct_scalar_call_edges(caller), Some(0));
+
+    // The callee's body is charged against the caller's cell, so the whole chain
+    // reports one source-step stream: 2 caller instructions + 2 callee ones.
+    let (outcome, steps) = m.call_with_step_cancel(caller, &[21], &[0], 0, Some(100), None);
+    assert_eq!(outcome.completed(), Some(42));
+    assert_eq!(steps, 4);
+
+    // The callee charges *on top of* the count the caller flushed, rather than
+    // restarting from zero or overwriting the caller's running total.
+    let (outcome, steps) = m.call_with_step_cancel(caller, &[21], &[0], 1_000, Some(2_000), None);
+    assert_eq!(outcome.completed(), Some(42));
+    assert_eq!(steps, 1_004);
+
+    // A budget that pays for the caller's call instruction but not the callee's
+    // body: the callee bails, and the caller's own bail write-back rolls the
+    // child's charge back to the count as of the instruction before the call,
+    // which is exactly what the interpreter re-executes.
+    let (outcome, steps) = m.call_with_step_cancel(caller, &[21], &[0], 0, Some(1), None);
+    assert!(
+        matches!(outcome, NativeOutcome::Deopt { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(steps, 0);
+}
+
+#[test]
+fn a_native_call_edge_requires_matching_generated_code_controls() {
+    use JitValueType::Int;
+    let mut m = module();
+    let callee = m
+        .compile_native_callee(
+            &ft(
+                1,
+                vec![Int, Int],
+                vec![
+                    JitInstr::Add {
+                        dst: 1,
+                        lhs: 0,
+                        rhs: 0,
+                    },
+                    JitInstr::Return { src: 1 },
+                ],
+            ),
+            RegionCompileControls::default(),
+        )
+        .expect("unarmed callee compiles");
+    // An unarmed callee may be entered with a null limits pointer, so an armed
+    // caller must not be allowed to forward its limits cell into it.
+    let err = m
+        .compile_with_controls(
+            &ft(
+                1,
+                vec![Int, Int],
+                vec![
+                    JitInstr::CallNative {
+                        callee,
+                        dst: 1,
+                        args: vec![0],
+                    },
+                    JitInstr::Return { src: 1 },
+                ],
+            ),
+            RegionCompileControls {
+                step: true,
+                step_ceiling: true,
+                cancel: false,
+                deadline: false,
+            },
+        )
+        .expect_err("mismatched controls must be refused before codegen");
+    assert!(
+        format!("{err}").contains("limit controls"),
+        "unexpected error: {err}"
+    );
+}

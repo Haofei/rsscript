@@ -663,6 +663,12 @@ fn native_param_shape_with_fact(value: &VmValue, fact: VerifiedStorageType) -> N
 struct NativeVersionKey {
     instance: JitInstanceKey,
     shape: ShapeKey,
+    /// Generated-code controls this version was compiled with. Machine code
+    /// compiled with limit accounting must only be entered through the
+    /// limits-aware ABI, and a native-to-native edge requires caller and callee to
+    /// agree exactly, so the controls are part of the code-cache identity rather
+    /// than an implicit property of the enclosing run.
+    controls: vm_jit::RegionCompileControls,
 }
 
 #[cfg(feature = "native-jit")]

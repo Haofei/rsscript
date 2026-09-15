@@ -838,6 +838,117 @@ fn provider_barrier_executes_once_and_reenters_native() {
     );
 }
 
+#[test]
+fn an_armed_provider_call_budget_no_longer_refuses_native_dispatch() {
+    // A Provider call is `RegInstr::CallExternal`, a barrier generated code never
+    // lowers, so the interpreter performs and charges every one of them. An armed
+    // `provider_call_budget` therefore has no reason to refuse native dispatch, and
+    // the native run must report the interpreter's counts and its termination
+    // reason both under and over the budget.
+    const SOURCE: &str = "module app\nuse host.math.*\nfn work(seed: Int) -> Int { let mut i = 0; let mut total = seed; while i < 400 { total = total + i * 3 - i / 2; i = i + 1 }; return total }\nfn main() -> Int { let mut round = 0; let mut acc = 1; while round < 4 { let w = work(seed: acc); acc = adjust(value: read w); round = round + 1 }; return acc }";
+    const INTERFACE: &str = "module host.math\npub fn adjust(value: read Int) -> Int\n";
+
+    let symbol = ExternalSymbol::new("host.math.adjust").expect("test symbol is valid");
+    let signature = FunctionSignature {
+        parameters: vec![ParameterSignature {
+            name: "value".into(),
+            effect: DataEffect::Read,
+            ty: "Int".into(),
+            retained: false,
+        }],
+        result: "Int".into(),
+        asynchronous: false,
+    };
+    let descriptor = ProviderDescriptor {
+        provider_id: "jit.test.math".into(),
+        provider_version: "1".into(),
+        supported_abi: vec![RUNTIME_ABI_VERSION],
+        record_layouts: Vec::new(),
+        variant_layouts: Vec::new(),
+        functions: vec![ProviderFunctionDescriptor {
+            symbol: symbol.clone(),
+            signature: signature.clone(),
+            entry: "adjust".into(),
+            call_mode: ProviderCallMode::Sync,
+            blocking: BlockingBehavior::NonBlocking,
+            cancellation: CancellationBehavior::NotApplicable,
+            thread_safe: true,
+            reentrant: true,
+            resource_cleanup: ResourceCleanupContract::None,
+            error_mapping: ProviderErrorMapping::StructuredV1,
+        }],
+    };
+
+    // Two budgets: one the program stays under, one it trips partway through.
+    for (budget, expect_native) in [(8_u64, true), (2, true)] {
+        let mut providers = ProviderRegistry::default();
+        providers
+            .register(
+                &descriptor,
+                BTreeMap::from([(
+                    symbol.clone(),
+                    ProviderFunction {
+                        signature: signature.clone(),
+                        callable: WireInterpreterFn::new(|args| match args.as_slice() {
+                            [WireValue::Int { value }] => Ok(WireValue::Int {
+                                value: value % 1_000 + 4,
+                            }),
+                            _ => Err(ProviderError::invalid_argument(
+                                "adjust expects one Int argument",
+                            )),
+                        }),
+                    },
+                )]),
+            )
+            .expect("test Provider matches its descriptor");
+
+        let built = Compiler
+            .compile_with_interfaces(&[("main.rss", SOURCE)], &[("math.rssi", INTERFACE)])
+            .expect("provider budget source compiles");
+        let admitted = ArtifactVerifier
+            .verify(built)
+            .expect("provider budget artifact verifies")
+            .admit_trusted_input();
+        let linked = Runtime::new(providers)
+            .link(&admitted)
+            .expect("test Provider links");
+
+        let limits = RunLimits::unbounded_for_trusted_host().with_provider_call_budget(budget);
+        let interpreter = linked.execute(ExecutionRequest::default().limits(limits.clone()));
+        let native = linked.execute(ExecutionRequest::default().limits(limits).native_jit(
+            NativeJitOptions {
+                cost_model: NativeCostModel::Off,
+                collect_telemetry: true,
+                ..NativeJitOptions::default()
+            },
+        ));
+
+        assert_eq!(
+            native.outcome(),
+            interpreter.outcome(),
+            "provider budget {budget} must terminate for the interpreter's reason"
+        );
+        assert_eq!(
+            native.usage.provider_calls, interpreter.usage.provider_calls,
+            "provider budget {budget} must report the interpreter's Provider call count"
+        );
+        assert_eq!(
+            native.usage.steps_consumed, interpreter.usage.steps_consumed,
+            "provider budget {budget} must report the interpreter's step count"
+        );
+        if expect_native {
+            // Continuation regions were already reachable under an armed Provider
+            // budget; whole-function and OSR dispatch were the refused ones, so
+            // pin those specifically or this would pass without the change.
+            let telemetry = native_telemetry(&native);
+            assert!(
+                telemetry.native_calls + telemetry.osr_entries > 0,
+                "provider budget {budget} must no longer refuse whole-function or OSR dispatch"
+            );
+        }
+    }
+}
+
 /// One interpreter/native pair for the same program and the same armed limits.
 ///
 /// The interpreter is the accounting oracle: `usage.steps_consumed` and the
@@ -875,9 +986,15 @@ fn native_region_entries(report: &ExecutionReport) -> u64 {
 
 /// Program shapes whose natively executed regions must account source steps
 /// exactly. `native_under_limits` records whether the shape can still reach
-/// generated code once a preemption control is armed: a region whose callee body
-/// cannot be attributed exactly declines to the interpreter instead of
-/// under-reporting, and that decline is itself part of the contract.
+/// generated code once a preemption control is armed: a region whose cost cannot
+/// be attributed exactly declines to the interpreter instead of under-reporting,
+/// and that decline is itself part of the contract.
+///
+/// The shapes whose callee owns a loop are deliberately too large for the leaf
+/// inliner (`controlled_static_inline_candidate` refuses a callee containing a
+/// backedge), so they can only reach generated code through a compiled
+/// native-to-native call edge. Pinning `native_under_limits: true` for them is
+/// therefore a pin on that edge being built and metered under an armed control.
 struct StepParityCase {
     name: &'static str,
     source: &'static str,
@@ -890,12 +1007,34 @@ const STEP_PARITY_CASES: &[StepParityCase] = &[
         source: "fn main() -> Int { let mut i = 0; let mut total = 0; while i < 3000 { total = total + i * 3 - i / 2; i = i + 1 }; return total }",
         native_under_limits: true,
     },
-    // The callee owns the loop. Its body cannot be attributed to a single caller
-    // instruction, so an armed region declines rather than run 57k unmetered
-    // source steps behind one `CallKnown`.
+    // The callee owns the loop, so it is too big to dissolve through the leaf
+    // inliner and the caller reaches it over a real native-to-native call edge.
+    // The callee is compiled with the caller's controls and charges its 57k source
+    // steps against the caller's limits cell, so the edge now runs natively under
+    // an armed budget instead of declining.
     StepParityCase {
         name: "callee-owns-the-loop.rss",
         source: "fn hot(limit: Int) -> Int { let mut i = 0; let mut total = 0; while i < 3000 { total = total + i * 3 - i / 2; i = i + 1 }; return total } fn main() -> Int { return hot(limit: 3000) }",
+        native_under_limits: true,
+    },
+    // A two-deep compiled-callee chain: `main` -> `outer` -> `inner`, with the
+    // innermost frame owning the loop. Each frame flushes its running count to the
+    // shared cell before its edge and adopts the callee's count on return, so the
+    // whole chain reports one interpreter-equivalent step stream.
+    StepParityCase {
+        name: "nested-compiled-callee.rss",
+        source: "fn inner(limit: Int) -> Int { let mut i = 0; let mut total = 0; while i < limit { total = total + i * 3 - i / 2; i = i + 1 }; return total } fn outer(limit: Int) -> Int { let mut r = 0; let mut sum = 0; while r < 3 { sum = sum + inner(limit: limit); r = r + 1 }; return sum } fn main() -> Int { return outer(limit: 400) }",
+        native_under_limits: true,
+    },
+    // A guard deopts *inside* the callee reached over the edge. The interpreter
+    // re-executes the caller's whole call instruction, so the region must report
+    // the count as of the instruction before the call — the callee's own charge
+    // is rolled back by the caller's bail write-back. The region is entered and
+    // metered, but the overflow is fatal on both engines, so it never *completes*
+    // natively and contributes no completed-region entry.
+    StepParityCase {
+        name: "deopt-inside-compiled-callee.rss",
+        source: "fn hot(limit: Int) -> Int { let mut i = 0; let mut total = 1; while i < limit { total = total * 3 + 1; i = i + 1 }; return total } fn main() -> Int { return hot(limit: 2000) }",
         native_under_limits: false,
     },
     // Repeated whole-function native entry: each call's own region is metered and
@@ -963,6 +1102,48 @@ fn native_step_accounting_matches_the_interpreter_under_an_armed_budget() {
 }
 
 #[test]
+fn an_unbounded_native_run_reports_the_interpreter_step_count() {
+    // `steps_consumed` is a reported fact, not only a ceiling. With nothing armed
+    // a natively executed whole-function region used to report zero while the
+    // interpreter reported the true count, so source-step accounting is now on for
+    // every whole-function entry and the limits cell simply carries `i64::MAX` as
+    // its budget.
+    //
+    // Run with the production tiering defaults, automatic OSR included, because an
+    // unbounded hot loop reaches generated code mostly through OSR rather than
+    // whole-function entry: before OSR was armed, `call-free-loop.rss` reported
+    // 729 of the interpreter's 57012 steps.
+    for case in STEP_PARITY_CASES {
+        let (interpreter, native) = accounting_pair(
+            case.name,
+            case.source,
+            RunLimits::unbounded_for_trusted_host(),
+            NativeJitOptions {
+                cost_model: NativeCostModel::Off,
+                collect_telemetry: true,
+                ..NativeJitOptions::default()
+            },
+        );
+        assert_eq!(
+            native.outcome(),
+            interpreter.outcome(),
+            "{} must terminate for the same reason as the interpreter with no limit armed",
+            case.name
+        );
+        assert_eq!(
+            native.usage.steps_consumed, interpreter.usage.steps_consumed,
+            "{} must report the interpreter's step count with no limit armed",
+            case.name
+        );
+        assert!(
+            native_region_entries(&native) > 0 || native_telemetry(&native).native_bails > 0,
+            "{} must actually reach generated code for the count above to mean anything",
+            case.name
+        );
+    }
+}
+
+#[test]
 fn native_step_accounting_matches_the_interpreter_for_osr_entered_loops() {
     for case in STEP_PARITY_CASES {
         for &budget in &[100_u64, 1_000, 10_000, 10_000_000] {
@@ -999,17 +1180,28 @@ fn native_step_accounting_is_exact_when_a_guard_deopts() {
     // failing multiply is counted. Generated code reserves its segment up front,
     // so the count it reports on a guard bail must exclude the instruction the
     // interpreter is about to re-execute.
-    let cases: &[(&str, &str)] = &[
+    let cases: &[(&str, &str, bool)] = &[
         (
             "guard-deopt-inline-free.rss",
             "fn main() -> Int { let mut i = 0; let mut total = 1; while i < 200 { total = total * 3 + 1; i = i + 1 }; return total }",
+            false,
         ),
         (
             "guard-deopt-through-callee.rss",
             "fn step(v: Int) -> Int { return v * 3 + 1 } fn main() -> Int { let mut i = 0; let mut total = 1; while i < 200 { total = step(v: total); i = i + 1 }; return total }",
+            false,
+        ),
+        // The overflowing loop lives in a callee reached over a compiled
+        // native-to-native edge, so the guard bails inside the child frame. The
+        // caller's bail write-back must roll the child's charge back to the count
+        // as of the call instruction the interpreter re-executes.
+        (
+            "guard-deopt-inside-compiled-callee.rss",
+            "fn hot(limit: Int) -> Int { let mut i = 0; let mut total = 1; while i < limit { total = total * 3 + 1; i = i + 1 }; return total } fn main() -> Int { return hot(limit: 2000) }",
+            true,
         ),
     ];
-    for (name, source) in cases {
+    for (name, source, expect_native_bail) in cases {
         for eager_osr in [false, true] {
             let limits = RunLimits::unbounded_for_trusted_host().with_step_budget(10_000);
             let (interpreter, native) = accounting_pair(
@@ -1032,6 +1224,17 @@ fn native_step_accounting_is_exact_when_a_guard_deopts() {
                 native.usage.steps_consumed, interpreter.usage.steps_consumed,
                 "{name} (eager_osr={eager_osr}) must report the interpreter's step count"
             );
+            if *expect_native_bail {
+                // The loop lives behind a compiled native-to-native edge, so the
+                // only way this shape can bail out of generated code is by running
+                // it first. Pinning the bail keeps the case from silently degrading
+                // into "the region declined and the interpreter did everything",
+                // which would make the step equality above vacuous.
+                assert!(
+                    native_telemetry(&native).native_bails > 0,
+                    "{name} (eager_osr={eager_osr}) must actually enter and bail out of generated code"
+                );
+            }
         }
     }
 }

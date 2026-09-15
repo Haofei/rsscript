@@ -154,10 +154,11 @@ and may add `--native` there — the flag is available only in that combination 
 for the Cranelift JIT, which uses the same verified
 Artifact, Provider linker, and Execution Report as the interpreter. Native
 execution is deliberately unavailable to the isolated runner: native regions
-now report the interpreter's exact step count and stop for the same
-cancellation and deadline reasons, but allocation controls need a per-region
-proof and intrinsic-call and Provider-call budgets are still interpreter-owned,
-so the bounded runner keeps the interpreter until that gap closes (status in
+report the interpreter's exact step count whether or not a limit is armed and
+stop for the same cancellation and deadline reasons, but allocation controls
+need a per-region proof, the intrinsic-call budget is still interpreter-owned,
+and the internal call ABI does not yet carry the language's `max_depth`, so the
+bounded runner keeps the interpreter until those gaps close (status in
 `docs/spec/native-jit-contract.md`). An Artifact can never request it: enabling the JIT
 is the host's decision alone. Providers are trusted host code with the full
 authority of the process, and JIT-generated executable memory is not an

@@ -24,15 +24,20 @@ provider, native plugin, JIT, or generated program trustworthy.
 - Native plugins and generated Rust are trusted code execution mechanisms.
 - JIT-generated executable memory is not an isolation boundary.
 - Native JIT selection is a trusted-host deployment choice and is unavailable
-  to the reference isolated runner. A natively executed region now reports the
-  interpreter's exact source-step count and stops for the same reason under an
-  armed step budget, cancellation token, or deadline; a region whose step cost
-  cannot be attributed exactly declines to the interpreter instead of running
-  unmetered. Allocation controls are admitted only with a per-region proof, and
-  intrinsic-call and Provider-call budgets remain interpreter-owned, so
-  `rss run --native` still selects the explicit unbounded trusted-host limits
-  profile until those two budgets are accounted natively. See
-  `docs/spec/native-jit-contract.md` for the parity status table.
+  to the reference isolated runner. A natively executed region reports the
+  interpreter's exact source-step count whether or not a limit is armed, and
+  stops for the same reason under an armed step budget, cancellation token, or
+  deadline; a region whose step cost cannot be attributed exactly declines to the
+  interpreter instead of running unmetered. Allocation controls are admitted only
+  with a per-region proof. An armed Provider-call budget no longer refuses native
+  dispatch, because a Provider call is a barrier generated code never lowers and
+  the interpreter charges every one of them. The intrinsic-call budget is still
+  interpreter-owned and still refuses native dispatch, and the internal ABI still
+  carries a host-stack cap rather than the language's `max_depth`, so
+  `rss run --native` continues to select the explicit unbounded trusted-host
+  limits profile: the default runner profile arms both and would leave that flag
+  with no native tier. See `docs/spec/native-jit-contract.md` for the parity
+  status table.
 - Review and REIR report evidence; authority stays with the host.
 
 ## Untrusted and generated input

@@ -410,15 +410,32 @@ struct NativeCallInvocation<'a> {
 /// must use a limits-aware entry exactly when any control is enabled.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct RegionCompileControls {
+    /// Count source steps into the call-owned limits cell. This is the reported
+    /// usage fact and never rejects on its own.
     pub step: bool,
+    /// Also reserve each accounting segment against the cell's `step_budget`.
+    /// Implies `step`; set it only when a ceiling is actually armed, because the
+    /// per-segment compare and its cold bail site are not free.
+    pub step_ceiling: bool,
     pub cancel: bool,
     pub deadline: bool,
+}
+
+impl RegionCompileControls {
+    /// Whether any generated-code control is requested. A region with no control
+    /// emits byte-identical code to an engine without limit accounting, and its
+    /// native-to-native edges may use the frame-free direct scalar ABI.
+    pub fn any(self) -> bool {
+        self.step || self.step_ceiling || self.cancel || self.deadline
+    }
 }
 
 impl From<RegionCompileControls> for LimitChecks {
     fn from(value: RegionCompileControls) -> Self {
         Self {
-            step: value.step,
+            // A ceiling is meaningless without the count it rejects against.
+            step: value.step || value.step_ceiling,
+            step_ceiling: value.step_ceiling,
             cancel: value.cancel,
             deadline: value.deadline,
         }
@@ -862,12 +879,20 @@ impl NativeModule {
     /// Compile a function that may become the target of a native-to-native call.
     /// Eligible infallible scalar leaves use one frame-free canonical body plus a
     /// small stable-frame adapter, avoiding a second full function lowering.
+    ///
+    /// `controls` must be the *caller's* controls: a native-to-native edge shares
+    /// one limits cell, so the callee charges its own source cost against the same
+    /// `[steps, step_budget, cancel_addr]` words the caller flushed before the
+    /// call. An armed callee therefore never gets the frame-free direct scalar
+    /// entry, which carries no limits pointer; `resolve_native_callees` re-checks
+    /// that a caller and its callees agree on the controls before emitting an edge.
     pub fn compile_native_callee(
         &mut self,
         function: &JitFunction,
+        controls: RegionCompileControls,
     ) -> Result<CompiledId, JitError> {
         let validated = self.validate_region(function)?;
-        self.compile_inner(&validated, None, None, LimitChecks::default(), true)
+        self.compile_inner(&validated, None, None, controls.into(), !controls.any())
     }
 
     /// Compile `function` while forcing the safepoint with id `force_site` (sites are
@@ -953,6 +978,7 @@ impl NativeModule {
             Some(header_ip),
             LimitChecks {
                 step: step_limit,
+                step_ceiling: step_limit,
                 cancel: cancel_armed,
                 deadline: false,
             },
@@ -1012,7 +1038,7 @@ impl NativeModule {
             native_compact_scalar_frame_callable(function, osr_header.is_some(), returns_handle);
         let direct_scalar_callable = emit_direct_scalar_entry
             && direct_scalar_callable(function, osr_header.is_some(), return_type);
-        let native_callees = self.resolve_native_callees(function)?;
+        let native_callees = self.resolve_native_callees(function, limit_checks)?;
         if native_callees.len() > self.limits.max_native_callees {
             return Err(JitError::new(
                 JitErrorKind::AdmissionRejected,
@@ -1266,6 +1292,7 @@ impl NativeModule {
     fn resolve_native_callees(
         &self,
         function: &JitFunction,
+        limit_checks: LimitChecks,
     ) -> Result<Vec<NativeCallee>, JitError> {
         let mut callees = Vec::new();
         for instr in &function.code {
@@ -1289,6 +1316,16 @@ impl NativeModule {
             if !compiled.scalar_leaf_callable {
                 return Err(JitError::invalid_ir(
                     "CallNative callee is not a scalar-callable function",
+                ));
+            }
+            // A native-to-native edge forwards the caller's limits cell verbatim
+            // into the child frame. An unarmed caller may be entered with a null
+            // limits pointer, and an armed caller's accounting is only exact when
+            // the callee charges the same cell, so the two compiles must agree
+            // exactly on which controls generated code enforces.
+            if compiled.limit_checks != limit_checks {
+                return Err(JitError::invalid_ir(
+                    "CallNative callee was compiled with different generated-code limit controls",
                 ));
             }
             if compiled.n_params != args.len() {

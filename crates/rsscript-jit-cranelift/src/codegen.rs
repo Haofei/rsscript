@@ -20,14 +20,20 @@ use crate::codegen_deopt::*;
 /// In-generated-code `VmLimits` enforcement requested for this compile. Each flag
 /// is set only when the corresponding limit is armed and the generated region can
 /// enforce it. Whole-function, OSR, and continuation entries share these controls.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct LimitChecks {
-    /// Emit basic-block/guard-segment source-cost reservation and a steps write-back
-    /// on every native exit. A segment is split after every possibly-deopting
-    /// instruction, so a successful reservation replaces multiple per-instruction
-    /// increments while an insufficient reservation returns to the interpreter at
-    /// the exact first uncharged source instruction.
+    /// Emit per-accounting-segment source-cost charging and a steps write-back on
+    /// every native exit. A segment is split after every possibly-deopting
+    /// instruction, so one add replaces multiple per-instruction increments. This
+    /// is the *counting* half: it makes the region report the interpreter's exact
+    /// source-step total and never rejects on its own.
     pub(crate) step: bool,
+    /// Additionally *reserve* each segment against the cell's `step_budget` and
+    /// return to the interpreter at the exact first uncharged source instruction
+    /// when it does not fit. Only meaningful with `step`, and only set when a
+    /// ceiling is actually armed: the compare plus its cold bail site costs real
+    /// register pressure per segment, which a run with no ceiling should not pay.
+    pub(crate) step_ceiling: bool,
     /// Emit a `cancel` poll (load the host `AtomicBool`) on every loop backedge and
     /// bail to the interpreter when set — the interpreter then re-polls and errors.
     pub(crate) cancel: bool,
@@ -121,8 +127,78 @@ fn step_segment_costs(
 
 impl LimitChecks {
     pub(crate) fn any(self) -> bool {
-        self.step || self.cancel || self.deadline
+        self.step || self.step_ceiling || self.cancel || self.deadline
     }
+
+    /// Whether this region only *counts* source steps: no ceiling to reserve
+    /// against and no cancellation or deadline poll. Such a region can charge a
+    /// whole basic block at its leader and correct the count on each cold bail
+    /// edge, instead of paying a reservation and a live `steps_resume` variable per
+    /// possibly-deopting instruction.
+    fn accounting_only(self) -> bool {
+        self.step && !self.step_ceiling && !self.cancel && !self.deadline
+    }
+}
+
+/// Per-block source cost for a counting-only region, plus the per-instruction
+/// constant that converts the running count back into an exact resume count.
+///
+/// A block leader charges the whole block up front, so at any instruction in the
+/// block `steps` already includes every later instruction of that block. A bail at
+/// `ip` must report what the interpreter has actually paid for when it resumes,
+/// which is the block entry count plus the cost of the instructions before `ip`'s
+/// *resume anchor*: `ip` itself for an ordinary instruction, or the first
+/// instruction of the inlined run containing `ip`, because a bail inside an inlined
+/// region resumes the interpreter at the caller's call instruction and re-executes
+/// the whole call.
+///
+/// Returns `None` when an inlined run reaches back past its block leader. The
+/// number of blocks executed between two blocks is path-dependent, so no
+/// compile-time constant exists and the region keeps the segment-reservation model.
+fn step_block_costs(program: &JitFunction, is_leader: &[bool]) -> Option<(Vec<u32>, Vec<i64>)> {
+    let n = program.code.len();
+    let mut charge_at = vec![0_u32; n];
+    let mut adjust_at = vec![0_i64; n];
+    let mut block_total = vec![0_u32; n];
+    let mut prefix = vec![0_u32; n];
+    let mut ip = 0_usize;
+    while ip < n {
+        if is_leader[ip] {
+            let mut end = ip + 1;
+            while end < n && !is_leader[end] {
+                end += 1;
+            }
+            let total = (ip..end)
+                .map(|at| program.instruction_origin(at).source_cost)
+                .try_fold(0_u32, u32::checked_add)?;
+            charge_at[ip] = total;
+            block_total[ip..end].fill(total);
+            let mut running = 0_u32;
+            for (at, slot) in prefix[ip..end].iter_mut().enumerate() {
+                *slot = running;
+                running = running.checked_add(program.instruction_origin(ip + at).source_cost)?;
+            }
+        }
+        ip += 1;
+    }
+    // Resolve each instruction's resume anchor and turn it into a constant.
+    let mut anchor = 0_usize;
+    for ip in 0..n {
+        let origin = program.instruction_origin(ip);
+        let previous = (ip > 0).then(|| program.instruction_origin(ip - 1));
+        let starts_run = !origin.inlined
+            || previous
+                .is_none_or(|previous| !previous.inlined || previous.source_ip != origin.source_ip);
+        if starts_run {
+            anchor = ip;
+        }
+        if is_leader[ip] && anchor != ip {
+            // The run reaches back past this block's leader.
+            return None;
+        }
+        adjust_at[ip] = i64::from(block_total[ip]) - i64::from(prefix[anchor]);
+    }
+    Some((charge_at, adjust_at))
 }
 
 pub(crate) struct CodegenMetadata {
@@ -349,7 +425,9 @@ pub(crate) fn build_function(
     // interpreter-equivalent instruction count (one tick per instruction); `limit_var`
     // holds the `step_budget`; `cancel_addr_var` holds the host `AtomicBool` address.
     let steps_var = limit_checks.step.then(|| bcx.declare_var(types::I64));
-    let limit_var = limit_checks.step.then(|| bcx.declare_var(types::I64));
+    let limit_var = limit_checks
+        .step_ceiling
+        .then(|| bcx.declare_var(types::I64));
     // Roll-back cell for inlined-callee accounting. A bail inside an inlined region
     // resumes the interpreter at the caller's call instruction, which re-executes
     // the whole call, so the region's charge must not be reported. `steps_resume`
@@ -372,7 +450,7 @@ pub(crate) fn build_function(
     if let Some(tail_depth_var) = tail_depth_var {
         bcx.def_var(tail_depth_var, logical_call_depth);
     }
-    if let (Some(steps_var), Some(limit_var)) = (steps_var, limit_var) {
+    if let Some(steps_var) = steps_var {
         let steps0 = bcx
             .ins()
             .load(types::I64, MemFlags::trusted(), limits_ptr, 0);
@@ -380,10 +458,12 @@ pub(crate) fn build_function(
         if let Some(steps_resume_var) = steps_resume_var {
             bcx.def_var(steps_resume_var, steps0);
         }
-        let limit0 = bcx
-            .ins()
-            .load(types::I64, MemFlags::trusted(), limits_ptr, 8);
-        bcx.def_var(limit_var, limit0);
+        if let Some(limit_var) = limit_var {
+            let limit0 = bcx
+                .ins()
+                .load(types::I64, MemFlags::trusted(), limits_ptr, 8);
+            bcx.def_var(limit_var, limit0);
+        }
     }
     if let Some(cancel_addr_var) = cancel_addr_var {
         let caddr = bcx.ins().load(ptr_ty, MemFlags::trusted(), limits_ptr, 16);
@@ -535,12 +615,19 @@ pub(crate) fn build_function(
             }
         })
         .collect();
-    // Source-step cost is reserved once per conservative accounting segment. This
-    // is computed from the same CFG leaders used for codegen and does not affect an
+    // A counting-only region charges a whole block at its leader and corrects the
+    // count on each cold bail edge. A region that has to reserve against a ceiling,
+    // or to poll cancellation/deadline, keeps the per-segment model. Both are
+    // computed from the same CFG leaders used for codegen, and neither affects an
     // unarmed compile.
-    let segments = limit_checks
-        .any()
-        .then(|| step_segment_costs(program, &is_leader));
+    let blocks = limit_checks
+        .accounting_only()
+        .then(|| step_block_costs(program, &is_leader))
+        .flatten();
+    let block_charge_at = blocks.as_ref().map(|(charge, _)| charge);
+    let block_adjust_at = blocks.as_ref().map(|(_, adjust)| adjust);
+    let segments =
+        (limit_checks.any() && blocks.is_none()).then(|| step_segment_costs(program, &is_leader));
     let control_cost_at = segments.as_ref().map(|(costs, _, _)| costs);
     let segment_start_at = segments.as_ref().map(|(_, starts, _)| starts);
     let segment_guard_cost_at = segments.as_ref().map(|(_, _, guards)| guards);
@@ -556,6 +643,17 @@ pub(crate) fn build_function(
     // (`i`). Each `bail_if` consumes one and pushes one site, so ids and `sites`
     // indices stay in lock-step. A macro (not a closure) so the `&mut sites` borrow
     // lives only for the single `bail_if` call.
+    let steps_adjust_at = |ip: usize| block_adjust_at.map_or(0, |adjust| adjust[ip]);
+    // One shared description of where a bail goes and what it must publish. A
+    // block-charged region hands every site the running counter and the limits cell
+    // so the site can write its own exact resume count; the segment model leaves
+    // that `None` and lets the shared fallback write `steps_resume`.
+    let deopt_buffers = DeoptBuffers {
+        fallback,
+        safepoint_ptr,
+        payload_ptr,
+        steps: block_adjust_at.and(steps_var.map(|steps_var| (steps_var, limits_ptr))),
+    };
     macro_rules! deopt {
         ($ip:expr) => {
             &mut DeoptCtx {
@@ -568,6 +666,7 @@ pub(crate) fn build_function(
                 forced,
                 unconditional: false,
                 live_override: None,
+                steps_adjust: steps_adjust_at($ip),
             }
         };
         ($ip:expr, unconditional) => {
@@ -581,6 +680,7 @@ pub(crate) fn build_function(
                 forced,
                 unconditional: true,
                 live_override: None,
+                steps_adjust: steps_adjust_at($ip),
             }
         };
         ($ip:expr, live = $live:expr) => {
@@ -594,6 +694,7 @@ pub(crate) fn build_function(
                 forced,
                 unconditional: true,
                 live_override: Some($live),
+                steps_adjust: steps_adjust_at($ip),
             }
         };
     }
@@ -718,6 +819,17 @@ pub(crate) fn build_function(
             bcx.seal_block(body_block);
             bcx.def_var(memo_scope_backedges[scope_index], zero);
         }
+        // Counting-only regions charge the whole block once, at its leader. Every
+        // bail inside the block subtracts its own compile-time constant on the cold
+        // edge, so the hot path pays exactly one add per block.
+        if let (Some(steps_var), Some(block_charge_at)) = (steps_var, block_charge_at)
+            && is_leader[i]
+            && block_charge_at[i] != 0
+        {
+            let steps = bcx.use_var(steps_var);
+            let charged = bcx.ins().iadd_imm(steps, i64::from(block_charge_at[i]));
+            bcx.def_var(steps_var, charged);
+        }
         // Publish the pre-reservation count at a precisely-resumable segment entry.
         // A poll or reservation bail below resumes the interpreter at this exact IP
         // having charged nothing for the segment. Inside an inlined callee region
@@ -762,11 +874,7 @@ pub(crate) fn build_function(
                 let cont = bail_if(
                     &mut bcx,
                     trip,
-                    DeoptBuffers {
-                        fallback,
-                        safepoint_ptr,
-                        payload_ptr,
-                    },
+                    deopt_buffers,
                     &vars,
                     &mut next_id,
                     deopt!(i),
@@ -774,35 +882,34 @@ pub(crate) fn build_function(
                 bcx.switch_to_block(cont);
             }
         }
-        // Reserve a whole no-deopt accounting segment before its first source
-        // instruction. If it does not fit, leave `steps` unchanged and resume the
-        // interpreter at this exact IP; the interpreter's next tick is therefore
-        // the first unpaid source step. When it fits, one add replaces all of the
-        // segment's per-instruction increments.
-        if let (Some(steps_var), Some(limit_var), Some(control_cost_at)) =
-            (steps_var, limit_var, control_cost_at)
-        {
+        // Charge a whole no-deopt accounting segment before its first source
+        // instruction; one add replaces all of the segment's per-instruction
+        // increments. With a ceiling armed the charge is first *reserved*: if the
+        // segment does not fit, leave `steps` unchanged and resume the interpreter
+        // at this exact IP, so the interpreter's next tick is the first unpaid
+        // source step. With no ceiling the compare and its cold bail site are not
+        // emitted at all — the cell's budget is `i64::MAX` and could never reject.
+        if let (Some(steps_var), Some(control_cost_at)) = (steps_var, control_cost_at) {
             let cost = control_cost_at[i];
             if cost != 0 {
+                if let Some(limit_var) = limit_var {
+                    let steps = bcx.use_var(steps_var);
+                    let limit = bcx.use_var(limit_var);
+                    let remaining = bcx.ins().isub(limit, steps);
+                    let required = bcx.ins().iconst(types::I64, i64::from(cost));
+                    let insufficient = bcx.ins().icmp(IntCC::SignedLessThan, remaining, required);
+                    let cont = bail_if(
+                        &mut bcx,
+                        insufficient,
+                        deopt_buffers,
+                        &vars,
+                        &mut next_id,
+                        deopt!(i),
+                    );
+                    bcx.switch_to_block(cont);
+                }
                 let steps = bcx.use_var(steps_var);
-                let limit = bcx.use_var(limit_var);
-                let remaining = bcx.ins().isub(limit, steps);
-                let required = bcx.ins().iconst(types::I64, i64::from(cost));
-                let insufficient = bcx.ins().icmp(IntCC::SignedLessThan, remaining, required);
-                let cont = bail_if(
-                    &mut bcx,
-                    insufficient,
-                    DeoptBuffers {
-                        fallback,
-                        safepoint_ptr,
-                        payload_ptr,
-                    },
-                    &vars,
-                    &mut next_id,
-                    deopt!(i),
-                );
-                bcx.switch_to_block(cont);
-                let charged = bcx.ins().iadd(steps, required);
+                let charged = bcx.ins().iadd_imm(steps, i64::from(cost));
                 bcx.def_var(steps_var, charged);
             }
         }
@@ -874,18 +981,7 @@ pub(crate) fn build_function(
                     bcx.def_var(reg(*dst), res);
                 } else {
                     let (res, of) = bcx.ins().sadd_overflow(a, b);
-                    let cont = bail_if(
-                        &mut bcx,
-                        of,
-                        DeoptBuffers {
-                            fallback,
-                            safepoint_ptr,
-                            payload_ptr,
-                        },
-                        &vars,
-                        &mut next_id,
-                        deopt!(i),
-                    );
+                    let cont = bail_if(&mut bcx, of, deopt_buffers, &vars, &mut next_id, deopt!(i));
                     bcx.switch_to_block(cont);
                     bcx.def_var(reg(*dst), res);
                 }
@@ -901,18 +997,7 @@ pub(crate) fn build_function(
                     bcx.def_var(reg(*dst), res);
                 } else {
                     let (res, of) = bcx.ins().ssub_overflow(a, b);
-                    let cont = bail_if(
-                        &mut bcx,
-                        of,
-                        DeoptBuffers {
-                            fallback,
-                            safepoint_ptr,
-                            payload_ptr,
-                        },
-                        &vars,
-                        &mut next_id,
-                        deopt!(i),
-                    );
+                    let cont = bail_if(&mut bcx, of, deopt_buffers, &vars, &mut next_id, deopt!(i));
                     bcx.switch_to_block(cont);
                     bcx.def_var(reg(*dst), res);
                 }
@@ -928,18 +1013,7 @@ pub(crate) fn build_function(
                     bcx.def_var(reg(*dst), res);
                 } else {
                     let (res, of) = bcx.ins().smul_overflow(a, b);
-                    let cont = bail_if(
-                        &mut bcx,
-                        of,
-                        DeoptBuffers {
-                            fallback,
-                            safepoint_ptr,
-                            payload_ptr,
-                        },
-                        &vars,
-                        &mut next_id,
-                        deopt!(i),
-                    );
+                    let cont = bail_if(&mut bcx, of, deopt_buffers, &vars, &mut next_id, deopt!(i));
                     bcx.switch_to_block(cont);
                     bcx.def_var(reg(*dst), res);
                 }
@@ -960,11 +1034,7 @@ pub(crate) fn build_function(
                             rhs: reg(*rhs),
                             is_rem: false,
                         },
-                        DeoptBuffers {
-                            fallback,
-                            safepoint_ptr,
-                            payload_ptr,
-                        },
+                        deopt_buffers,
                         &vars,
                         &mut next_id,
                         deopt!(i),
@@ -982,11 +1052,7 @@ pub(crate) fn build_function(
                         rhs: reg(*rhs),
                         is_rem: true,
                     },
-                    DeoptBuffers {
-                        fallback,
-                        safepoint_ptr,
-                        payload_ptr,
-                    },
+                    deopt_buffers,
                     &vars,
                     &mut next_id,
                     deopt!(i),
@@ -1030,11 +1096,7 @@ pub(crate) fn build_function(
                         let cont = bail_if_helper_failed(
                             &mut bcx,
                             bail_ptr,
-                            DeoptBuffers {
-                                fallback,
-                                safepoint_ptr,
-                                payload_ptr,
-                            },
+                            deopt_buffers,
                             &vars,
                             &mut next_id,
                             deopt!(i),
@@ -1089,11 +1151,7 @@ pub(crate) fn build_function(
                         let cont = bail_if_helper_failed(
                             &mut bcx,
                             bail_ptr,
-                            DeoptBuffers {
-                                fallback,
-                                safepoint_ptr,
-                                payload_ptr,
-                            },
+                            deopt_buffers,
                             &vars,
                             &mut next_id,
                             deopt!(i),
@@ -1119,10 +1177,31 @@ pub(crate) fn build_function(
             }
             JitInstr::CallNative { callee, dst, args } => {
                 let meta = native_callee(*callee);
+                // Native-to-native accounting: the caller keeps its running source
+                // count in an SSA variable and the callee reads/writes the shared
+                // limits cell, so publish the caller's count before the edge. The
+                // flushed value already includes this call instruction's own tick
+                // (the interpreter charges `CallKnown` before entering the callee),
+                // and the callee charges its body on top of it.
+                //
+                // Roll-back is structural rather than explicit: `CallNative` is not
+                // `step_batch_safe`, so it always ends its accounting segment and
+                // `steps_resume` holds the count as of the instruction *before* the
+                // call. Every bail at this site funnels through `fallback`, which
+                // writes `steps_resume` back over whatever the callee charged — the
+                // interpreter then re-executes the whole call instruction.
+                if let Some(steps_var) = steps_var {
+                    let s = bcx.use_var(steps_var);
+                    bcx.ins().store(MemFlags::trusted(), s, limits_ptr, 0);
+                }
                 if meta.direct_scalar_func_id.is_some() {
                     // Proven-infallible scalar leaves use their private direct
                     // signature. No child frame, args/lens windows, safepoint or
                     // deopt payload is needed on this edge.
+                    debug_assert!(
+                        !limit_checks.any(),
+                        "the frame-free direct scalar edge carries no limits cell"
+                    );
                     let direct_args: Vec<_> =
                         args.iter().map(|arg| bcx.use_var(reg(*arg))).collect();
                     let call = bcx.ins().call(native_ref(*callee), &direct_args);
@@ -1242,11 +1321,7 @@ pub(crate) fn build_function(
                     let cont = bail_if_child_native_failed(
                         &mut bcx,
                         failed,
-                        DeoptBuffers {
-                            fallback,
-                            safepoint_ptr,
-                            payload_ptr,
-                        },
+                        deopt_buffers,
                         ChildDeoptSource {
                             safepoint_ptr: safepoint_ptr_v,
                             payload_ptr: payload_ptr_v,
@@ -1257,6 +1332,15 @@ pub(crate) fn build_function(
                         deopt!(i),
                     );
                     bcx.switch_to_block(cont);
+                    // The callee completed and wrote the shared count back. Adopt it
+                    // as the caller's running total; the next segment entry publishes
+                    // it as the new precise-resume point.
+                    if let Some(steps_var) = steps_var {
+                        let charged =
+                            bcx.ins()
+                                .load(types::I64, MemFlags::trusted(), limits_ptr, 0);
+                        bcx.def_var(steps_var, charged);
+                    }
                     let result = if meta.return_type == JitValueType::Float {
                         bcx.ins().stack_load(types::F64, out_slot, 0)
                     } else {
@@ -1290,11 +1374,7 @@ pub(crate) fn build_function(
                 let cont = bail_if_helper_failed(
                     &mut bcx,
                     bail_ptr,
-                    DeoptBuffers {
-                        fallback,
-                        safepoint_ptr,
-                        payload_ptr,
-                    },
+                    deopt_buffers,
                     &vars,
                     &mut next_id,
                     deopt!(i),
@@ -1337,11 +1417,7 @@ pub(crate) fn build_function(
                 let cont = bail_if_helper_failed(
                     &mut bcx,
                     bail_ptr,
-                    DeoptBuffers {
-                        fallback,
-                        safepoint_ptr,
-                        payload_ptr,
-                    },
+                    deopt_buffers,
                     &vars,
                     &mut next_id,
                     deopt!(i),
@@ -1380,11 +1456,7 @@ pub(crate) fn build_function(
                 let cont = bail_if_helper_failed(
                     &mut bcx,
                     bail_ptr,
-                    DeoptBuffers {
-                        fallback,
-                        safepoint_ptr,
-                        payload_ptr,
-                    },
+                    deopt_buffers,
                     &vars,
                     &mut next_id,
                     deopt!(i),
@@ -1424,11 +1496,7 @@ pub(crate) fn build_function(
                 let cont = bail_if_helper_failed(
                     &mut bcx,
                     bail_ptr,
-                    DeoptBuffers {
-                        fallback,
-                        safepoint_ptr,
-                        payload_ptr,
-                    },
+                    deopt_buffers,
                     &vars,
                     &mut next_id,
                     deopt!(i),
@@ -1468,11 +1536,7 @@ pub(crate) fn build_function(
                         rhs: reg(*rhs),
                         is_right: false,
                     },
-                    DeoptBuffers {
-                        fallback,
-                        safepoint_ptr,
-                        payload_ptr,
-                    },
+                    deopt_buffers,
                     &vars,
                     &mut next_id,
                     deopt!(i),
@@ -1487,11 +1551,7 @@ pub(crate) fn build_function(
                         rhs: reg(*rhs),
                         is_right: true,
                     },
-                    DeoptBuffers {
-                        fallback,
-                        safepoint_ptr,
-                        payload_ptr,
-                    },
+                    deopt_buffers,
                     &vars,
                     &mut next_id,
                     deopt!(i),
@@ -1613,11 +1673,7 @@ pub(crate) fn build_function(
                 let cont = bail_if(
                     &mut bcx,
                     always,
-                    DeoptBuffers {
-                        fallback,
-                        safepoint_ptr,
-                        payload_ptr,
-                    },
+                    deopt_buffers,
                     &vars,
                     &mut next_id,
                     deopt!(i, unconditional),
@@ -1648,11 +1704,7 @@ pub(crate) fn build_function(
                 let result = emit_direct_get(
                     &mut bcx,
                     lens_ptr,
-                    DeoptBuffers {
-                        fallback,
-                        safepoint_ptr,
-                        payload_ptr,
-                    },
+                    deopt_buffers,
                     &vars,
                     &mut next_id,
                     deopt!(i),
@@ -1675,11 +1727,7 @@ pub(crate) fn build_function(
                 emit_direct_set_int(
                     &mut bcx,
                     lens_ptr,
-                    DeoptBuffers {
-                        fallback,
-                        safepoint_ptr,
-                        payload_ptr,
-                    },
+                    deopt_buffers,
                     &vars,
                     &mut next_id,
                     deopt!(i),
@@ -1698,11 +1746,7 @@ pub(crate) fn build_function(
                 let result = emit_direct_get(
                     &mut bcx,
                     lens_ptr,
-                    DeoptBuffers {
-                        fallback,
-                        safepoint_ptr,
-                        payload_ptr,
-                    },
+                    deopt_buffers,
                     &vars,
                     &mut next_id,
                     deopt!(i),
@@ -1727,11 +1771,7 @@ pub(crate) fn build_function(
                 emit_direct_set_int(
                     &mut bcx,
                     lens_ptr,
-                    DeoptBuffers {
-                        fallback,
-                        safepoint_ptr,
-                        payload_ptr,
-                    },
+                    deopt_buffers,
                     &vars,
                     &mut next_id,
                     deopt!(i),
@@ -1790,7 +1830,11 @@ pub(crate) fn build_function(
     // With inlined items present the reported value is `steps_resume`, the charge
     // as of the last precisely-resumable segment entry; the interpreter re-executes
     // everything the region charged past that point.
-    if let Some(reported) = steps_resume_var.or(steps_var) {
+    // A block-charged region has already published each site's exact resume count
+    // on that site's own cold edge, so this shared write would only clobber it.
+    if block_adjust_at.is_none()
+        && let Some(reported) = steps_resume_var.or(steps_var)
+    {
         let s = bcx.use_var(reported);
         bcx.ins().store(MemFlags::trusted(), s, limits_ptr, 0);
     }

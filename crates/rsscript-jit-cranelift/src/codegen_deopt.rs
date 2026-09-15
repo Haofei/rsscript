@@ -116,6 +116,11 @@ pub(crate) struct DeoptCtx<'a> {
     /// A normal region exit carries a planner-produced minimal state map. Guard
     /// deopts use the validation-produced live-at-resume set.
     pub(crate) live_override: Option<&'a [u32]>,
+    /// Source cost charged past this site's resume point, for a region whose block
+    /// entry charges the whole block up front. Subtracting it on the cold edge
+    /// yields the count the interpreter has actually paid for when it resumes.
+    /// Zero for a region that maintains a live `steps_resume` variable.
+    pub(crate) steps_adjust: i64,
 }
 
 impl DeoptCtx<'_> {
@@ -196,6 +201,12 @@ pub(crate) struct DeoptBuffers {
     pub(crate) fallback: Block,
     pub(crate) safepoint_ptr: Value,
     pub(crate) payload_ptr: Value,
+    /// Block-charged accounting write-back: the running source-step variable and
+    /// the limits-cell pointer. When present, each site publishes its own exact
+    /// resume count on its cold edge (`steps - DeoptCtx::steps_adjust`) and the
+    /// shared `fallback` writes nothing. A region that keeps a live `steps_resume`
+    /// variable instead leaves this `None`.
+    pub(crate) steps: Option<(Variable, Value)>,
 }
 
 pub(crate) fn bail_if(
@@ -210,10 +221,12 @@ pub(crate) fn bail_if(
         fallback,
         safepoint_ptr,
         payload_ptr,
+        steps,
     } = buffers;
     let site_id = *next_id;
     *next_id += 1;
     let forced = deopt.forced.is_some_and(|forced| forced.forces(site_id)) || deopt.unconditional;
+    let steps_adjust = deopt.steps_adjust;
     let live = deopt.record();
     let site_block = bcx.create_block();
     let cont = bcx.create_block();
@@ -239,9 +252,28 @@ pub(crate) fn bail_if(
         bcx.ins()
             .store(MemFlags::trusted(), v, payload_ptr, (reg as i32) * 8);
     }
+    publish_resume_steps(bcx, steps, steps_adjust);
     bcx.ins().jump(fallback, &[]);
     bcx.switch_to_block(cont);
     cont
+}
+
+/// Write this site's exact resume count to the limits cell, on the cold edge only.
+fn publish_resume_steps(
+    bcx: &mut FunctionBuilder,
+    steps: Option<(Variable, Value)>,
+    steps_adjust: i64,
+) {
+    let Some((steps_var, limits_ptr)) = steps else {
+        return;
+    };
+    let running = bcx.use_var(steps_var);
+    let resumed = if steps_adjust == 0 {
+        running
+    } else {
+        bcx.ins().iadd_imm(running, -steps_adjust)
+    };
+    bcx.ins().store(MemFlags::trusted(), resumed, limits_ptr, 0);
 }
 
 pub(crate) struct ChildDeoptSource<'a> {
@@ -263,10 +295,12 @@ pub(crate) fn bail_if_child_native_failed(
         fallback,
         safepoint_ptr,
         payload_ptr,
+        steps,
     } = buffers;
     let site_id = *next_id;
     *next_id += 1;
     let forced = deopt.forced.is_some_and(|forced| forced.forces(site_id)) || deopt.unconditional;
+    let steps_adjust = deopt.steps_adjust;
     let (live, child_site) = deopt.record_child(child.metadata);
     let site_block = bcx.create_block();
     let cont = bcx.create_block();
@@ -308,6 +342,7 @@ pub(crate) fn bail_if_child_native_failed(
             ((child_site.payload_slot + slot) as i32) * 8,
         );
     }
+    publish_resume_steps(bcx, steps, steps_adjust);
     bcx.ins().jump(fallback, &[]);
     bcx.switch_to_block(cont);
     cont
