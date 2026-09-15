@@ -443,12 +443,21 @@ fn tuple_arity(name: &str) -> Option<usize> {
     name.strip_prefix("__Tuple").and_then(|n| n.parse().ok())
 }
 
-/// The type-parameter name for tuple element `i`. The checker recognises a
-/// generic type variable only as a single uppercase letter (the v0.7
-/// convention), so tuple parameters are `A`, `B`, `C`, … — capping practical
-/// tuple arity at 26, far above any reasonable use.
+/// The type-parameter name for tuple element `i`.
+///
+/// The name is built from the index, so it is unique at every arity: there is
+/// no alphabet to run out of, and no arity at which two elements share a
+/// parameter or a parameter stops being an identifier. It also carries the
+/// `__rss_` prefix that `source_rules.rs::is_reserved_generated_name` reserves
+/// for compiler-generated symbols, so a tuple parameter can never be captured
+/// by a user-declared type or type parameter of the same spelling.
+///
+/// Everything downstream substitutes by declared parameter name rather than by
+/// spelling (`types.rs::ResolvedType::substitute`,
+/// `infer.rs::substituted_field_type`), so the name's shape is private to this
+/// function.
 fn tuple_type_param(index: usize) -> String {
-    ((b'A' + index as u8) as char).to_string()
+    format!("__rss_T{index}")
 }
 
 fn make_tuple_struct(arity: usize) -> Item {

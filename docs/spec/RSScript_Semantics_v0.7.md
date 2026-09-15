@@ -808,19 +808,23 @@ site's type arguments all at once or not at all, so where it cannot,
 `lower_record_constructor` refuses to lower rather than guess — a build error,
 never a fact naming a type parameter.
 
-`desugar.rs::tuple_type_param` names element `i`'s type parameter
-`(b'A' + i) as char`, so the parameters are `A`, `B`, `C`, … . Past `Z` that
-arithmetic produces characters that are not identifiers at all (`[`, `\`, `]`,
-`^`, …).
+`desugar.rs::tuple_type_param` names element `i`'s type parameter `__rss_T{i}`.
+The name is built from the index, so it is unique at every arity and always an
+identifier; and it sits in the `__rss_` namespace that
+`source_rules.rs::is_reserved_generated_name` reserves for compiler-generated
+symbols, so no user-declared type or type parameter can capture it. The names
+themselves are private to that function: everything downstream substitutes by
+declared parameter name, not by spelling
+(`types.rs::ResolvedType::substitute`, `infer.rs::substituted_field_type`).
 
-The front end does **not** cap tuple arity, and earlier drafts of this document
-were wrong to say it caps at 26: substitution is by declared parameter name, not
-by spelling, so element types still resolve correctly above 26 — `(Int, …, Int,
-String)` at arity 64 still reports `RS0208` against the right element. What the
-generated names do mean is that **arity above 26 must not be relied on**: the
-synthetic parameter names stop being valid identifiers, so nothing downstream of
-the checker is expected to handle them. Treat 26 as the supported ceiling and the
-front end's silence above it as an accident, not a contract.
+**Tuple arity is not capped.** Earlier drafts of this document reported a
+ceiling of 26, from a generation scheme that named the parameters `A`, `B`, `C`,
+… and produced non-identifiers past `Z`. There is no such ceiling now and no
+alphabet to run out of: an arity-30 tuple compiles, verifies, and runs
+(`rsscript-sdk/src/tests.rs::wide_tuples_keep_distinct_type_parameters_and_execute`,
+`rsscript-syntax/src/parser/mod.rs::wide_tuple_structs_declare_unique_reserved_type_parameters`),
+and `(Int, …, Int, String)` at arity 64 still reports `RS0208` against the right
+element.
 
 **Accepted**
 
@@ -4443,8 +4447,6 @@ and finding no enforcing code.
 * **`Float` semantics** beyond its row in the builtin protocol table (§2.1) and
   its non-trapping arithmetic (§2.13): rounding mode, `NaN` payload propagation,
   and `Float` formatting are runtime concerns the front end does not constrain.
-* **Tuple arity above 26.** Not capped and not supported; the generated type
-  parameter names stop being identifiers past `Z` (§2.9).
 
 ### 12.1.1 Specified since v0.7
 
