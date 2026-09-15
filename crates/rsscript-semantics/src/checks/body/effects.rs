@@ -299,7 +299,10 @@ pub(super) fn check_fresh_returns(
     if !function.returns_fresh {
         return;
     }
-    check_fresh_return_type(analyzer, function);
+    // The `fresh Class`/`fresh Resource` rule reads only the signature, so it
+    // belongs to the declaration pass, which sees interface declarations too
+    // (`checks/declarations.rs::check_fresh_return_types`). What is left here
+    // is the body rule: whether the value returned is actually clean.
     for issue in local_analysis.fresh_return_issues() {
         match &issue.kind {
             FreshReturnIssueKind::NotClean { name } => {
@@ -322,32 +325,4 @@ pub(super) fn check_fresh_returns(
             }
         }
     }
-}
-
-pub(super) fn check_fresh_return_type(analyzer: &mut Analyzer<'_>, function: &FunctionDecl) {
-    let Some(return_ty) = &function.return_ty else {
-        return;
-    };
-    let target = fresh_return_target_type(return_ty);
-    match analyzer.hir.type_kind(&target.name) {
-        Some(HirTypeKind::Struct) | Some(HirTypeKind::Sum) | None => {}
-        Some(HirTypeKind::Class) | Some(HirTypeKind::Resource) => {
-            analyzer
-                .diagnostics
-                .push(rsscript_semantics::invalid_fresh_return_type_diagnostic(
-                    &function.name,
-                    &target.name,
-                    target.span.clone(),
-                ));
-        }
-    }
-}
-
-pub(super) fn fresh_return_target_type(return_ty: &TypeRef) -> &TypeRef {
-    if matches!(return_ty.name.as_str(), "Result" | "Option")
-        && let Some(first_arg) = return_ty.args.first()
-    {
-        return first_arg;
-    }
-    return_ty
 }

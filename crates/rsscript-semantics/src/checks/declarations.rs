@@ -51,4 +51,68 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
 /// even though they run after type-name resolution for diagnostic stability.
 pub(crate) fn check_generic_constraints(analyzer: &mut Analyzer<'_>) {
     over_source_and_interfaces(analyzer, rsscript_semantics::generic_constraint_diagnostics);
+    check_fresh_return_types(analyzer);
+}
+
+/// `fresh` names a newly created value, which only a struct or a sum can be: a
+/// class is a managed identity and a resource is a host-owned slot, so neither
+/// may be the target of a `fresh` return (§5.8, §8.2).
+///
+/// This reads the declared return type and nothing else, so it is a
+/// signature-level rule and holds wherever the signature is written. It used to
+/// run only inside the body pass, over the source program's functions, and a
+/// bodyless `.rssi` declaration of `pub fn open() -> fresh File` therefore
+/// escaped it entirely — an interface could export a contract the language does
+/// not have. It cannot use `over_source_and_interfaces` because it needs the
+/// HIR's type kinds and not just the program, so it walks the same two inputs
+/// itself. It runs with the generic bounds because both need type-name
+/// resolution to have happened first.
+fn check_fresh_return_types(analyzer: &mut Analyzer<'_>) {
+    let mut invalid = Vec::new();
+    for program in
+        std::iter::once(&analyzer.syntax_program).chain(analyzer.interface_programs.iter())
+    {
+        for item in &program.items {
+            let crate::syntax::ast::Item::Function(function) = item else {
+                continue;
+            };
+            if !function.returns_fresh {
+                continue;
+            }
+            let Some(return_ty) = &function.return_ty else {
+                continue;
+            };
+            let target = fresh_return_target_type(return_ty);
+            if matches!(
+                analyzer.hir.type_kind(&target.name),
+                Some(crate::hir::HirTypeKind::Class | crate::hir::HirTypeKind::Resource)
+            ) {
+                invalid.push((
+                    function.name.clone(),
+                    target.name.clone(),
+                    target.span.clone(),
+                ));
+            }
+        }
+    }
+    for (function, type_name, span) in invalid {
+        analyzer
+            .diagnostics
+            .push(rsscript_semantics::invalid_fresh_return_type_diagnostic(
+                &function, &type_name, span,
+            ));
+    }
+}
+
+/// `fresh` applies to the payload of a `Result`/`Option` return, not to the
+/// wrapper: `-> Result<fresh File, String>` targets `File`.
+fn fresh_return_target_type(
+    return_ty: &crate::syntax::ast::TypeRef,
+) -> &crate::syntax::ast::TypeRef {
+    if matches!(return_ty.name.as_str(), "Result" | "Option")
+        && let Some(first_arg) = return_ty.args.first()
+    {
+        return first_arg;
+    }
+    return_ty
 }
