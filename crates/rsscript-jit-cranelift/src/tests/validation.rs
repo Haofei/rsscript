@@ -537,6 +537,7 @@ fn region_exit_is_a_distinct_commit_capable_outcome() {
             0,
             RegionCompileControls {
                 step: true,
+                step_ceiling: true,
                 cancel: false,
                 deadline: false,
             },
@@ -590,6 +591,7 @@ fn deadline_control_polls_before_native_source_work() {
             &function,
             RegionCompileControls {
                 step: true,
+                step_ceiling: true,
                 cancel: false,
                 deadline: true,
             },
@@ -612,6 +614,7 @@ fn call_sessions_isolate_planned_yield_payloads() {
     let mut module = module();
     let controls = RegionCompileControls {
         step: true,
+        step_ceiling: true,
         cancel: false,
         deadline: false,
     };

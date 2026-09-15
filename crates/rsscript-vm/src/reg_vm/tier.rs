@@ -728,9 +728,12 @@ impl RegVm {
         // These values remain false after the gate above. Keeping the compile-time
         // plumbing intact allows a future source-cost implementation to re-enable
         // proven limit-aware OSR without changing the cache shape again.
-        let emit_step = self.limits.step_budget.is_some()
-            || self.limits.cancel.is_some()
-            || self.limits.deadline.is_some();
+        // Source-step accounting is unconditional so an unbounded OSR loop still
+        // reports the interpreter's count; the ceiling half, whose per-segment
+        // compare and cold bail site are not free, is emitted only when a step
+        // budget is actually armed.
+        let emit_step = true;
+        let emit_step_ceiling = self.limits.step_budget.is_some();
         let emit_cancel = self.limits.cancel.is_some();
         let emit_deadline = self.limits.deadline.is_some();
         let allocation_armed = self.limits.allocation_budget.is_some();
@@ -857,6 +860,7 @@ impl RegVm {
             call_count,
             profile: profile_owned.as_ref(),
             emit_step,
+            emit_step_ceiling,
             emit_cancel,
             emit_deadline,
             memory_armed,
@@ -1214,6 +1218,11 @@ impl RegVm {
                 .expect("optimized OSR dispatch requires optimized module"),
         };
         flat_args.sort_unstable_by_key(|proof| proof.index);
+        // Step-accounting roll-back anchor. Every exit below that returns `false`
+        // leaves the interpreter frame untouched, so the interpreter re-runs the
+        // loop from its header and charges again everything the native body already
+        // paid for. Such an exit must therefore report the pre-entry count.
+        let steps_before_native = self.steps;
         let initial_steps = i64::try_from(self.steps).unwrap_or(i64::MAX);
         let step_budget = self
             .limits
@@ -1263,6 +1272,16 @@ impl RegVm {
         if emit_step {
             self.steps = native_steps.max(0) as u64;
         }
+        // Only the normal OSR-exit below keeps the region's charge; every other exit
+        // hands the loop back to the interpreter to run again from the header.
+        macro_rules! osr_not_entered {
+            () => {{
+                if emit_step {
+                    self.steps = steps_before_native;
+                }
+                false
+            }};
+        }
         if let Some(native) = self.native.as_mut()
             && let Some(elapsed) = elapsed
         {
@@ -1294,7 +1313,7 @@ impl RegVm {
                 let Some(resume_ip) = resume_ip else {
                     heap_tx.abort();
                     scratch.restore(self.native.as_mut());
-                    return false;
+                    return osr_not_entered!();
                 };
                 // The OSR-exit's explicit resume_ip MUST be the original bytecode
                 // post-loop exit; anything else is an OSR construction bug. Fall
@@ -1302,7 +1321,7 @@ impl RegVm {
                 if resume_ip as usize != orig_exit {
                     heap_tx.abort();
                     scratch.restore(self.native.as_mut());
-                    return false;
+                    return osr_not_entered!();
                 }
                 // Materialize ordinary Handle live-outs before committing the heap
                 // transaction: commit clears the per-call handle tables. Keep the
@@ -1322,21 +1341,21 @@ impl RegVm {
                     let vm_jit::DeoptValue::Handle(handle) = live_reg.value else {
                         heap_tx.abort();
                         scratch.restore(self.native.as_mut());
-                        return false;
+                        return osr_not_entered!();
                     };
                     let Some(value) = JitHostCallCtx::active()
                         .and_then(|ctx| ctx.heap_read_handle(handle, |value| Some(value.clone())))
                     else {
                         heap_tx.abort();
                         scratch.restore(self.native.as_mut());
-                        return false;
+                        return osr_not_entered!();
                     };
                     handle_liveouts.push((base + reg, value));
                 }
                 let Some(materialize_ctx) = JitHostCallCtx::active() else {
                     heap_tx.abort();
                     scratch.restore(self.native.as_mut());
-                    return false;
+                    return osr_not_entered!();
                 };
                 let mut aggregate_liveouts = Vec::with_capacity(materialize_recipes.len());
                 for recipe in &materialize_recipes {
@@ -1346,7 +1365,7 @@ impl RegVm {
                     else {
                         heap_tx.abort();
                         scratch.restore(self.native.as_mut());
-                        return false;
+                        return osr_not_entered!();
                     };
                     aggregate_liveouts.push((base + recipe.dst_reg, value));
                 }
@@ -1370,7 +1389,7 @@ impl RegVm {
                         }
                         heap_tx.abort();
                         scratch.restore(self.native.as_mut());
-                        return false;
+                        return osr_not_entered!();
                     }
                 }
                 let Some(writebacks) =
@@ -1383,7 +1402,7 @@ impl RegVm {
                     }
                     heap_tx.abort();
                     scratch.restore(self.native.as_mut());
-                    return false;
+                    return osr_not_entered!();
                 };
                 for (slot, value) in writebacks {
                     self.set_reg(slot, value);
@@ -1415,7 +1434,7 @@ impl RegVm {
                     }) else {
                         heap_tx.abort();
                         scratch.restore(self.native.as_mut());
-                        return false;
+                        return osr_not_entered!();
                     };
                     if let Some((_, updates)) = scalar_writebacks
                         .iter_mut()
@@ -1432,7 +1451,7 @@ impl RegVm {
                     else {
                         heap_tx.abort();
                         scratch.restore(self.native.as_mut());
-                        return false;
+                        return osr_not_entered!();
                     };
                     self.set_reg(slot, updated);
                 }
@@ -1525,7 +1544,7 @@ impl RegVm {
                     }
                 }
                 scratch.restore(self.native.as_mut());
-                false
+                osr_not_entered!()
             }
         }
     }

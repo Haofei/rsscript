@@ -991,6 +991,48 @@ fn native_step_accounting_matches_the_interpreter_under_an_armed_budget() {
 }
 
 #[test]
+fn an_unbounded_native_run_reports_the_interpreter_step_count() {
+    // `steps_consumed` is a reported fact, not only a ceiling. With nothing armed
+    // a natively executed whole-function region used to report zero while the
+    // interpreter reported the true count, so source-step accounting is now on for
+    // every whole-function entry and the limits cell simply carries `i64::MAX` as
+    // its budget.
+    //
+    // Run with the production tiering defaults, automatic OSR included, because an
+    // unbounded hot loop reaches generated code mostly through OSR rather than
+    // whole-function entry: before OSR was armed, `call-free-loop.rss` reported
+    // 729 of the interpreter's 57012 steps.
+    for case in STEP_PARITY_CASES {
+        let (interpreter, native) = accounting_pair(
+            case.name,
+            case.source,
+            RunLimits::unbounded_for_trusted_host(),
+            NativeJitOptions {
+                cost_model: NativeCostModel::Off,
+                collect_telemetry: true,
+                ..NativeJitOptions::default()
+            },
+        );
+        assert_eq!(
+            native.outcome(),
+            interpreter.outcome(),
+            "{} must terminate for the same reason as the interpreter with no limit armed",
+            case.name
+        );
+        assert_eq!(
+            native.usage.steps_consumed, interpreter.usage.steps_consumed,
+            "{} must report the interpreter's step count with no limit armed",
+            case.name
+        );
+        assert!(
+            native_region_entries(&native) > 0 || native_telemetry(&native).native_bails > 0,
+            "{} must actually reach generated code for the count above to mean anything",
+            case.name
+        );
+    }
+}
+
+#[test]
 fn native_step_accounting_matches_the_interpreter_for_osr_entered_loops() {
     for case in STEP_PARITY_CASES {
         for &budget in &[100_u64, 1_000, 10_000, 10_000_000] {

@@ -59,10 +59,21 @@ impl RegVm {
                 return NativeAttempt::Fallback;
             }
         }
+        // Whether a control actually *rejects*. Only these gates need the precise
+        // deopt contract: a ceiling that trips must resume the interpreter at the
+        // first unpaid source instruction rather than re-running the region.
+        let enforcing = self.limits.step_budget.is_some()
+            || self.limits.cancel.is_some()
+            || self.limits.deadline.is_some();
+        // Source-step accounting is unconditional. `ExecutionUsage::steps_consumed`
+        // is a reported fact and not merely a ceiling, so a natively executed
+        // region must charge the interpreter's count even with nothing armed. The
+        // call-owned limits cell represents a missing ceiling as `i64::MAX`, so
+        // counting never rejects on its own; the only added work is one add and one
+        // never-taken compare per bounded accounting segment.
         let compile_controls = vm_jit::RegionCompileControls {
-            step: self.limits.step_budget.is_some()
-                || self.limits.cancel.is_some()
-                || self.limits.deadline.is_some(),
+            step: true,
+            step_ceiling: self.limits.step_budget.is_some(),
             cancel: self.limits.cancel.is_some(),
             deadline: self.limits.deadline.is_some(),
         };
@@ -120,8 +131,7 @@ impl RegVm {
             let Some(native) = self.native.as_mut() else {
                 return NativeAttempt::Fallback;
             };
-            if compile_controls != vm_jit::RegionCompileControls::default() && !native.precise_deopt
-            {
+            if enforcing && !native.precise_deopt {
                 return NativeAttempt::Fallback;
             }
             if native.force_bail {
@@ -224,9 +234,7 @@ impl RegVm {
                             let precise_resume_safe = *precise_resume_safe;
                             let string_literals = analyzed.string_literals().to_vec();
                             let jit_fn = analyzed.jit_fn();
-                            if compile_controls != vm_jit::RegionCompileControls::default()
-                                && !precise_resume_safe
-                            {
+                            if enforcing && !precise_resume_safe {
                                 return NativeAttempt::Fallback;
                             }
                             // Exact source accounting: a key whose hash work is
@@ -289,20 +297,6 @@ impl RegVm {
                                                 Some(site) => native
                                                     .baseline_module
                                                     .compile_forcing_bail(jit_fn, site),
-                                                None if compile_controls
-                                                    != vm_jit::RegionCompileControls::default() =>
-                                                {
-                                                    analyzed
-                                                        .validate(&native.baseline_module)
-                                                        .and_then(|validated| {
-                                                            validated
-                                                                .publish(
-                                                                    &mut native.baseline_module,
-                                                                    compile_controls,
-                                                                )
-                                                                .map(|published| published.id)
-                                                        })
-                                                }
                                                 None => analyzed
                                                     .validate(&native.baseline_module)
                                                     .and_then(|validated| {
@@ -327,17 +321,6 @@ impl RegVm {
                                             match native.forced_safepoint {
                                                 Some(site) => {
                                                     module.compile_forcing_bail(jit_fn, site)
-                                                }
-                                                None if compile_controls
-                                                    != vm_jit::RegionCompileControls::default() =>
-                                                {
-                                                    analyzed.validate(module).and_then(
-                                                        |validated| {
-                                                            validated
-                                                                .publish(module, compile_controls)
-                                                                .map(|published| published.id)
-                                                        },
-                                                    )
                                                 }
                                                 None => analyzed.validate(module).and_then(
                                                     |validated| {
@@ -512,20 +495,11 @@ impl RegVm {
                                 .as_mut()
                                 .expect("optimized module")
                                 .compile_forcing_bail(&jit_fn, site),
-                            None if compile_controls
-                                != vm_jit::RegionCompileControls::default() =>
-                            {
-                                native
-                                    .optimized_module
-                                    .as_mut()
-                                    .expect("optimized module")
-                                    .compile_with_controls(&jit_fn, compile_controls)
-                            }
                             None => native
                                 .optimized_module
                                 .as_mut()
                                 .expect("optimized module")
-                                .compile(&jit_fn),
+                                .compile_with_controls(&jit_fn, compile_controls),
                         }
                     };
                     match compiled {
@@ -886,14 +860,16 @@ impl RegVm {
                     .as_ref()
                     .expect("optimized dispatch requires optimized module"),
             };
-            let armed = compile_controls != vm_jit::RegionCompileControls::default();
             let initial_steps = i64::try_from(self.steps).unwrap_or(i64::MAX);
             let step_budget = self
                 .limits
                 .step_budget
                 .and_then(|budget| i64::try_from(budget).ok());
-            let (result, native_steps) = if armed {
-                module.call_with_indexed_flat_args_and_controls_in_session_at_depth(
+            // Every whole-function region now carries source-step accounting, so the
+            // limits-aware entry is the only entry. `step_budget` stays `None` when
+            // nothing is armed, which the cell encodes as `i64::MAX`.
+            let (result, native_steps) = module
+                .call_with_indexed_flat_args_and_controls_in_session_at_depth(
                     &mut native_ref.call_session,
                     id,
                     &scratch.args,
@@ -909,23 +885,7 @@ impl RegVm {
                         step_budget,
                         cancel: self.limits.cancel.as_ref().map(|token| token.as_atomic()),
                     },
-                )
-            } else {
-                (
-                    module.call_with_indexed_flat_args_at_depth(
-                        id,
-                        &scratch.args,
-                        &scratch.lens,
-                        heap_tx.host_ctx(),
-                        &mut flat_args,
-                        vm_jit::LogicalCallDepth {
-                            current: initial_depth,
-                            limit: self.limits.max_depth,
-                        },
-                    ),
-                    initial_steps,
-                )
-            };
+                );
             let elapsed = started.map(|started| started.elapsed().as_nanos());
             (result, elapsed, native_steps)
         };

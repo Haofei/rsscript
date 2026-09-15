@@ -46,16 +46,32 @@ instruction; and `RegVm::usage` publishes `steps_consumed`,
 ### Step count
 
 **Equivalent** for whole-function regions, OSR regions, and continuations
-whenever native code runs at all with a step, cancellation, or deadline control
-armed. A program run with step limit `N` terminates with the same reason and
-reports the same `steps_consumed` under native execution as under the
-interpreter. Four mechanisms make that exact:
+whenever native code runs at all, with or without a step, cancellation, or
+deadline control armed. A program run with step limit `N` terminates with the
+same reason and reports the same `steps_consumed` under native execution as under
+the interpreter, and a program run with nothing armed reports the interpreter's
+count rather than zero. Source-step accounting is therefore unconditional; only
+the *rejection* half is conditional. Six mechanisms make that exact:
 
-- **Segment reservation.** Generated code reserves a whole no-deopt accounting
-  segment's source cost before the segment's first instruction
-  (`step_segment_costs` in `crates/rsscript-jit-cranelift/src/codegen.rs`). A
-  segment is capped at 512 source steps and never crosses a CFG leader, a
-  possibly-bailing instruction, or an inlined-region boundary.
+- **Counting is separated from the ceiling.** `RegionCompileControls::step` asks
+  generated code to count; `step_ceiling` asks it to additionally reject. A run
+  with no step budget gets the first without the second, so it pays no
+  per-segment compare and mints no reservation bail site.
+- **Segment reservation** (ceiling armed). Generated code reserves a whole
+  no-deopt accounting segment's source cost before the segment's first
+  instruction (`step_segment_costs` in
+  `crates/rsscript-jit-cranelift/src/codegen.rs`). A segment is capped at 512
+  source steps and never crosses a CFG leader, a possibly-bailing instruction, or
+  an inlined-region boundary.
+- **Block charging** (counting only). With no ceiling to reserve against and no
+  cancellation or deadline to poll, a region charges each basic block's whole
+  source cost once at its leader (`step_block_costs`), and each bail site
+  publishes its own exact resume count on its cold edge by subtracting a
+  compile-time constant. The hot path then pays one add per block instead of a
+  reservation, a compare, and a live `steps_resume` variable per possibly-deopting
+  instruction. That constant exists because an accounting segment never crosses a
+  CFG leader; a region whose inlined run reaches back past its block leader has no
+  such constant and keeps the segment model.
 - **Inlined callee bodies own their own steps.** The leaf inliner returns a
   per-instruction `NativeInlineAccounting`
   (`crates/rsscript-vm/src/reg_vm/native/passes/inlining.rs`), so each spliced
@@ -102,7 +118,9 @@ A whole-region hand-back that is **not** a precise resume (a failed heap commit,
 an unresolvable handle, a mismatched outcome, or a deopt whose precise resume
 cannot be reconstructed) makes the interpreter re-run the function from its first
 instruction, so `RegVm::attempt_native` restores the pre-entry count on those
-exits rather than reporting the region's charge twice. For the same reason an
+exits rather than reporting the region's charge twice. `RegVm::try_osr` does the
+same for every exit that leaves the interpreter frame untouched, which makes the
+interpreter re-run the loop from its header. For the same reason an
 accounted region takes the plain precise resume at its call instruction rather
 than reconstructing a child frame through `try_resume_native_child_deopt_chain`:
 generated code publishes one roll-back point per region, and for a metered edge
@@ -152,35 +170,50 @@ accounting segment rather than by one instruction.
    (`crates/rsscript-vm/src/reg_vm/tier/osr_plan_builder.rs`) composes ip maps
    across passes without a cost vector. Needed: thread `NativeInlineAccounting`
    through that chain the way `NativePipelineState` already does for
-   whole-function translation. Until then an armed OSR region containing a call
-   declines.
+   whole-function translation. Until then **any** OSR region containing a call
+   declines. Note the widened blast radius: accounting is now unconditional, so
+   this decline, which used to apply only under an armed control, applies to every
+   run, and an OSR loop containing a dissolvable call no longer reaches generated
+   code at all.
 2. **Data-dependent key hashing cannot be charged from generated code.**
    `map_key_from_value` bills `1 + len / 64` for a String/Bytes key and recurses
    for a structural one. The region's step counter is a Cranelift register
    variable, so a host helper cannot add to it. Needed: a limits-cell ABI a
    helper can charge against. Until then `native_source_cost_is_static` declines
-   `MapInsertHandleKeyInt` and `SetInsertHandle` regions under armed controls.
-3. **Unarmed native execution reports zero steps.** With no step, cancellation,
-   or deadline control armed, `LimitChecks::default()` emits no accounting at
-   all, so `ExecutionUsage::steps_consumed` for a natively executed region is
-   `0` — no limit is bypassed, but the reported usage fact is not equivalent.
-   Needed: arm `step` unconditionally in `RegVm::attempt_native`'s
-   `compile_controls` (the limits cell already represents a missing ceiling as
-   `i64::MAX`) and re-measure the release gate; the cost is one add and one
-   compare per accounting segment and has not been measured.
-4. **Closure sinking drops the deleted instruction's step.**
+   `MapInsertHandleKeyInt` and `SetInsertHandle` regions. That decline is likewise
+   now unconditional rather than armed-only, for the same reason as gap 1.
+3. **Closure sinking drops the deleted instruction's step.**
    `native_inline_leaf_calls_inner` emits nothing for `sinkable.dead_defs`, so a
    sunk `MakeClosure` and its dead copy `Move`s own no source cost even though
    the interpreter ticks them. Needed: attribute each empty span's cost to the
    next emitted item, or decline when a span is empty and a control is armed.
-5. **Intrinsic and Provider call meters stay interpreter-owned.**
+4. **Intrinsic and Provider call meters stay interpreter-owned.**
    `RegVm::native_preemption_controls_supported`
    (`crates/rsscript-vm/src/reg_vm/exec.rs`) refuses native dispatch whenever
    `intrinsic_call_budget` or `provider_call_budget` is armed, because native
    code does not route intrinsic dispatch through `charge_intrinsic_call`.
-6. **A custom `max_depth` refuses whole-function native entry.** The internal ABI
+5. **A custom `max_depth` refuses whole-function native entry.** The internal ABI
    carries a host-stack cap, not the language's logical frame limit
    (`RegVm::attempt_native`). OSR entry already forwards the configured limit.
+
+### Measured cost of unconditional accounting
+
+Release gate
+(`cargo test --locked --release -p rsscript-sdk --features native-jit --test
+native_jit_smoke native_hot_loop_release_gate_beats_the_interpreter`), native
+median over interleaved paired runs on one machine, against the same tree with
+accounting armed only when a control is armed:
+
+| accounting shape | overhead on the gate |
+| --- | --- |
+| count and reserve every segment, always | +81% |
+| count every segment, reserve only when armed | +17% |
+| charge per block, reserve only when armed | +3.6% |
+
+Only the third shape ships. The first two are recorded because they are the
+obvious implementations and both miss the gate's ~10% budget; what costs is the
+per-segment reservation bail site and the live `steps_resume` variable, not the
+counting.
 
 ### Coverage this is verified by
 
@@ -195,6 +228,10 @@ two replay `STEP_PARITY_CASES`, whose `callee-owns-the-loop`,
 `nested-compiled-callee`, and `deopt-inside-compiled-callee` shapes hold a loop
 the leaf inliner refuses to dissolve and therefore reach generated code only over
 a compiled native-to-native edge.
+
+`an_unbounded_native_run_reports_the_interpreter_step_count` covers the
+no-control case with the production tiering defaults, where a hot loop reaches
+generated code mostly through OSR.
 
 `crates/rsscript-jit-cranelift/src/tests/calls_and_abi.rs` pins the edge ABI
 directly: `armed_native_to_native_edge_shares_and_rolls_back_the_step_cell` and
@@ -289,13 +326,14 @@ directly: `armed_native_to_native_edge_shares_and_rolls_back_the_step_cell` and
   once, preserves Provider traces and scheduler semantics, then probes the next
   scalar continuation. Generated code never re-enters the interpreter or spans a
   suspension.
-- Limit-aware regions meter their source instructions, including the instructions
-  of a callee the leaf inliner spliced in and the constant key-hash unit the
-  interpreter bills on top of an `Int`-keyed map operation. A missing step
-  ceiling is represented as `i64::MAX` in the call-owned limits cell; it disables
-  rejection without disabling usage accounting when cancellation/deadline still
-  require a shared source-step stream. Scheduler-owned async bookkeeping remains
-  outside the native source map.
+- Every native region meters its source instructions, armed or not, because
+  `steps_consumed` is a reported usage fact and not only a ceiling. That includes
+  the instructions of a callee the leaf inliner spliced in, the body of a callee
+  reached over a native-to-native edge, and the constant key-hash unit the
+  interpreter bills on top of an `Int`-keyed map operation. A missing step ceiling
+  is represented as `i64::MAX` in the call-owned limits cell and suppresses the
+  per-segment reservation entirely rather than being compared against.
+  Scheduler-owned async bookkeeping remains outside the native source map.
 - Region formation requires at least sixteen direct source instructions. Under the
   enforcing cost model, acyclic dispatch requires at least 512 instructions to
   amortize the trampoline; diagnostic/off modes can still exercise smaller

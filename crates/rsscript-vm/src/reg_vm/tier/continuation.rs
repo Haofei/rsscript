@@ -274,6 +274,7 @@ impl RegVm {
                     let admission = begin_native_compile(native, 1, NativeCodeTier::Baseline)?;
                     let controls = vm_jit::RegionCompileControls {
                         step: true,
+                        step_ceiling: self.limits.step_budget.is_some(),
                         cancel: cancel_armed,
                         deadline: self.limits.deadline.is_some(),
                     };

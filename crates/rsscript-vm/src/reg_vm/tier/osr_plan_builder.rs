@@ -18,6 +18,7 @@ pub(in crate::reg_vm) struct OsrPlanInputs<'a> {
     pub(in crate::reg_vm) call_count: u32,
     pub(in crate::reg_vm) profile: Option<&'a FunctionProfile>,
     pub(in crate::reg_vm) emit_step: bool,
+    pub(in crate::reg_vm) emit_step_ceiling: bool,
     pub(in crate::reg_vm) emit_cancel: bool,
     pub(in crate::reg_vm) emit_deadline: bool,
     pub(in crate::reg_vm) memory_armed: bool,
@@ -63,6 +64,7 @@ impl RegVm {
             call_count,
             profile,
             emit_step,
+            emit_step_ceiling,
             emit_cancel,
             emit_deadline,
             memory_armed,
@@ -226,6 +228,7 @@ impl RegVm {
                                 begin_native_compile(native, 1, NativeCodeTier::Baseline)?;
                             let controls = vm_jit::RegionCompileControls {
                                 step: emit_step,
+                                step_ceiling: emit_step_ceiling,
                                 cancel: emit_cancel,
                                 deadline: emit_deadline,
                             };
@@ -714,6 +717,7 @@ impl RegVm {
                                     )?;
                                     let controls = vm_jit::RegionCompileControls {
                                             step: emit_step,
+                                            step_ceiling: emit_step_ceiling,
                                             cancel: emit_cancel,
                                             deadline: emit_deadline,
                                         };
@@ -932,6 +936,7 @@ impl RegVm {
                             source.header,
                             vm_jit::RegionCompileControls {
                                 step: emit_step,
+                                step_ceiling: emit_step_ceiling,
                                 cancel: emit_cancel,
                                 deadline: emit_deadline,
                             },

@@ -1537,6 +1537,7 @@ fn armed_native_to_native_edge_shares_and_rolls_back_the_step_cell() {
     use JitValueType::Int;
     let controls = RegionCompileControls {
         step: true,
+        step_ceiling: true,
         cancel: false,
         deadline: false,
     };
@@ -1646,6 +1647,7 @@ fn a_native_call_edge_requires_matching_generated_code_controls() {
             ),
             RegionCompileControls {
                 step: true,
+                step_ceiling: true,
                 cancel: false,
                 deadline: false,
             },

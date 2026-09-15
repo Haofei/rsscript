@@ -410,7 +410,13 @@ struct NativeCallInvocation<'a> {
 /// must use a limits-aware entry exactly when any control is enabled.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct RegionCompileControls {
+    /// Count source steps into the call-owned limits cell. This is the reported
+    /// usage fact and never rejects on its own.
     pub step: bool,
+    /// Also reserve each accounting segment against the cell's `step_budget`.
+    /// Implies `step`; set it only when a ceiling is actually armed, because the
+    /// per-segment compare and its cold bail site are not free.
+    pub step_ceiling: bool,
     pub cancel: bool,
     pub deadline: bool,
 }
@@ -420,14 +426,16 @@ impl RegionCompileControls {
     /// emits byte-identical code to an engine without limit accounting, and its
     /// native-to-native edges may use the frame-free direct scalar ABI.
     pub fn any(self) -> bool {
-        self.step || self.cancel || self.deadline
+        self.step || self.step_ceiling || self.cancel || self.deadline
     }
 }
 
 impl From<RegionCompileControls> for LimitChecks {
     fn from(value: RegionCompileControls) -> Self {
         Self {
-            step: value.step,
+            // A ceiling is meaningless without the count it rejects against.
+            step: value.step || value.step_ceiling,
+            step_ceiling: value.step_ceiling,
             cancel: value.cancel,
             deadline: value.deadline,
         }
@@ -970,6 +978,7 @@ impl NativeModule {
             Some(header_ip),
             LimitChecks {
                 step: step_limit,
+                step_ceiling: step_limit,
                 cancel: cancel_armed,
                 deadline: false,
             },
