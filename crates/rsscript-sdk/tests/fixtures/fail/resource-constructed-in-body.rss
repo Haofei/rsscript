@@ -1,0 +1,12 @@
+// expect: RS0702
+
+// A resource slot is host-owned (spec §8.2): a `.rss` body cannot mint one, so
+// a resource constructor in a body is a producer with no owning `with` scope.
+
+resource Handle {
+    fd: Int
+}
+
+fn open(id: Int) -> Handle {
+    return Handle(fd: id)
+}

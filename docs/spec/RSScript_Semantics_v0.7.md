@@ -3322,6 +3322,29 @@ a producer when it is a call whose type is a resource
 (`ResourceProducerKind::ResultResource`). Anything but a `with` head — a `let`
 binding, a `return`, an argument position — is `RS0702`.
 
+A **resource constructor counts as a call**, so `return Handle(fd: id)` inside a
+`.rss` body is `RS0702` like any other producer that reaches no `with`. This is
+deliberate, not an oversight in the producer classifier:
+
+* A resource slot is host-owned. `docs/spec/RSScript_Execution_Spec_v0.1.md`:
+  "Resource slots are opaque and provider-owned at the external boundary;
+  cleanup occurs on normal return, error, cancellation, and deadline exit." A
+  value a `.rss` body builds out of ordinary fields has no provider behind it
+  and no declared cleanup contract, so nothing could release it.
+* There is no lowering for it. MIR has `AcquireResource`/`ReleaseResource`, and
+  its verifier "requires every reachable return path to release all live
+  resources" (ADR 0010). A function that returned a constructed resource would
+  be a verified leak; ADR 0010 states that transfer semantics across a function
+  boundary "remain separate milestones".
+* It is the rule §8.6 already states from the other direction: a resource's
+  lifetime is exactly one lexical scope, and there is no way to hand one back to
+  a caller.
+
+So a resource is always produced by a **bodyless function declared in an
+`.rssi` interface**, which is the point at which the host contract exists. A
+`resource` type may still be *declared* in a `.rss` file — including its `drop`
+body — it just cannot be constructed there.
+
 The examples in this section therefore use a companion interface file. They were
 checked with
 `rss check --interface fs.rssi <file>.rss`:
@@ -4337,7 +4360,9 @@ These are findings for the maintainer, not features.
 
 * **A `.rss` function cannot construct a resource.** Returning a resource
   constructor is `RS0702`. Every resource must be produced by a bodyless
-  function in an `.rssi` interface (§8.2).
+  function in an `.rssi` interface, because a resource slot is host-owned and
+  its cleanup contract lives at the external boundary (§8.2). Declaring the
+  `resource` type, `drop` body included, in a `.rss` file is fine.
 * **`String` is not Copy** (§2.2), so `retains(s: String)` is legal while
   `retains(n: Int)` is `RS0007`.
 * **`Float` is `Clone` but not `Eq`, not `Ord`, and not `Hashable`** (§2.1).
