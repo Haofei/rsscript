@@ -1,0 +1,355 @@
+# How models actually fail at writing RSScript
+
+*September 2026. Evidence for the generation-oracle design.*
+
+## Why this exists
+
+The generation oracle (`rss generate`, `rss check --json`, `rss fix --json`) is
+the project's top priority, but until now it was being designed without data.
+The eval corpus had ten repair/review fixtures and no model runner, so nobody
+could say which mistakes a code-generating model actually makes, how often, or
+whether the language card removes them.
+
+This report is the first measurement. Twenty new from-scratch generation tasks
+were added to `evals/tasks/` (each with a reference solution verified by `rss
+check`), a runner was written (`tools/collect-model-samples.py`), and the whole
+30-task corpus was sampled in three generation modes.
+
+## Method, and what the numbers do not mean
+
+- **Model**: `claude -p "<prompt>" --model sonnet --output-format text
+  --allowedTools ""`. Exactly one sample per task per mode.
+- **Isolation**: the CLI runs with no tools *and* from an empty temporary
+  working directory. This matters. A first probe run with the CLI's cwd set to
+  the repository returned something almost character-identical to the corpus's
+  own reference solution, including string literals that appear nowhere in the
+  prompt. The same task run from an empty directory produced an ordinary — and
+  ordinarily wrong — first attempt. Every number below comes from the isolated
+  configuration; the contaminated probe was discarded.
+- **Prompt content**: `prompt_only` is the task prompt plus the task's `.rssi`
+  interface text. `language_card` prefixes `docs/generated/language-card.md`
+  and `AGENT.md`. `repair_loop` starts from the `language_card` prompt and then
+  feeds `rss check --json` diagnostics back for up to three turns total.
+- **Scale**: 127 model calls (30 + 30 + 67). Total wall time ≈ 2.5 h.
+- **Scoring**: `cargo run -p rsscript-xtask -- agent-eval` per mode, reports at
+  `evals/samples/sonnet/<mode>/report.v1.json`. "Compiles" means `rss check`
+  reports no errors; "scorer pass" additionally requires the task's structural
+  invariants.
+
+**n = 1 per task per mode.** Thirty samples per mode is enough to rank failure
+classes that occur in ten or more candidates and to tell 0/20 from 5/20. It is
+not enough to trust a difference of one or two candidates, and no
+single-candidate class below should be read as a rate. Two `repair_loop`
+candidates needed a re-run after a 180 s timeout and a session limit truncated
+their second turn; they were resampled from scratch with a 400 s timeout so
+every candidate in the reported set had its full three-turn budget.
+
+## Pass rates
+
+| mode | compiles (30) | scorer pass (30) | on the 20 generation tasks | on the 10 original repair/review tasks |
+|---|---|---|---|---|
+| `prompt_only` | 9 (30%) | 8 (27%) | **0 / 20 compile** | 9 / 10 compile, 8 / 10 pass |
+| `language_card` | 11 (37%) | 10 (33%) | **1 / 20 compile** | 10 / 10 compile, 9 / 10 pass |
+| `repair_loop` | 15 (50%) | 13 (43%) | **5 / 20 compile** | 10 / 10 compile, 8 / 10 pass |
+
+The headline is the split. The ten original tasks are repair/review: the model
+is shown a nearly-correct program and asked to change one thing, and it nearly
+always succeeds. The twenty new tasks ask for a whole small program, and the
+model wrote **zero** compiling programs out of twenty on the first attempt with
+the prompt alone. Every aggregate pass rate the corpus reported before today
+was measuring the easy half.
+
+## Every failed candidate, with its diagnostic codes
+
+`t*N*` is the number of repair turns consumed. "invariant" means the candidate
+compiled but lost a structural fact the task requires.
+
+| task | `prompt_only` | `language_card` | `repair_loop` |
+|---|---|---|---|
+| async-stream-consume | RS0015, RS0026, RS0030, RS0206, RS0208, RS0311 | RS0015, RS0031, RS0202, RS0203, RS0204, RS0206 | **pass** t1 |
+| csv-record-transform | RS0015, RS0206, RS0208 | RS0015, RS0026, RS0203, RS0204, RS0206, RS0307, RS0308 | RS0015, RS0202, RS0206 (t2) |
+| destructive-symbol | pass | pass | pass |
+| generic-struct-bound | RS0015, RS0202, RS0206, RS0208, RS0308 | RS0015, RS0026, RS0308 | RS0015, RS0026, RS0206, RS0308 (t2) |
+| host-interface-only | RS0201, RS0204, RS0208 | **pass** | **pass** |
+| json-config-validate | RS0015, RS0206, RS0208 | RS0015, RS0021, RS0206, RS0209 | RS0015, RS0025, RS0203, RS0204 (t2) |
+| list-try-fold-validate | RS0015, RS0206, RS0208, RS1001 | RS0015, RS0201, RS0203, RS0204, RS0206, RS1001 | RS0206 (t2) |
+| map-aggregate-counts | RS0015, RS0021, RS0206, RS0207, RS0209 | RS0015, RS0206, RS0501 | RS0206 (t2) |
+| moved-value | pass | pass | pass |
+| named-args | pass | pass | pass |
+| nested-json-array-sum | RS0015, RS0206, RS0209 | RS0015, RS0021, RS0026, RS0206, RS0209, RS0311 | RS0209 (t2) |
+| noescape-filter-callback | RS0015, RS0026, RS0206, RS0802 | RS0015, RS0201, RS0204, RS0206, RS0802 | RS0015, RS0206 (t2) |
+| option-defaults-chain | RS0015, RS0202, RS0206 | RS0015, RS0206, RS0208, RS0209, RS1001 | RS0206 (t2) |
+| option-result | pass | pass | pass |
+| producer-consumer-bounded | RS0002, RS0015, RS0026, RS0029, RS0030, RS0206 | RS0206, RS0308, RS0401 | RS0202, RS0308 (t2) |
+| protocol-dyn-dispatch | RS0015, RS0028, RS0201, RS0204, RS0206, RS0207, RS1001, RS1002, RS1301 | RS0015, RS0024, RS0206, RS1301 | RS0206, RS0207, RS1301 (t2) |
+| read-mut-take | invariant | pass | pass |
+| receiver-method | pass | invariant | invariant |
+| resource-across-await | RS0015, RS0022, RS0201, RS0202, RS0204, RS0208 | RS0015, RS0208, RS0702 | **pass** t1 |
+| resource-escape | pass | pass | pass |
+| resource-scope-host | RS0015, RS0208 | RS0005, RS0015, RS0702 | **pass** t2 |
+| resource-with | RS0015, RS0208 | pass | pass |
+| result-error-mapping | RS0015, RS0021, RS0206, RS0208, RS0209 | RS0021, RS0206, RS0209, RS1001 | RS0206, RS1001 (t2) |
+| retains-declaration | RS0015, RS0202, RS0206 | RS0015, RS0202, RS0206, RS0306 | RS0206 (t2) |
+| retry-bounded | RS0201, RS0204, RS0206, RS0208 | RS0206 | **pass** t2 |
+| sum-type-state-machine | RS0015, RS0206, RS0208 | RS0015, RS0026, RS0209 | RS0015, RS0026 (t2) |
+| take-mut-chain | RS0015, RS0202, RS0208, RS0308 | RS0005, RS0015, RS0202, RS0308 | RS0308 (t2) |
+| task-group-cancel | pass | pass | invariant t1 |
+| task-group-select | RS0015 | RS0015, RS0026, RS0030, RS0202, RS0206, RS0208 | RS0207 (t2) |
+| unknown-external | pass | pass | pass |
+
+## Ranked failure classes
+
+Counts are **candidates showing the class at least once**, out of 30 per mode.
+
+| # | failure class | codes | `prompt_only` | `language_card` | `repair_loop` | concrete example |
+|---|---|---|---|---|---|---|
+| 1 | **Hallucinated syntax** | RS0015 | **19** | **16** | 5 | `language_card` take-mut-chain: `return Report { title: title, lines: [] }` — Rust/Swift struct-literal braces instead of `Report(title: …)` |
+| 2 | **Invents a symbol not in scope** | RS0206 | **15** | **14** | **9** | `prompt_only` retains-declaration L26: `print(EventLog.size(log))` — `print` does not exist |
+| 3 | **Return-type mismatch (implicit return)** | RS0208 | **13** | 3 | 0 | `prompt_only` csv-record-transform: `fn total_amount(…) -> Int` ends in a bare expression; "return in `total_amount` has type `Unit`, expected `Int`" |
+| 4 | **Wrong call-site data effect** | RS0202, RS0308 | 5 | **7** | 4 | `prompt_only` take-mut-chain L10: `ReportSink.emit(report)` — "argument `report` … must use `take`" |
+| 5 | **Omits argument labels** | RS0201, RS0204 | 4 | 4 | 1 | `prompt_only` resource-across-await L27: `ConfigStore.write_key(store, "last_page", page)` |
+| 6 | **Branch/match used as a value** | RS0209 | 3 | 5 | 1 | `prompt_only` map-aggregate-counts L6: `let existing: Int = if counts.contains(level) { counts.get(level) } else { 0 }` |
+| 7 | **Unknown binding** | RS0026 | 3 | 5 | 2 | `prompt_only` noescape-filter-callback L17: `let alerts: List<Alert> = List[…]` |
+| 8 | **Invented argument label** | RS0203 | 0 | 3 | 1 | `language_card` list-try-fold-validate: `List.try_fold(list:, init:, op:)` — the parameters are `initial` and `folder` |
+| 9 | **Non-exhaustive match** | RS0021 | 2 | 3 | 0 | `prompt_only` result-error-mapping L10: `match error {` missing a variant |
+| 10 | **String `+` as concatenation** | RS1001 | 2 | 3 | 1 | `prompt_only` list-try-fold-validate L10: `Err("negative amount not allowed: " + raw)` |
+| 11 | **Await outside async / awaits a non-async value** | RS0029, RS0030 | 3 | 1 | 0 | `prompt_only` producer-consumer-bounded L36: `await consumer_handle;` in a non-async `main` |
+| 12 | **Wrong `self` / protocol-method convention** | RS0028, RS1301 | 1 | 1 | 1 | `prompt_only` protocol-dyn-dispatch L23: `fn format_json(self: read JsonFormatter)` — the name must be `JsonFormatter.format` |
+| 13 | **Resource escapes its `with` scope** | RS0702 | 0 | 2 | 0 | `language_card` resource-scope-host L17: `return match ConfigStore.open(path: path) {` — a resource producer must be consumed by `with` |
+| 14 | **Redeclares the interface inside the `.rss` file** | RS0005 | 0 | 2 | 0 | `language_card` take-mut-chain L6: `pub fn ReportSink.emit(report: take Report) -> Unit` pasted into the implementation file |
+| 15 | **`noescape` callback escapes** | RS0802 | 1 | 1 | 0 | `prompt_only` noescape-filter-callback |
+| 16 | **Local value live across `await`** | RS0031 | 0 | 1 | 1 | `language_card` async-stream-consume L6: `match await Stream.next(stream: mut stream)` |
+| 17 | **Missing `retains`** | RS0501 | 0 | 1 | 0 | `language_card` map-aggregate-counts L15: `Map.insert(map: mut counts, key: level, …)` — "retaining API `Map.insert` cannot retain local value `level`" |
+| 18 | **Use after move** | RS0401 | 0 | 1 | 0 | `language_card` producer-consumer-bounded L24: `let (sender, receiver) = Channel.split(channel: take channel)` |
+
+### What "hallucinated syntax" actually is
+
+RS0015 is the largest bucket, so it is worth splitting. Candidates showing each
+construct:
+
+| construct | `prompt_only` | `language_card` | `repair_loop` |
+|---|---|---|---|
+| Rust/Swift struct literal `T { field: v }` | 8 | 9 | 3 |
+| expression-bodied match arm ending in `,` | 8 | 7 | 0 |
+| Rust path syntax `::` (`List::new()`, `JobState::Queued`, turbofish) | 6 | 0 | 0 |
+| `task_group` / `with` / `spawn` used as an expression | 3 | 3 | 0 |
+| tuple destructuring in `for` (`for (k, v) in …`) | 1 | 1 | 0 |
+| `mut x: T = …` as a binding form instead of `let mut` | 0 | 1 | 1 |
+| invented `as Dyn<P>` cast | 1 | 0 | 0 |
+| `mut` on the `with … as` binding | 1 | 0 | 0 |
+| other | 7 | 4 | 2 |
+
+Two constructs dominate and they are *both* surface syntax the model already
+knows from other languages: brace struct literals and comma-terminated match
+arms. The language card shows neither the constructor call form nor a match
+statement.
+
+### What "invents a symbol" actually is
+
+| sub-class | `prompt_only` | `language_card` | `repair_loop` |
+|---|---|---|---|
+| a bare output/print builtin (`print`, `write`) | 10 | 6 | 3 |
+| a core-namespace function that does not exist | 3 | 12 | 7 |
+| a receiver method on a value that has no such method | 7 | 3 | 1 |
+| a free function that does not exist | 4 | 0 | 0 |
+
+Most-invented names across all 90 candidates: `print` (11), `write` (8),
+`Int.parse` (8 — the real name is `String.parse_int`), `List.of` (3),
+and a nine-strong `get_*` JSON-accessor family (`Json.get_string` /
+`get_int` / `get_bool` / `get_field`, plus receiver spellings such as
+`value.get_int()` — the real names are `Json.field_string` / `field_int` /
+`field_bool` / `field`), `Channel.split`,
+`Channel.take_receiver`, `Map.get_or`, `Map.entries`, `String.split_once`,
+`String.find`, `Console.write_line`, `IO.println`, `List.fold_result`.
+
+Note the shape of the shift between modes. `prompt_only` invents *bare
+functions* (`print(x)`); `language_card` invents *plausible namespaced
+functions* (`Int.parse`, `Json.get_string`). The card teaches the
+`Namespace.function(label: value)` shape — which is real progress — but gives no
+list of which functions exist, so the model produces well-formed calls to
+functions that are not there. Only 5/30, 3/30 and 4/30 candidates used the real
+`Output.write`.
+
+## Did the language card fix anything?
+
+Partly, and it is worth being precise about where.
+
+**Clearly improved (the card says something and the model obeys it):**
+
+- **Return-type mismatch: 13 → 3 candidates.** The card's canonical-call
+  example uses explicit `return`, and the models copy it. This is the single
+  largest win in the data.
+- **Rust `::` path syntax: 6 → 0 candidates.** The card's example uses
+  `Namespace.function(...)` and that is enough to kill `::` entirely.
+- **`await` misuse: 3 → 1 candidate.**
+- Compile rate 9/30 → 11/30; on generation tasks 0/20 → 1/20.
+
+**Unchanged:** hallucinated syntax (19 → 16, and *brace struct literals went up*,
+8 → 9), invented symbols (15 → 14), omitted argument labels (4 → 4).
+
+**Made worse:** wrong call-site data effect (5 → 7) and invented argument labels
+(0 → 3). Both are the same phenomenon: the card tells the model that `mut` and
+`take` are explicit and that arguments are named, so the model starts writing
+effects and labels everywhere — including where they do not belong
+(`Stream.next(stream: mut stream)` when the parameter is `read`,
+`List.try_fold(init:, op:)` when the parameters are `initial` and `folder`).
+The card creates the *intent* to be explicit without supplying the *facts*
+needed to be correct, and the result is confident, wrong specificity.
+
+Two classes appear **only** with the card: `RS0005` (2 candidates pasted the
+`.rssi` interface text into the implementation file) and `RS0702` (2 candidates).
+The first is a direct artifact of AGENT.md discussing `.rssi` files without ever
+saying that interfaces are supplied to the compiler, not copied into the program.
+
+## What the repair loop fixed, and what it could not
+
+Within `repair_loop`, 10 of the 30 candidates already compiled on turn 1.
+Repair converted 5 more: **3 at turn 2** (async-stream-consume,
+resource-across-await, task-group-cancel) and **2 at turn 3**
+(resource-scope-host, retry-bounded), for 15/30 compiling at the end. On the
+twenty generation tasks that is 5/20, against 1/20 for `language_card` and
+0/20 for `prompt_only` — different draws, so read it as a level, not a delta.
+
+Aggregating over every repairing candidate, by whether a class present at turn 1
+was gone by the final turn:
+
+| class | cleared by repair | persisted to the last turn |
+|---|---|---|
+| hallucinated syntax (RS0015) | **11** | 5 |
+| wrong data effect (RS0202/RS0308) | **9** | 3 |
+| omits argument labels (RS0201/RS0204) | **8** | 0 |
+| invents a symbol (RS0206) | 6 | **9** |
+| return-type mismatch (RS0208) | 4 | 0 |
+| branch-as-value (RS0209) | 4 | 1 |
+| non-exhaustive match (RS0021) | 4 | 0 |
+| invalid assignment (RS0311) | 4 | 0 |
+| local across await (RS0031) | 2 | 0 |
+| invented argument label (RS0203) | 2 | 0 |
+| unknown binding (RS0026) | 1 | 2 |
+| protocol not satisfied (RS1301) | 0 | 1 |
+
+The pattern is sharp and it is the most actionable fact in this report:
+
+> **Diagnostics that name the correct edit get fixed. Diagnostics that only name
+> the error do not.**
+
+`RS0201`/`RS0204` ("argument must be named", fix: "Write the argument as `name:
+value`") were cleared 8 times and persisted **zero** times. `RS0202` carries the
+required effect in its message ("must use `take`") and was cleared 9 times.
+`RS0206` says a call "does not resolve" and offers no alternative — it was
+cleared 6 times and **persisted 9 times**, making it the *only* class that is
+larger after three repair turns than any other. Six candidates were still
+calling `print` or `Int.parse` on the third turn after being told twice that
+those do not resolve; with nothing to substitute, the model re-invents.
+
+Repair also **introduces** errors: 2 new wrong-effect errors, and one each of
+invented field, invented label, omitted label, branch-as-value and argument-type
+mismatch. Fixing one diagnostic by rewriting a region reliably breaks something
+else, which is an argument for instance-level machine-applicable edits over
+"here is the error, resend the file".
+
+## Compiles but still wrong
+
+Four candidates passed `rss check` and still failed the scorer, all by dropping
+a canonical spelling the task requires:
+
+- `read-mut-take` (`prompt_only`): lost `suffix: suffix`, having written the
+  default `read` effect explicitly at the call site.
+- `receiver-method` (`language_card`, `repair_loop`): replaced `buffer.inspect()`
+  with the free-call form. The receiver-call shorthand survives review only if
+  the model knows it is canonical.
+- `task-group-cancel` (`repair_loop`): the repair turn removed
+  `Task.cancellation_token()` to make the file compile.
+
+A checker-only oracle cannot see these. Any "did the model write idiomatic
+RSScript" claim needs the invariant layer, not just `rss check`.
+
+## Implications for the generation oracle
+
+Ranked by candidates removed, with the counts each rests on.
+
+### 1. Ship the callable core-API surface, not a list of filenames — 15 / 14 / 9 candidates
+
+`RS0206` is the largest class that survives everything: 15 candidates in
+`prompt_only`, 14 with the card, still **9** after three repair turns, and the
+only class that *dominates* the persisted column (9 persisted vs 6 cleared).
+The card today says "35 platform-neutral core interface files" and links to
+them; it contains **zero callable signatures**. Models fill that vacuum with
+`print` (11), `write` (8), `Int.parse` (8) and a nine-call `get_*` JSON-accessor
+family.
+
+The oracle must answer *"what can I call?"* Concretely: `rss generate` should
+inject the signature list for the namespaces in scope (at minimum `Output`,
+`String`, `Int`, `List`, `Map`, `Json`, `Option`, `Result`), and `RS0206` must
+carry a `did_you_mean` candidate list in `--json`. `String.parse_int` is a
+one-edit distance from `Int.parse`; the compiler knows this and currently says
+nothing.
+
+### 2. Put the five canonical surface forms in the card, with examples — 19 / 16 candidates
+
+RS0015 is the biggest first-attempt class and the card moved it only 19 → 16.
+The card is not wrong; it is silent on the exact forms models get wrong. Five
+lines of example would cover the measured distribution:
+
+1. constructor call `T(field: value)`, **never** `T { field: value }` (8 + 9 + 3 candidates);
+2. match arms are `Pattern => { … }` blocks, **not** `Pattern => expr,` (8 + 7);
+3. `task_group`, `with` and `select` are **statements**, not expressions (3 + 3);
+4. no tuple destructuring in `for` (1 + 1);
+5. `let mut x = …`, never `mut x: T = …` (0 + 1 + 1).
+
+The card already proves this works: its one `Namespace.function(...)` example
+eliminated `::` syntax outright (6 → 0).
+
+### 3. Make every diagnostic carry the replacement, not just the complaint — 8 vs 0, 9 vs 3
+
+The repair data separates the two kinds of diagnostic cleanly. Classes whose
+message names the edit were cleared and never persisted (`RS0201`/`RS0204`: 8
+cleared, 0 persisted; `RS0202`: 9 cleared, 3 persisted). The class whose message
+names only the failure persisted nine times. The oracle's value is therefore
+mostly in `fixes[]`, not in `summary`. Any diagnostic reachable by generation
+that currently has `applicability: manual` and no concrete replacement text is a
+gap, and `RS0206` is the top of that list.
+
+### 4. Answer "which effect does this parameter want?" at the call site — 5 / 7 / 4 candidates, and rising with the card
+
+Wrong `mut`/`take` at the call site is the one class the language card made
+*worse* (5 → 7), joined by invented argument labels (0 → 3). Telling a model
+that effects and labels are explicit, without telling it which effect and which
+label, converts silence into confident error. The oracle must expose the
+resolved signature at the call site — parameter names in order, each with its
+declared effect — so the model is choosing from facts rather than guessing.
+`RS0202`'s message already does this well and its repair record proves it works;
+the generation path needs the same information *before* the error.
+
+### 5. Say that interfaces are supplied, and score the canonical spelling — 2 candidates + 4 invariant-only failures
+
+Two `language_card` candidates pasted the `.rssi` text into the `.rss` file
+(RS0005); AGENT.md discusses `.rssi` files without ever saying they are passed
+to the compiler rather than copied. One sentence fixes this.
+
+Separately, four candidates across the three modes compiled cleanly and still
+failed, by dropping receiver-call shorthand, writing the default `read` at a
+call site, or deleting `Task.cancellation_token()` during repair. `rss check`
+cannot see any of these. If the oracle's contract is "generated RSScript is
+idiomatic", it needs a canonical-spelling check — the `agent-eval` invariant
+layer generalised into `rss check` as warnings — or the oracle will certify
+programs that compile and that a human reviewer would send back.
+
+## Reproducing
+
+```bash
+python3 tools/collect-model-samples.py --model sonnet --jobs 5 --timeout 400
+for mode in prompt_only language_card repair_loop; do
+  cargo run -p rsscript-xtask -- agent-eval \
+    --tasks evals/tasks \
+    --candidates "evals/samples/sonnet/$mode" \
+    --output "evals/samples/sonnet/$mode/report.v1.json"
+done
+python3 tools/analyze-model-samples.py --model sonnet
+python3 tools/analyze-model-samples.py --model sonnet --reuse --compare
+```
+
+Samples, per-turn transcripts and the three `report.v1.json` files are committed
+under `evals/samples/sonnet/` (1.4 MB), so every count here can be re-derived
+without model access. Re-running the collector will produce different samples:
+the model is not deterministic and these are single draws.
