@@ -1052,6 +1052,71 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 Ok(())
             }
             checked::HirStmt::Return { .. } => self.lower_statement(last),
+            // A branching statement in value position contributes the value of
+            // whichever branch runs, so each branch is lowered as an arm of its
+            // own and writes the same result place. This is what lets the
+            // checker type `match n { 0 => { if … { 5 } else { 6 } } … }` as
+            // `Int` and still have it build.
+            checked::HirStmt::If {
+                condition,
+                then_body,
+                else_body,
+                ..
+            } => {
+                let Some(else_body) = else_body else {
+                    return self.unsupported(
+                        "checked HIR match expression arm ending in an `if` with no `else`",
+                    );
+                };
+                let condition = self.lower_expression(condition)?;
+                let then_block = self.new_block();
+                let else_block = self.new_block();
+                let join_block = self.new_block();
+                self.terminate(MirTerminator::Branch {
+                    condition,
+                    then_target: then_block,
+                    else_target: else_block,
+                });
+                for (block, body) in [(then_block, then_body), (else_block, else_body)] {
+                    self.current = block;
+                    self.lower_match_expression_arm(body, result_place)?;
+                    if self.current_block().terminator.is_none() {
+                        self.terminate(MirTerminator::Jump(join_block));
+                    }
+                }
+                self.current = join_block;
+                Ok(())
+            }
+            checked::HirStmt::Match { value, arms, .. } => {
+                let value = self.lower_expression(value)?;
+                let join = self.new_block();
+                for arm in arms {
+                    if arm.guard.is_some() {
+                        return self.unsupported("checked HIR match expression guard");
+                    }
+                    let arm_block = self.new_block();
+                    let next = self.new_block();
+                    let bindings = self.lower_pattern_edge(
+                        value,
+                        &arm.pattern,
+                        arm_block,
+                        next,
+                        "non-literal checked HIR match expression pattern",
+                    )?;
+                    self.current = arm_block;
+                    if let Some(bindings) = bindings {
+                        self.lower_match_bindings(value, bindings)?;
+                    }
+                    self.lower_match_expression_arm(&arm.body, result_place)?;
+                    if self.current_block().terminator.is_none() {
+                        self.terminate(MirTerminator::Jump(join));
+                    }
+                    self.current = next;
+                }
+                self.terminate(MirTerminator::Unreachable);
+                self.current = join;
+                Ok(())
+            }
             _ => self.unsupported("checked HIR match expression arm without value"),
         }
     }

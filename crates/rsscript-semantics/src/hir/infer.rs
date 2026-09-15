@@ -110,10 +110,19 @@ pub fn infer_hir_expr_type(
     value_types: &HirValueTypes,
 ) -> Option<ResolvedType> {
     match expr {
-        Expr::Ident(name, _) => value_types.get(name).cloned().or_else(|| {
-            hir.sum_type_for_variant(name)
-                .map(|name| ResolvedType::named(name, []))
-        }),
+        // `true`, `false`, and `Unit` are literals the surface syntax spells as
+        // identifiers, so they are never in `value_types`. They carry a type
+        // here for the same reason they do in argument position: `let b = true`
+        // must give `b` a type, or every generic construction that reads `b`
+        // loses a type argument.
+        Expr::Ident(name, _) => value_types
+            .get(name)
+            .cloned()
+            .or_else(|| builtin_value_ident_type(name))
+            .or_else(|| {
+                hir.sum_type_for_variant(name)
+                    .map(|name| ResolvedType::named(name, []))
+            }),
         Expr::Binary {
             op, left, right, ..
         } => infer_binary_type(hir, *op, left, right, value_types),
@@ -126,12 +135,14 @@ pub fn infer_hir_expr_type(
         Expr::Await { value, .. } => infer_hir_expr_type(hir, value, value_types)
             .and_then(|ty| task_inner_type(&ty))
             .or_else(|| infer_hir_expr_type(hir, value, value_types)),
-        Expr::Try { value, .. } => {
-            infer_hir_expr_type(hir, value, value_types).and_then(|ty| result_ok_type(&ty))
-        }
-        Expr::Match { arms, .. } => arms
-            .first()
-            .and_then(|arm| infer_closure_return_type(hir, &arm.body, value_types)),
+        Expr::Try { value, .. } => infer_hir_expr_type(hir, value, value_types)
+            .and_then(|ty| try_operand_payload_type(&ty)),
+        // A `match` used as a value — and an `if` expression, which is a
+        // `match` over `true`/`false` — has the type its arms agree on.
+        Expr::Match { arms, .. } => agreeing_branch_type(
+            arms.iter()
+                .map(|arm| infer_closure_return_type(hir, &arm.body, value_types)),
+        ),
         Expr::Call { callee, args, .. } => {
             let resolution = match callee {
                 Callee::ReceiverCall {
@@ -403,13 +414,29 @@ pub(super) fn infer_closure_return_type(
             Stmt::Let(_) | Stmt::LetElse(_) | Stmt::Assign(_) => {
                 return Some(ResolvedType::named("Unit", []));
             }
+            // A block whose last statement is an `if` or a `match` takes its
+            // value from the branch bodies, so it is exactly as typed as they
+            // agree it is.
+            Stmt::If(stmt) => {
+                return agreeing_branch_type(
+                    std::iter::once(infer_closure_return_type(hir, &stmt.then_body, value_types))
+                        .chain(stmt.else_body.as_ref().map(|else_body| {
+                            infer_closure_return_type(hir, else_body, value_types)
+                        })),
+                );
+            }
+            Stmt::Match(stmt) => {
+                return agreeing_branch_type(
+                    stmt.arms
+                        .iter()
+                        .map(|arm| infer_closure_return_type(hir, &arm.body, value_types)),
+                );
+            }
             Stmt::With { .. }
-            | Stmt::If { .. }
             | Stmt::Loop { .. }
             | Stmt::For(_)
             | Stmt::TaskGroup(_)
             | Stmt::Select(_)
-            | Stmt::Match { .. }
             | Stmt::Break(_)
             | Stmt::Continue(_)
             | Stmt::MalformedWith(_)
@@ -429,11 +456,17 @@ pub(super) fn infer_arg_expr_type(
     value_types: &HirValueTypes,
 ) -> Option<ResolvedType> {
     match expr {
-        Expr::Effect { value, .. }
-        | Expr::Manage { value, .. }
-        | Expr::Spawn { value, .. }
-        | Expr::Await { value, .. }
-        | Expr::Try { value, .. } => infer_arg_expr_type(hir, value, value_types),
+        // A data effect names how the value is passed, not what it is.
+        Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
+            infer_arg_expr_type(hir, value, value_types)
+        }
+        // `spawn`, `await`, and `?` each transform their operand's type, so
+        // they are not pass-throughs: `f(x: await t)` is `Task<T>`'s `T`, and
+        // `f(x: r?)` is `Result<T, E>`'s `T`. Reading them as the operand's own
+        // type would prove a type argument that is simply wrong.
+        Expr::Spawn { .. } | Expr::Await { .. } | Expr::Try { .. } => {
+            infer_hir_expr_type(hir, expr, value_types)
+        }
         // `true`, `false`, and `Unit` are literals that the surface syntax
         // spells as identifiers. They carry a type for the same reason the
         // scalar literals below do: a generic construction must be able to
@@ -441,12 +474,10 @@ pub(super) fn infer_arg_expr_type(
         // parameter left unproved makes the whole call site's substitution
         // incomplete. `None` is deliberately excluded: its type is
         // `Option<?>`, which proves nothing.
-        Expr::Ident(name, _) => value_types.get(name).cloned().or_else(|| {
-            matches!(name.as_str(), "true" | "false" | "Unit")
-                .then(|| crate::checks::shared::builtin_value_type_name(name))
-                .flatten()
-                .map(|name| ResolvedType::named(name, []))
-        }),
+        Expr::Ident(name, _) => value_types
+            .get(name)
+            .cloned()
+            .or_else(|| builtin_value_ident_type(name)),
         Expr::Call { .. } => infer_hir_expr_type(hir, expr, value_types),
         Expr::Closure { params, body, .. } => infer_closure_return_type(hir, body, value_types)
             .map(|return_type| {
@@ -525,11 +556,44 @@ fn fn_return_type(type_name: &ResolvedType) -> Option<ResolvedType> {
     type_name.function_return().cloned()
 }
 
-fn result_ok_type(type_name: &ResolvedType) -> Option<ResolvedType> {
+/// The value `expr?` produces, for both types the `?` operator accepts: the ok
+/// type of a `Result<T, E>` and the payload of an `Option<T>` (§6.5).
+fn try_operand_payload_type(type_name: &ResolvedType) -> Option<ResolvedType> {
     type_name
         .named_argument("Result", 0)
+        .or_else(|| type_name.named_argument("Option", 0))
         .cloned()
         .map(ResolvedType::without_fresh)
+}
+
+/// The type of a literal the surface syntax spells as an identifier.
+fn builtin_value_ident_type(name: &str) -> Option<ResolvedType> {
+    if !matches!(name, "true" | "false" | "Unit") {
+        return None;
+    }
+    crate::checks::shared::builtin_value_type_name(name).map(|name| ResolvedType::named(name, []))
+}
+
+/// The single type a set of branch bodies agree on.
+///
+/// A `match` used as a value — an `if` expression included — has the type of
+/// its arms. A branch that proves nothing is skipped, so one arm ending in a
+/// `loop` does not make the whole expression untyped; but two branches proving
+/// *different* types prove nothing here. That program is an `RS0209`
+/// control-flow mismatch, and picking one of the two would hand lowering a
+/// type argument the other branch contradicts.
+fn agreeing_branch_type(
+    branches: impl IntoIterator<Item = Option<ResolvedType>>,
+) -> Option<ResolvedType> {
+    let mut agreed: Option<ResolvedType> = None;
+    for branch in branches.into_iter().flatten() {
+        match &agreed {
+            Some(previous) if *previous != branch => return None,
+            Some(_) => {}
+            None => agreed = Some(branch),
+        }
+    }
+    agreed
 }
 
 pub(super) fn list_element_type(type_name: &ResolvedType) -> Option<ResolvedType> {

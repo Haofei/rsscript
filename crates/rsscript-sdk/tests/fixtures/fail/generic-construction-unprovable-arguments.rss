@@ -1,0 +1,10 @@
+// expect: RS0034
+// A bare `None` leaves `Option<?>` open on purpose, so the tuple built from it
+// has no provable instance and `lower_record_constructor` would refuse it. That
+// refusal belongs to `rss check`: the construction itself is the error site.
+fn main() -> Unit {
+    let nothing = None
+    let p = (nothing, 1)
+    Output.write(message: String.from_int(value: p.item1))
+    return Unit
+}

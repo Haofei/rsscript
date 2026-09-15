@@ -2,7 +2,7 @@ use crate::text_util::{substitute_type_args, type_arg_names, type_root_name};
 use std::collections::{HashMap, HashSet};
 
 use crate::analyzer::Analyzer;
-use crate::diagnostic::Span;
+use crate::diagnostic::{Diagnostic, Span, code};
 use crate::hir::{
     CallResolution, FieldInfo, HirBindingKind, HirBlock, HirCallArg, HirExpr, HirMatchArm, HirStmt,
     HirTypeKind, ParamEffect, ResolvedCalleeKind,
