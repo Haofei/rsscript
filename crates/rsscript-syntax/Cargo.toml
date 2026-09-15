@@ -12,7 +12,6 @@ doctest = false
 [dependencies]
 rsscript-diagnostics = { path = "../rsscript-diagnostics" }
 rsscript-core-types = { path = "../rsscript-core-types" }
-rsscript-work-budget = { path = "../rsscript-work-budget" }
 
 [lints]
 workspace = true

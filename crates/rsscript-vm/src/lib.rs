@@ -9,7 +9,7 @@ mod fnv;
 mod reg_vm;
 pub(crate) use rsscript_corelib::structured_data::serde_json;
 mod text_util {
-    pub(crate) use rsscript_text::*;
+    pub(crate) use rsscript_core_types::text::*;
 }
 mod vm_value;
 

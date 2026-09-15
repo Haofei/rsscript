@@ -1,7 +1,15 @@
 #![forbid(unsafe_code)]
 
 pub use rsscript_core_types::{FileId, SourceRevision, Span, TextRange};
-pub use rsscript_work_budget::{FrontendBudget, FrontendBudgetLimits, ParseRecursionGuard};
+
+/// Bounded frontend work accounting. Owned by the syntax crate because the
+/// parser is the first consumer and every other consumer (semantics) already
+/// depends on syntax; the VM must never see it.
+mod work_budget;
+pub use work_budget::{
+    AnalysisRecursionGuard, BudgetExhaustion, FrontendBudget, FrontendBudgetLimits,
+    ParseRecursionGuard,
+};
 
 pub mod ast;
 mod async_await_hoist;

@@ -14,7 +14,7 @@ mod facts_hir;
 mod map;
 pub use map::review_map_semantic_database;
 
-use rsscript_text::{type_arg_names, type_root_name};
+use rsscript_core_types::text::{type_arg_names, type_root_name};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::Serialize;

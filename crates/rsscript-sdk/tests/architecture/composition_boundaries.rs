@@ -144,7 +144,7 @@ fn source_coordinates_are_not_owned_by_budget_accounting() {
         );
     }
 
-    let budget = read(&root.join("crates/rsscript-work-budget/src/lib.rs"));
+    let budget = read(&root.join("crates/rsscript-syntax/src/work_budget.rs"));
     assert!(!budget.contains("pub struct Span"));
     assert!(budget.contains("pub use rsscript_core_types::Span"));
 

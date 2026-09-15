@@ -10,6 +10,7 @@ use std::fmt;
 use rsscript_abi_model::{
     DataEffect, ExternalSymbol, FunctionSignature, ParameterSignature, WireQualifier, WireType,
 };
+use rsscript_core_types::text::{decode_char_token, decode_string_token, type_root_name};
 use rsscript_mir::{
     BasicBlock, BlockId, FunctionId, MirBinaryOp, MirCallArgument, MirCallTarget,
     MirExternalImport, MirFunction, MirFunctionDebug, MirFunctionSignature, MirInstruction,
@@ -18,7 +19,6 @@ use rsscript_mir::{
     TaskGroupId, TaskId, TypeId, ValueId, VerifiedMir,
 };
 use rsscript_semantics::{ResolvedType, ResolvedTypeKind, hir as checked};
-use rsscript_text::{decode_char_token, decode_string_token, type_root_name};
 
 // `CheckedHirLowerer` method bodies live in child modules (module-size split).
 mod lowerer;
@@ -1076,7 +1076,7 @@ fn callee_type_arguments(callee: &rsscript_syntax::ast::Callee) -> Option<Vec<&s
         rsscript_syntax::ast::Callee::Qualified { name, .. } => name.as_str(),
         rsscript_syntax::ast::Callee::ReceiverCall { .. } => return None,
     };
-    rsscript_text::type_arg_names(spelling)
+    rsscript_core_types::text::type_arg_names(spelling)
 }
 
 struct BlockDraft {

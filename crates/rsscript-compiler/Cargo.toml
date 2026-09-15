@@ -22,8 +22,6 @@ rsscript-mir = { path = "../rsscript-mir", optional = true }
 rsscript-core-types = { path = "../rsscript-core-types" }
 rsscript-semantics = { path = "../rsscript-semantics" }
 rsscript-syntax = { path = "../rsscript-syntax" }
-rsscript-text = { path = "../rsscript-text" }
-rsscript-work-budget = { path = "../rsscript-work-budget" }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = { version = "0.10", optional = true }

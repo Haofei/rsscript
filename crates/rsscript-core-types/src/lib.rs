@@ -13,6 +13,12 @@ mod operation;
 /// Stable source coordinates and revisions. Owned here rather than by budget
 /// accounting or diagnostics so every tier names one `Span`/`FileId`.
 mod source_model;
+/// Total `&str` functions shared by the frontend and the VM: literal decoding,
+/// string builtins, and canonical type-name spelling. These live here rather
+/// than in `rsscript-syntax` precisely because the VM needs them; moving them
+/// into the frontend would give the VM a syntax dependency the architecture
+/// validator forbids.
+pub mod text;
 
 pub use operation::*;
 pub use source_model::*;

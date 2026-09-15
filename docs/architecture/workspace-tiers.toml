@@ -24,9 +24,7 @@ core = [
   "rsscript-sdk",
   "rsscript-semantics",
   "rsscript-syntax",
-  "rsscript-text",
   "rsscript-vm",
-  "rsscript-work-budget",
   "rsscript-workspace-loader",
 ]
 

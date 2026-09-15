@@ -12,7 +12,7 @@ use rsscript_diagnostics::{Diagnostic, code};
 
 use crate::{FrontendCompletion, FrontendStopReason};
 
-pub use rsscript_work_budget::{BudgetExhaustion, FrontendBudget, FrontendBudgetLimits};
+pub use rsscript_syntax::{BudgetExhaustion, FrontendBudget, FrontendBudgetLimits};
 
 /// Derive the one stable diagnostic emitted when an operation's frontend work
 /// budget ends before semantic checking completes.

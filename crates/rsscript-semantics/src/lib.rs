@@ -81,7 +81,7 @@ mod type_aliases;
 mod type_compatibility;
 mod types;
 mod text_util {
-    pub(crate) use rsscript_text::*;
+    pub(crate) use rsscript_core_types::text::*;
 }
 mod value_properties;
 mod weak_fields;

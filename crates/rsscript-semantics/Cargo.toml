@@ -15,8 +15,6 @@ rsscript-diagnostics = { path = "../rsscript-diagnostics" }
 rsscript-interface-catalog = { path = "../rsscript-interface-catalog" }
 rsscript-core-types = { path = "../rsscript-core-types" }
 rsscript-syntax = { path = "../rsscript-syntax" }
-rsscript-text = { path = "../rsscript-text" }
-rsscript-work-budget = { path = "../rsscript-work-budget" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
