@@ -437,17 +437,22 @@ fn provider_bindgen_consumes_semantic_descriptors_not_syntax() {
 #[test]
 fn interface_catalog_is_platform_neutral() {
     let root = workspace_root();
-    let manifest: toml::Value = toml::from_str(&read(
-        &root.join("crates/rsscript-interface-catalog/Cargo.toml"),
-    ))
-    .expect("interface catalog manifest should parse");
-    let dependencies = dependency_packages(&manifest);
+    // The catalog is a module of `rsscript-semantics` rather than its own
+    // package, so "data-only" is enforced on the module source instead of on a
+    // manifest: it may embed `.rssi` text and iterate it, and nothing else. In
+    // particular it must not reach back into the semantic model it now lives in.
+    let catalog = read(&root.join("crates/rsscript-semantics/src/interface_catalog.rs"));
+    for reach_back in ["use ", "crate::", "super::", "rsscript_"] {
+        assert!(
+            !catalog.contains(reach_back),
+            "the interface catalog must remain data-only; it references `{reach_back}`"
+        );
+    }
     assert!(
-        dependencies.is_empty(),
-        "the interface catalog must remain data-only"
+        catalog.contains("include_str!("),
+        "the interface catalog must embed interface source at build time"
     );
 
-    let catalog = read(&root.join("crates/rsscript-interface-catalog/src/lib.rs"));
     for forbidden in ["host/", "provider", "policy", "capability"] {
         assert!(
             !catalog.to_ascii_lowercase().contains(forbidden),
@@ -621,7 +626,7 @@ fn bytecode_language_compatibility_is_not_inferred_from_compiler_version() {
     assert!(emitter.contains("compiler_provenance"));
     assert!(verifier.contains("BYTECODE_CONTAINER_FORMAT_VERSION"));
 
-    let analysis = read(&root.join("crates/rsscript-package-review/src/analysis.rs"));
+    let analysis = read(&root.join("crates/rsscript-review/src/package/analysis.rs"));
     assert!(analysis.contains("rsscript_abi_model::LANGUAGE_SEMANTICS_VERSION"));
     assert!(
         !analysis.contains("language_version: env!(\"CARGO_PKG_VERSION\")"),
@@ -899,7 +904,7 @@ fn high_risk_state_machines_keep_dedicated_module_owners() {
     let root = workspace_root();
     let required = [
         "crates/rsscript-semantics/src/task_groups.rs",
-        "crates/rsscript-package-review/src/bindings.rs",
+        "crates/rsscript-review/src/package/bindings.rs",
         "crates/rsscript-vm/src/reg_vm/tier/admission.rs",
         "crates/rsscript-vm/src/reg_vm/tier/call_scratch.rs",
         "crates/rsscript-vm/src/reg_vm/tier/recursion.rs",

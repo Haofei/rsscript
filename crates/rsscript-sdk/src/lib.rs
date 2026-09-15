@@ -181,7 +181,7 @@ pub mod project {
 
 /// Reviewed operation-control types shared by compile, verification, and run.
 pub mod operation {
-    pub use rsscript_operation::{
+    pub use rsscript_core_types::{
         CancellationToken, MonotonicDeadline, OperationAbort, OperationContext, OperationId,
     };
 }
@@ -260,7 +260,7 @@ pub mod analysis {
         ResourceTransferFactV1, SEMANTIC_DIFF_SCHEMA, SemanticDiffV2, TaskGroupFactV1,
     };
 }
-use rsscript_operation::*;
+use rsscript_core_types::{CancellationToken, MonotonicDeadline, OperationAbort, OperationContext};
 #[cfg(feature = "execution")]
 use rsscript_provider_api as provider;
 

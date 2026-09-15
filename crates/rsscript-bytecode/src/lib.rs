@@ -6,7 +6,7 @@ use std::fmt;
 
 pub use rsscript_abi_model::LANGUAGE_SEMANTICS_VERSION;
 use rsscript_abi_model::{CORE_LIBRARY_ABI_VERSION, ExternalImport, RUNTIME_ABI_VERSION};
-use rsscript_operation::{CancellationToken, MonotonicDeadline};
+use rsscript_core_types::{CancellationToken, MonotonicDeadline};
 use semver::{Version, VersionReq};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};

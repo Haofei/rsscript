@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use crate::interface_catalog::{builtin_interfaces, standard_package_interfaces};
 use crate::{ResolvedType, SemanticTypeFacts, type_arg_names, type_root_name};
-use rsscript_interface_catalog::{builtin_interfaces, standard_package_interfaces};
 use rsscript_syntax::Span;
 use rsscript_syntax::ast::{
     BinaryOp, Block, CallArg, Callee, DataEffect, Expr, FieldDecl, FunctionDecl, GenericBound,

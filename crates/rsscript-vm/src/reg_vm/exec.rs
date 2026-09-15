@@ -252,7 +252,7 @@ impl RegVm {
         if self
             .limits
             .deadline
-            .is_some_and(rsscript_operation::MonotonicDeadline::is_expired)
+            .is_some_and(rsscript_core_types::MonotonicDeadline::is_expired)
         {
             return Err(EvalError::execution(
                 crate::ExecutionFailureKind::DeadlineExceeded,
@@ -296,7 +296,7 @@ impl RegVm {
         if self
             .limits
             .deadline
-            .is_some_and(rsscript_operation::MonotonicDeadline::is_expired)
+            .is_some_and(rsscript_core_types::MonotonicDeadline::is_expired)
         {
             return Err(EvalError::execution(
                 crate::ExecutionFailureKind::DeadlineExceeded,

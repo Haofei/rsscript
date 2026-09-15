@@ -7,11 +7,7 @@ use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 
-use rsscript_abi_model::{
-    FunctionSignature, WireCallTypeTable, WireRecordFieldLayout, WireRecordLayout, WireType,
-    WireValue, WireVariantCaseLayout, WireVariantLayout,
-};
-use rsscript_corelib::{
+use crate::corelib::{
     collections::{
         dedup as core_list_dedup, deque_to_vec as core_deque_to_vec,
         enumerate as core_list_enumerate, map_difference as core_map_difference,
@@ -41,6 +37,10 @@ use rsscript_corelib::{
     },
     regex::CompiledRegex,
     structured_data::yaml_to_json as core_yaml_to_json,
+};
+use rsscript_abi_model::{
+    FunctionSignature, WireCallTypeTable, WireRecordFieldLayout, WireRecordLayout, WireType,
+    WireValue, WireVariantCaseLayout, WireVariantLayout,
 };
 
 use self::calls::PureClosurePlan;
@@ -1195,7 +1195,7 @@ struct JitCallCtxState {
     heap_results: Vec<VmValue>,
     heap_result_roots: Vec<Option<usize>>,
     heap_writebacks: Vec<(usize, i64)>,
-    deadline: Option<rsscript_operation::MonotonicDeadline>,
+    deadline: Option<rsscript_core_types::MonotonicDeadline>,
 }
 
 #[cfg(feature = "native-jit")]
@@ -1376,7 +1376,7 @@ struct JitCallCtxGuard;
 
 #[cfg(feature = "native-jit")]
 impl JitCallCtxGuard {
-    fn enter(deadline: Option<rsscript_operation::MonotonicDeadline>) -> Self {
+    fn enter(deadline: Option<rsscript_core_types::MonotonicDeadline>) -> Self {
         JitCallCtx::enter_frame(deadline);
         Self
     }
@@ -1399,7 +1399,7 @@ struct JitNativeCallFrame {
 
 #[cfg(feature = "native-jit")]
 impl JitNativeCallFrame {
-    fn begin(deadline: Option<rsscript_operation::MonotonicDeadline>) -> Self {
+    fn begin(deadline: Option<rsscript_core_types::MonotonicDeadline>) -> Self {
         let ctx = JitCallCtxGuard::enter(deadline);
         let heap_tx = JitHeapTransactionGuard::begin_after_context_clear();
         Self { heap_tx, _ctx: ctx }

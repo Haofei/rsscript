@@ -1,0 +1,16 @@
+[package]
+name = "rsscript-core-types"
+version.workspace = true
+edition.workspace = true
+description = "Dependency-free source coordinates, operation contracts, and total text utilities shared by every RSScript tier"
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"
+
+[lints]
+workspace = true

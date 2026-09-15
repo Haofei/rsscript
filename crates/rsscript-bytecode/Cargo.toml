@@ -8,7 +8,7 @@ rust-version.workspace = true
 
 [dependencies]
 rsscript-abi-model = { path = "../rsscript-abi-model" }
-rsscript-operation = { path = "../rsscript-operation" }
+rsscript-core-types = { path = "../rsscript-core-types" }
 half = "2.7.1"
 semver = "1"
 serde = { version = "1", features = ["derive"] }

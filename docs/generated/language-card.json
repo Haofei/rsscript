@@ -5,7 +5,7 @@
   "provenance": [
     "rsscript_syntax::lexer",
     "rsscript_diagnostics::diagnostic_explanations",
-    "rsscript_interface_catalog::CORE_INTERFACES"
+    "rsscript_semantics::interface_catalog::CORE_INTERFACES"
   ],
   "language_version": "0.7",
   "specification_version": "RSScript_v0.7",

@@ -40,9 +40,14 @@ mod generic_constraints;
 pub mod hir;
 mod hir_uses;
 mod identities;
+/// Platform-neutral `.rssi` source for the core and standard-package
+/// interfaces, embedded at build time. Data only: this module must not name a
+/// host, provider, policy, or capability concept, and nothing in it may depend
+/// on the rest of the semantic model.
+pub mod interface_catalog;
 mod interface_descriptor;
 mod interfaces {
-    pub(crate) use rsscript_interface_catalog::{
+    pub(crate) use crate::interface_catalog::{
         CORE_INTERFACES, STANDARD_PACKAGE_INTERFACES, default_interfaces,
     };
 }
@@ -81,7 +86,7 @@ mod type_aliases;
 mod type_compatibility;
 mod types;
 mod text_util {
-    pub(crate) use rsscript_text::*;
+    pub(crate) use rsscript_core_types::text::*;
 }
 mod value_properties;
 mod weak_fields;
@@ -329,7 +334,7 @@ pub use resource_types::{
     weak_field_diagnostics,
 };
 pub use retained_closure_flow::retained_closure_captures_from_flow;
-pub use rsscript_source_model::{FileId, InterfaceId, ModuleId, SourceRevision};
+pub use rsscript_core_types::{FileId, InterfaceId, ModuleId, SourceRevision};
 pub use signatures::signature_diagnostics;
 pub use source_bodies::{block_surface_diagnostics, item_body_surface_diagnostics};
 pub use source_rules::{

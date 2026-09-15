@@ -8,7 +8,7 @@ rust-version.workspace = true
 
 [dependencies]
 rsscript-artifact = { path = "../rsscript-artifact" }
-rsscript-operation = { path = "../rsscript-operation" }
+rsscript-core-types = { path = "../rsscript-core-types" }
 rsscript-semantics = { path = "../rsscript-semantics" }
 rsscript-workspace-loader = { path = "../rsscript-workspace-loader" }
 rustix = { version = "1.1", features = ["fs"] }

@@ -3,7 +3,7 @@ use std::fs;
 
 use serde::{Deserialize, Serialize};
 
-pub use rsscript_source_model::Span;
+pub use rsscript_core_types::Span;
 
 pub mod code {
     pub const RESERVED_DIAGNOSTIC_RS0001: &str = "RS0001";

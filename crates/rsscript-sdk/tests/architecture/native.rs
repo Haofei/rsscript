@@ -575,9 +575,7 @@ fn builtin_registry_is_versioned_and_keeps_library_calls_out_of_provider_dispatc
 #[test]
 fn deterministic_core_library_is_pure_and_the_vm_only_adapts_its_results() {
     let root = workspace_root();
-    let corelib_manifest = read(&root.join("crates/rsscript-corelib/Cargo.toml"));
-    let corelib = read(&root.join("crates/rsscript-corelib/src/lib.rs"));
-    let vm_manifest = read(&root.join("crates/rsscript-vm/Cargo.toml"));
+    let corelib = read(&root.join("crates/rsscript-vm/src/corelib.rs"));
     let vm = format!(
         "{}\n{}\n{}\n{}\n{}\n{}\n{}",
         read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs")),
@@ -598,13 +596,41 @@ fn deterministic_core_library_is_pure_and_the_vm_only_adapts_its_results() {
     let date = read(&root.join("crates/rsscript-vm/src/reg_vm/intrinsics/date.rs"));
     let value_access = read(&root.join("crates/rsscript-vm/src/reg_vm/value_access.rs"));
 
-    assert!(corelib_manifest.contains("name = \"rsscript-corelib\""));
-    for forbidden in ["rsscript-vm", "rsscript-provider", "rsscript-bytecode"] {
+    // The pure core library used to be its own package, so Cargo proved it could
+    // not name a VM type. As a module that proof has to be made on the source:
+    // it must reach nothing outside itself. `super::` is the module's own
+    // internal nesting (its submodules import its scope), so only a reach past
+    // it counts. Comments are stripped first because the module header states
+    // the rule in prose.
+    let corelib_code = corelib
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for reach_back in [
+        "crate::",
+        "super::super::",
+        "VmValue",
+        "EvalError",
+        "reg_vm",
+        "rsscript_bytecode",
+        "rsscript_provider_api",
+        "rsscript_abi_model",
+        "rsscript_diagnostics",
+    ] {
         assert!(
-            !corelib_manifest.contains(forbidden),
-            "pure core library must not depend on `{forbidden}`"
+            !corelib_code.contains(reach_back),
+            "pure core library must not name `{reach_back}`"
         );
     }
+    assert!(
+        corelib.contains("MODULE BOUNDARY"),
+        "the pure core library must keep its module-boundary contract visible"
+    );
+    assert!(
+        corelib.contains("#![forbid(unsafe_code)]"),
+        "the pure core library must keep `forbid(unsafe_code)` at module scope"
+    );
     for required in [
         "pub fn base64_decode",
         "pub fn base64_encode",
@@ -645,29 +671,36 @@ fn deterministic_core_library_is_pure_and_the_vm_only_adapts_its_results() {
             "core library is missing `{required}`"
         );
     }
-    assert!(vm_manifest.contains("rsscript-corelib"));
-    let vm_runtime_dependencies = vm_manifest
-        .split("[build-dependencies]")
-        .next()
-        .expect("VM manifest has a package dependency section");
-    for removed in [
-        "base64 =",
-        "hex =",
-        "percent-encoding =",
-        "regex =",
-        "chrono =",
-        "sha2 =",
-        "sha3 =",
-        "hmac =",
-        "flate2 =",
-        "serde_yaml_ng =",
-    ] {
-        assert!(
-            !vm_runtime_dependencies.contains(removed),
-            "VM manifest must not directly own encoding implementation dependency `{removed}`"
-        );
+    // The algorithm crates are declared by the VM manifest now that the pure
+    // core library is a module of it, so "the VM does not directly own encoding
+    // implementations" is enforced where it is actually meaningful: only
+    // `src/corelib.rs` may name them. Every other VM source file must go through
+    // the module.
+    for path in rust_files_below(&root.join("crates/rsscript-vm/src")) {
+        if path.ends_with("corelib.rs") {
+            continue;
+        }
+        let source = read(&path);
+        for implementation in [
+            "base64::",
+            "hex::",
+            "percent_encoding",
+            "regex::Regex",
+            "chrono::",
+            "sha2::",
+            "sha3::",
+            "hmac::",
+            "flate2::",
+            "serde_yaml_ng",
+        ] {
+            assert!(
+                !source.contains(implementation),
+                "VM source {} must reach `{implementation}` through the corelib module",
+                path.display()
+            );
+        }
     }
-    assert!(vm.contains("use rsscript_corelib::{"));
+    assert!(vm.contains("use crate::corelib::{"));
     assert!(vm.contains("encoding::{"));
     assert!(vm.contains("collections::{"));
     assert!(intrinsics.contains("base64_decode(text)"));
@@ -729,25 +762,38 @@ fn vm_runtime_dependency_inventory_prevents_library_implementation_regressions()
     let inventory = read(&root.join("docs/architecture/vm-runtime-dependency-inventory.md"));
     let declared = normal_dependency_packages(&vm_manifest);
     let expected = BTreeSet::from_iter([
+        // Core execution boundary.
         "rsscript-abi-model".to_owned(),
         "rsscript-bytecode".to_owned(),
-        "rsscript-corelib".to_owned(),
         "rsscript-diagnostics".to_owned(),
-        "rsscript-operation".to_owned(),
+        "rsscript-core-types".to_owned(),
         "rsscript-provider-api".to_owned(),
-        "rsscript-text".to_owned(),
         "serde".to_owned(),
         "rsscript-jit-cranelift".to_owned(),
+        // Deterministic core-library implementations, owned exclusively by the
+        // `corelib` module. Adding one here without putting the code in that
+        // module is the regression this list exists to catch.
+        "base64".to_owned(),
+        "chrono".to_owned(),
+        "flate2".to_owned(),
+        "hex".to_owned(),
+        "hmac".to_owned(),
+        "percent-encoding".to_owned(),
+        "regex".to_owned(),
+        "serde_json".to_owned(),
+        "serde_yaml_ng".to_owned(),
+        "sha2".to_owned(),
+        "sha3".to_owned(),
     ]);
     assert_eq!(
         declared, expected,
         "new VM runtime dependencies require an explicit inventory/ownership review"
     );
     for required in [
-        "rsscript-corelib",
+        "corelib` module",
         "legacy JSON adapter",
         "P06.2/P06.4",
-        "must not directly add algorithm crates",
+        "must not directly name algorithm crates",
     ] {
         assert!(
             inventory.contains(required),

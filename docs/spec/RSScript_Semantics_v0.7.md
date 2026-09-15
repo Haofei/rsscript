@@ -4096,7 +4096,7 @@ async fn worker() -> Unit {
 ### 9.9 What the scheduler guarantees, and what it does not
 
 Guaranteed (`docs/spec/RSScript_Execution_Spec_v0.1.md`,
-`crates/rsscript-vm/src/reg_vm/scheduler.rs`, `crates/rsscript-operation`):
+`crates/rsscript-vm/src/reg_vm/scheduler.rs`, `crates/rsscript-core-types`):
 
 * **Structured lifetime.** A task group drains every child — named or `_` —
   before its scope can return. No child outlives its parent.
@@ -4189,7 +4189,7 @@ Note that `Output.write` exists but `Output.print` does not; the interface is
 
 ### 10.2 What is actually in scope for a single file
 
-`crates/rsscript-interface-catalog/src/lib.rs` defines **two** lists, and
+`crates/rsscript-semantics/src/interface_catalog.rs` defines **two** lists, and
 `default_interfaces()` is their concatenation. A single-file
 `rss check` / `rss build` sees both.
 
@@ -4573,9 +4573,9 @@ Primary sources for this document:
 | closures | `crates/rsscript-semantics/src/checks/body/closure_captures.rs`, `checks/calls/closure_contracts.rs`, `closure_escape.rs`, `callbacks.rs`, `retained_closure_flow.rs` |
 | control flow | `crates/rsscript-semantics/src/control_flow.rs`, `analyzer/exhaustiveness.rs`, `try_checks.rs` |
 | resources | `crates/rsscript-semantics/src/resource_types.rs`, `resource_flow.rs`, `resource_producers.rs` |
-| async | `crates/rsscript-semantics/src/await_placement.rs`, `task_groups.rs`, `crates/rsscript-vm/src/reg_vm/scheduler.rs`, `crates/rsscript-operation/src/lib.rs` |
+| async | `crates/rsscript-semantics/src/await_placement.rs`, `task_groups.rs`, `crates/rsscript-vm/src/reg_vm/scheduler.rs`, `crates/rsscript-core-types/src/lib.rs` |
 | derives | `crates/rsscript-semantics/src/derives.rs`, `derive_fields.rs` |
-| interfaces | `crates/rsscript-interface-catalog/src/lib.rs`, `stdlib/**/*.rssi`, `packages/async/interface/*.rssi` |
+| interfaces | `crates/rsscript-semantics/src/interface_catalog.rs`, `stdlib/**/*.rssi`, `packages/async/interface/*.rssi` |
 | diagnostics | `crates/rsscript-diagnostics/src/implementation.rs`, `docs/generated/diagnostic-catalog.{md,json}` |
 | fixtures | `crates/rsscript-sdk/tests/fixtures/{pass,fail}/`, `crates/rsscript-sdk/tests/corpus/`, `examples/scripts/`, `evals/fixtures/` |
 

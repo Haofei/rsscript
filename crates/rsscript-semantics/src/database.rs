@@ -3,9 +3,8 @@ use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 
+use rsscript_core_types::{FileId, OperationAbort, OperationContext, SourceRevision};
 use rsscript_diagnostics::Diagnostic;
-use rsscript_operation::{OperationAbort, OperationContext};
-use rsscript_source_model::{FileId, SourceRevision};
 use rsscript_syntax::{
     ast::{Item, Program},
     format_source, lint_source, parse_source,

@@ -9,7 +9,7 @@
 //! Editor clients retain only document overlays, request accounting, and LSP
 //! protocol adaptation; they never maintain a competing revision cache.
 
-use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationContext};
+use rsscript_core_types::{CancellationToken, MonotonicDeadline, OperationContext};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -113,11 +113,11 @@ impl LanguageServiceError {
     }
 }
 
-impl From<rsscript_operation::OperationAbort> for LanguageServiceError {
-    fn from(abort: rsscript_operation::OperationAbort) -> Self {
+impl From<rsscript_core_types::OperationAbort> for LanguageServiceError {
+    fn from(abort: rsscript_core_types::OperationAbort) -> Self {
         match abort {
-            rsscript_operation::OperationAbort::Cancelled => Self::Cancelled,
-            rsscript_operation::OperationAbort::DeadlineExceeded => Self::DeadlineExceeded,
+            rsscript_core_types::OperationAbort::Cancelled => Self::Cancelled,
+            rsscript_core_types::OperationAbort::DeadlineExceeded => Self::DeadlineExceeded,
         }
     }
 }
@@ -443,7 +443,7 @@ impl LanguageService {
         &mut self,
         path: &str,
         operation: &OperationContext,
-    ) -> Result<Vec<Diagnostic>, rsscript_operation::OperationAbort> {
+    ) -> Result<Vec<Diagnostic>, rsscript_core_types::OperationAbort> {
         operation.check()?;
         let Some(document) = self.documents.get(path).cloned() else {
             return Ok(Vec::new());
@@ -470,7 +470,7 @@ impl LanguageService {
         &mut self,
         path: &str,
         operation: &OperationContext,
-    ) -> Result<Arc<[String]>, rsscript_operation::OperationAbort> {
+    ) -> Result<Arc<[String]>, rsscript_core_types::OperationAbort> {
         operation.check()?;
         let Some(document) = self.documents.get(path).cloned() else {
             return Ok(Arc::from([]));

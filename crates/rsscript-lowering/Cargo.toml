@@ -14,7 +14,7 @@ rsscript-abi-model = { path = "../rsscript-abi-model" }
 rsscript-mir = { path = "../rsscript-mir" }
 rsscript-semantics = { path = "../rsscript-semantics" }
 rsscript-syntax = { path = "../rsscript-syntax" }
-rsscript-text = { path = "../rsscript-text" }
+rsscript-core-types = { path = "../rsscript-core-types" }
 
 [lints]
 workspace = true

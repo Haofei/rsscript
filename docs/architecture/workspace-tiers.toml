@@ -10,24 +10,18 @@ core = [
   "rsscript-bytecode",
   "rsscript-codegen-vm",
   "rsscript-compiler",
-  "rsscript-corelib",
+  "rsscript-core-types",
   "rsscript-diagnostics",
-  "rsscript-interface-catalog",
   "rsscript-language-service",
   "rsscript-lowering",
   "rsscript-mir",
-  "rsscript-operation",
-  "rsscript-package-model",
   "rsscript-project",
   "rsscript-provider-api",
   "rsscript-runner-protocol",
   "rsscript-sdk",
   "rsscript-semantics",
-  "rsscript-source-model",
   "rsscript-syntax",
-  "rsscript-text",
   "rsscript-vm",
-  "rsscript-work-budget",
   "rsscript-workspace-loader",
 ]
 
@@ -52,9 +46,7 @@ providers = [
 ]
 
 integrations = [
-  "rsscript-package-review",
-  "rsscript-review-core",
-  "rsscript-review-source",
+  "rsscript-review",
 ]
 
 # Intentionally explicit: the validator treats every tier as part of the schema,
@@ -87,7 +79,6 @@ examples = [
 security_boundaries = [
   "rsscript-bytecode",
   "rsscript-jit-cranelift",
-  "rsscript-package-review",
   "rsscript-provider-api",
   "rsscript-provider-bindgen",
   "rsscript-provider-conformance",
@@ -99,8 +90,7 @@ security_boundaries = [
   "rsscript-provider-log",
   "rsscript-provider-process",
   "rsscript-provider-time",
-  "rsscript-review-core",
-  "rsscript-review-source",
+  "rsscript-review",
   "rsscript-runner-protocol",
   "rsscript-vm",
   "rss-process-guard",

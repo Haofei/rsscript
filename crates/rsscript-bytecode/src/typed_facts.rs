@@ -1574,7 +1574,7 @@ fn invalid(message: impl Into<String>) -> BytecodeError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rsscript_operation::CancellationToken;
+    use rsscript_core_types::CancellationToken;
 
     #[test]
     fn nested_type_walk_has_an_independent_work_budget() {

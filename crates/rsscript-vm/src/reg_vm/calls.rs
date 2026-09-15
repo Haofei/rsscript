@@ -169,7 +169,7 @@ impl RegVm {
             .limits
             .stdout_budget
             .map(|limit| limit.saturating_sub(self.stdout.len()));
-        let call_id = rsscript_operation::OperationId(self.provider_calls);
+        let call_id = rsscript_core_types::OperationId(self.provider_calls);
         let trace = std::sync::Arc::clone(&self.provider_trace);
         let blocking_allowed = self.limits.allow_blocking_provider_calls;
         let wire_result = self
@@ -304,7 +304,7 @@ impl RegVm {
                 .limits
                 .stdout_budget
                 .map(|limit| limit.saturating_sub(self.stdout.len())),
-            call_id: rsscript_operation::OperationId(self.provider_calls),
+            call_id: rsscript_core_types::OperationId(self.provider_calls),
             provider_id: String::new(),
             provider_version: String::new(),
             symbol: key.to_string(),

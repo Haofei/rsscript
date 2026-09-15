@@ -43,7 +43,7 @@ fn cargo_metadata_enforces_composition_dependency_direction() {
         language_service,
         BTreeSet::from([
             "rsscript-diagnostics".to_string(),
-            "rsscript-operation".to_string(),
+            "rsscript-core-types".to_string(),
             "rsscript-semantics".to_string(),
             "rsscript-syntax".to_string(),
         ]),
