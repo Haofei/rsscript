@@ -155,9 +155,14 @@ pub fn call_argument_diagnostics(
         }
     }
 
+    let provided_names = args
+        .iter()
+        .filter_map(|arg| arg.resolved_name.as_deref())
+        .collect::<HashSet<_>>();
+
     let mut seen_names = HashSet::new();
     let mut seen_positional_params = HashSet::new();
-    for arg in args {
+    for (argument_index, arg) in args.iter().enumerate() {
         let Some(name) = arg.resolved_name.as_deref() else {
             continue;
         };
@@ -187,29 +192,32 @@ pub fn call_argument_diagnostics(
                 .map(|param| param.name.as_str())
                 .collect::<Vec<_>>()
                 .join(", ");
+            let diagnostic = Diagnostic::error(
+                code::UNKNOWN_ARGUMENT,
+                format!("call to `{call_name}` has no argument named `{name}`."),
+                arg.span.clone(),
+                "unknown argument",
+            )
+            .with_cause(format!(
+                "`{call_name}` does not declare a parameter named `{name}`."
+            ));
             diagnostics.push(
-                Diagnostic::error(
-                    code::UNKNOWN_ARGUMENT,
-                    format!("call to `{call_name}` has no argument named `{name}`."),
-                    arg.span.clone(),
-                    "unknown argument",
-                )
-                .with_cause(format!(
-                    "`{call_name}` does not declare a parameter named `{name}`."
-                ))
-                .with_fix(
-                    "rename_argument",
-                    format!("Use one of: {declared}."),
-                    "manual",
-                ),
+                match nearest_parameter(name, argument_index, params, args, &provided_names) {
+                    Some(target) => diagnostic.with_fix_edit(
+                        "rename_argument",
+                        format!("Did you mean `{target}`? Declared: {declared}."),
+                        FixEdit::replace(&arg.span, target),
+                    ),
+                    None => diagnostic.with_fix(
+                        "rename_argument",
+                        format!("Use one of: {declared}."),
+                        "manual",
+                    ),
+                },
             );
         }
     }
 
-    let provided_names = args
-        .iter()
-        .filter_map(|arg| arg.resolved_name.as_deref())
-        .collect::<HashSet<_>>();
     for param in params.iter().filter(|param| param.required) {
         if !provided_names.contains(param.name.as_str()) {
             diagnostics.push(
@@ -280,6 +288,109 @@ pub fn call_argument_diagnostics(
     }
 
     diagnostics
+}
+
+/// The declared parameter that a wrong argument label most plausibly meant.
+///
+/// `RS0206` gained a did-you-mean because the measured repair data separates
+/// diagnostics that name the edit from diagnostics that only name the failure:
+/// the first get applied, the second get re-invented. `RS0203` was in the
+/// second group — it listed every declared parameter and left the choice open.
+/// It is also charged twice, because a label the callee does not declare is
+/// both an unknown argument and a required parameter left unfilled, so one
+/// rename clears two errors.
+///
+/// Measured wrong labels are almost never typos. They are other languages'
+/// names for the same slot — `text` for `value`, `separator` for `delimiter`,
+/// `a`/`b` for `left`/`right`, `end` for `len` — which edit distance cannot
+/// reach and position gets right every time, because the model orders the
+/// arguments correctly and only misnames them. So when the call has the shape
+/// of a complete named call — every argument labelled, exactly as many
+/// arguments as the callee accepts — the parameter standing in this argument's
+/// own position is the answer. Otherwise the older evidence still applies: a
+/// truncation or near-miss (`init` for `initial`, `lst` for `list`) is offered
+/// when it is unambiguous, and nothing is offered when it is not.
+fn nearest_parameter<'a>(
+    written: &str,
+    argument_index: usize,
+    params: &'a [CallParameterFact],
+    args: &[CallArgumentFact],
+    provided: &HashSet<&str>,
+) -> Option<&'a str> {
+    let accepting: Vec<&'a str> = params
+        .iter()
+        .filter(|param| param.accepts_argument)
+        .map(|param| param.name.as_str())
+        .collect();
+
+    // Right shape, wrong names: every slot is filled and labelled, so the
+    // parameter standing in this argument's position is unambiguous.
+    let complete_named_call =
+        args.len() == accepting.len() && args.iter().all(|arg| arg.explicit_name);
+    if complete_named_call
+        && let Some(positional) = accepting.get(argument_index)
+        && !provided.contains(positional)
+    {
+        return Some(positional);
+    }
+
+    let budget = match written.chars().count() {
+        0..=3 => 1,
+        4..=7 => 2,
+        _ => 3,
+    };
+    let mut scored: Vec<(usize, usize, &str)> = accepting
+        .iter()
+        .filter(|name| !provided.contains(*name))
+        .filter_map(|name| {
+            let prefix = name.starts_with(written) || written.starts_with(*name);
+            let distance = edit_distance(written, name);
+            (prefix || distance <= budget).then_some((usize::from(!prefix), distance, *name))
+        })
+        .collect();
+    scored.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then(left.1.cmp(&right.1))
+            .then(left.2.cmp(right.2))
+    });
+    // A tie between two equally plausible parameters is not a suggestion; the
+    // declared list is the honest answer there.
+    match scored.as_slice() {
+        [(_, _, name)] => Some(name),
+        [(rank, distance, name), (next_rank, next_distance, _), ..]
+            if (rank, distance) != (next_rank, next_distance) =>
+        {
+            Some(name)
+        }
+        _ => None,
+    }
+}
+
+/// Levenshtein distance, two rows at a time.
+///
+/// Deliberately local: this module takes its inputs as resolved facts and
+/// depends on nothing but the diagnostic types, which is what lets other
+/// consumers share these rules without linking the compiler's symbol tables.
+fn edit_distance(left: &str, right: &str) -> usize {
+    let left: Vec<char> = left.chars().collect();
+    let right: Vec<char> = right.chars().collect();
+    if left.is_empty() {
+        return right.len();
+    }
+    let mut previous: Vec<usize> = (0..=right.len()).collect();
+    let mut current = vec![0usize; right.len() + 1];
+    for (row, left_char) in left.iter().enumerate() {
+        current[0] = row + 1;
+        for (column, right_char) in right.iter().enumerate() {
+            let substitution = previous[column] + usize::from(left_char != right_char);
+            current[column + 1] = substitution
+                .min(previous[column + 1] + 1)
+                .min(current[column] + 1);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    previous[right.len()]
 }
 
 /// The concrete edit that turns an argument's written effect into `expected`.
@@ -454,6 +565,73 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    fn parameter(name: &str, effect: Option<&'static str>) -> CallParameterFact {
+        CallParameterFact {
+            accepts_argument: true,
+            required: true,
+            name: name.to_owned(),
+            effect,
+        }
+    }
+
+    fn named_argument(name: &str) -> CallArgumentFact {
+        CallArgumentFact {
+            explicit_name: true,
+            resolved_name: Some(name.to_owned()),
+            span: span(),
+            value_span: span(),
+            constructor_shorthand: false,
+            effect: None,
+            effect_span: None,
+        }
+    }
+
+    fn rename_suggestions(params: &[CallParameterFact], labels: &[&str]) -> Vec<Option<String>> {
+        let args: Vec<CallArgumentFact> = labels.iter().map(|name| named_argument(name)).collect();
+        call_argument_diagnostics("call", &span(), false, params, &args)
+            .into_iter()
+            .filter(|diagnostic| diagnostic.code == code::UNKNOWN_ARGUMENT)
+            .map(|diagnostic| {
+                diagnostic
+                    .fixes
+                    .iter()
+                    .find(|fix| fix.applicability == "machine-applicable")
+                    .and_then(|fix| fix.edit.as_ref())
+                    .map(|edit| edit.replacement.clone())
+            })
+            .collect()
+    }
+
+    /// A wrong argument label is another language's name for the same slot far
+    /// more often than it is a typo, so position decides when the call is
+    /// otherwise complete, and the near-miss rule covers the rest.
+    #[test]
+    fn unknown_argument_names_the_parameter_in_its_own_position() {
+        let three = [
+            parameter("value", Some("read")),
+            parameter("start", Some("read")),
+            parameter("len", Some("read")),
+        ];
+        // `start` is spelled correctly; the other two are renamed by position
+        // even though neither is anywhere near its target by edit distance.
+        assert_eq!(
+            rename_suggestions(&three, &["text", "start", "end"]),
+            [Some("value".to_owned()), Some("len".to_owned())]
+        );
+
+        // Not a complete named call: one slot is left unfilled, so position
+        // proves nothing and only an unambiguous near-miss is offered.
+        let two = [
+            parameter("initial", Some("read")),
+            parameter("folder", None),
+        ];
+        assert_eq!(
+            rename_suggestions(&two, &["init"]),
+            [Some("initial".to_owned())]
+        );
+        assert_eq!(rename_suggestions(&two, &["op"]), [None]);
     }
 
     #[test]

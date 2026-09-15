@@ -338,6 +338,59 @@ fn fix_write_rewrites_and_removes_wrong_call_site_effects() {
     );
 }
 
+/// A call written with another language's argument names is renamed to the
+/// declared ones, and one rename clears both errors it caused.
+///
+/// A wrong label is charged twice — the label is unknown (`RS0203`) and the
+/// parameter it should have filled is missing (`RS0204`) — so four errors here
+/// are two edits.
+#[test]
+fn fix_write_renames_wrong_argument_labels_to_the_declared_ones() {
+    let bin = env!("CARGO_BIN_EXE_rss");
+    let temp = tempfile::tempdir().expect("temp dir should be creatable");
+    let file = temp.path().join("wrong-labels.rss");
+    fs::write(
+        &file,
+        concat!(
+            "pub fn record(target: mut List<Int>, note: read String) -> Unit {\n",
+            "    return Unit\n",
+            "}\n",
+            "fn main() -> Unit {\n",
+            "    let mut items: List<Int> = List<Int>.new()\n",
+            "    return record(tgt: mut items, text: \"hi\")\n",
+            "}\n",
+        ),
+    )
+    .expect("fixture should write");
+    let path = file.to_str().expect("path is utf-8");
+
+    let write = Command::new(bin)
+        .args(["fix", "--write", path])
+        .output()
+        .expect("rss fix --write runs");
+    assert!(
+        write.status.success(),
+        "fix --write failed: {}",
+        String::from_utf8_lossy(&write.stderr)
+    );
+    let fixed = fs::read_to_string(&file).unwrap();
+    assert!(
+        fixed.contains("record(target: mut items, note: \"hi\")"),
+        "fixed source:\n{fixed}"
+    );
+
+    let check = Command::new(bin)
+        .args(["check", path])
+        .output()
+        .expect("rss check runs");
+    let check_out = String::from_utf8_lossy(&check.stdout);
+    assert!(
+        check_out.contains("ok"),
+        "post-fix check not clean:\n{check_out}\n{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+}
+
 #[cfg(feature = "execution")]
 #[test]
 fn run_cli_defaults_to_the_isolated_verified_vm() {

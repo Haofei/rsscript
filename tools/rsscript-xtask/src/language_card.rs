@@ -376,7 +376,7 @@ fn core_signatures_section() -> String {
     let signatures = interface_signatures();
     let namespaces = namespace_count(&signatures);
     format!(
-        "## Core interface signatures\n\n{} callable signatures across {namespaces} namespaces are prelude-visible to a single-file check. The full list, grouped by namespace and generated from the interface sources themselves, is [signatures.md](signatures.md); the machine-readable form is the `signatures` array of [language-card.json](language-card.json).\n\nAt a cursor, `rss generate continuations` returns the signatures for the namespace being typed, so a call can be written from facts rather than guessed.\n",
+        "## Core interface signatures\n\n{} callable signatures across {namespaces} namespaces are prelude-visible to a single-file check. The full list, grouped by namespace and generated from the interface sources themselves, is [signatures.md](signatures.md); the machine-readable form is the `signatures` array of [language-card.json](language-card.json).\n\nAt a cursor, `rss generate continuations` returns the signatures for the namespace being typed, and every callable candidate carries its parameters as data: the label to write, whether that label may be dropped, and the effect the call site has to supply. Argument labels are the callee's own names, not the caller's: `String.split` takes `value` and `delimiter`, not `text` and `separator`. Read them rather than guessing them.\n",
         signatures.len()
     )
 }

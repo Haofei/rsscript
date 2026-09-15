@@ -61,4 +61,4 @@ These are the forms most often written wrong. The right column is what `rss fmt`
 
 450 callable signatures across 59 namespaces are prelude-visible to a single-file check. The full list, grouped by namespace and generated from the interface sources themselves, is [signatures.md](signatures.md); the machine-readable form is the `signatures` array of [language-card.json](language-card.json).
 
-At a cursor, `rss generate continuations` returns the signatures for the namespace being typed, so a call can be written from facts rather than guessed.
+At a cursor, `rss generate continuations` returns the signatures for the namespace being typed, and every callable candidate carries its parameters as data: the label to write, whether that label may be dropped, and the effect the call site has to supply. Argument labels are the callee's own names, not the caller's: `String.split` takes `value` and `delimiter`, not `text` and `separator`. Read them rather than guessing them.
