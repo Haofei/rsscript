@@ -1,0 +1,15 @@
+// `fresh` names a newly created value, which only a struct or a sum can be.
+// A class is a managed identity and a resource is a host-owned slot, so neither
+// may be the target of a `fresh` return — in a `.rssi` exactly as in a `.rss`.
+class Session {
+    token: String
+}
+
+resource Socket {
+    drop {
+    }
+}
+
+pub fn open_session() -> fresh Session
+
+pub fn open_socket() -> Result<fresh Socket, String>

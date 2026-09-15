@@ -1,0 +1,15 @@
+// expect: RS0021
+// Tuple patterns lower to the typed MIR control-flow subset, but that does not
+// weaken exhaustiveness: a `match` whose tuple arms all test a literal element
+// still needs an irrefutable arm.
+fn classify(p: (Int, Int)) -> fresh String {
+    match read p {
+        (0, 0) => { return "origin" }
+        (1, y) => { return String.from_int(value: y) }
+    }
+}
+
+fn main() -> Unit {
+    Output.write(message: classify(p: (0, 0)))
+    return Unit
+}

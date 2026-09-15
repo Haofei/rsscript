@@ -1356,3 +1356,179 @@ fn main() -> String {{
     // `item0` is 0 and `item28` is 28.
     assert_eq!(report.value(), Some("28last"));
 }
+
+/// Tuple patterns in `match` reach the typed MIR control-flow subset.
+///
+/// A tuple pattern is the synthetic struct pattern `__TupleN { item0: …, … }`
+/// (`syntax/parser/pattern.rs`), so lowering tests the refutable elements as a
+/// short-circuiting branch ladder and binds the rest by field projection. The
+/// program exercises every element form the subset accepts — a literal, a
+/// binding, `_`, and a nested tuple pattern — in both the statement and the
+/// expression form of `match`.
+#[test]
+fn tuple_match_patterns_lower_and_execute() {
+    const SOURCE: &str = r#"
+fn classify(p: (Int, String)) -> fresh String {
+    match read p {
+        (0, "zero") => { return "both" }
+        (0, name) => { return String.concat(left: "zero-", right: name) }
+        (n, _) => { return String.from_int(value: n) }
+    }
+}
+
+fn nested(p: ((Int, Int), String)) -> fresh String {
+    match read p {
+        ((1, b), name) => { return String.concat(left: String.from_int(value: b), right: name) }
+        ((a, _), _) => { return String.from_int(value: a) }
+        _ => { return "?" }
+    }
+}
+
+fn corner(p: (Int, Int)) -> fresh String {
+    return match read p {
+        (0, 0) => { "origin" }
+        (0, y) => { String.from_int(value: y) }
+        (x, _) => { String.from_int(value: x) }
+    }
+}
+
+fn main() -> fresh String {
+    let parts = [
+        classify(p: (0, "zero")),
+        classify(p: (0, "q")),
+        classify(p: (5, "q")),
+        nested(p: ((1, 9), "x")),
+        nested(p: ((2, 9), "x")),
+        corner(p: (0, 0)),
+        corner(p: (0, 4)),
+        corner(p: (7, 4)),
+    ]
+    return String.join(parts: read parts, separator: "|")
+}
+"#;
+
+    let built = Compiler
+        .compile("tuple-patterns.rss", SOURCE)
+        .expect("tuple patterns in `match` compile");
+    let admitted = admitted(built);
+    let report = Runtime::default()
+        .link(&admitted)
+        .expect("link tuple pattern program")
+        .execute(ExecutionRequest::default());
+
+    assert_eq!(report.termination_reason(), TerminationReason::Completed);
+    assert_eq!(
+        report.value(),
+        Some("both|zero-q|5|9x|2|origin|4|7"),
+        "each arm is selected by its own element tests"
+    );
+}
+
+/// A generic construction is as provable as its arguments' types, and the
+/// expression forms below now carry one.
+///
+/// `lower_record_constructor` refuses to lower a generic record whose type
+/// arguments the checker could not prove, so each form here used to be either a
+/// spurious type error naming the declaration's own parameter (`__rss_T0`) or a
+/// `rss build` refusal after a clean `rss check`. Every one of them now builds a
+/// `Tagged<T>` and runs.
+#[test]
+fn generic_constructions_from_newly_typed_expressions_execute() {
+    const SOURCE: &str = r#"
+struct Tagged<T: Struct> {
+    value: T
+    label: String
+}
+
+fn lookup(key: String) -> Option<Int> {
+    return Some(String.len(value: key))
+}
+
+// `?` on a typed `Option<T>` proves `T`.
+fn from_option(key: String) -> Option<fresh Tagged<Int>> {
+    let n = lookup(key: key)?
+    return Some(Tagged(value: n, label: "opt"))
+}
+
+// A `let` bound to one of the literals the surface spells as an identifier.
+fn from_literal_ident() -> fresh Tagged<Bool> {
+    let flag = false
+    return Tagged(value: flag, label: "bool")
+}
+
+// A `match` used as a value whose first arm takes its own value from a nested
+// `if`: the arm proves nothing by itself, its branches do.
+fn from_branching_match(n: Int) -> fresh Tagged<Int> {
+    let score = match n {
+        0 => {
+            let base = 1
+            if base > 0 { 5 } else { 6 }
+        }
+        _ => { 20 }
+    }
+    return Tagged(value: score, label: "match")
+}
+
+fn option_label(key: String) -> fresh String {
+    match from_option(key: key) {
+        Some(tagged) => { return String.from_int(value: tagged.value) }
+        None => { return "none" }
+    }
+}
+
+fn main() -> fresh String {
+    let parts = [
+        option_label(key: "abcd"),
+        String.from_int(value: from_branching_match(n: 0).value),
+        String.from_int(value: from_branching_match(n: 7).value),
+        String.from_bool(value: from_literal_ident().value),
+    ]
+    return String.join(parts: read parts, separator: "|")
+}
+"#;
+
+    let built = Compiler
+        .compile("inferred-generic-construction.rss", SOURCE)
+        .expect("every construction proves its type arguments");
+    let admitted = admitted(built);
+    let report = Runtime::default()
+        .link(&admitted)
+        .expect("link generic construction program")
+        .execute(ExecutionRequest::default());
+
+    assert_eq!(report.termination_reason(), TerminationReason::Completed);
+    assert_eq!(report.value(), Some("4|5|20|false"));
+}
+
+/// Where a type argument really is undetermined, `rss check` says so.
+///
+/// A bare `None` leaves `Option<?>` open on purpose, so the tuple built from it
+/// has no provable instance. That used to check clean and then fail the build
+/// with "generic record constructor without a proved type instance"; it is now
+/// an `RS0034` at the construction itself.
+#[test]
+fn an_unprovable_generic_construction_is_a_check_error() {
+    const SOURCE: &str = r#"
+fn main() -> Unit {
+    let nothing = None
+    let p = (nothing, 1)
+    Output.write(message: String.from_int(value: p.item1))
+    return Unit
+}
+"#;
+
+    let error = Compiler
+        .compile("unprovable-construction.rss", SOURCE)
+        .expect_err("an unprovable generic construction does not compile");
+    let CompileError::Diagnostics(diagnostics) = &error else {
+        panic!("expected checker diagnostics, got {error}");
+    };
+    let codes = diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.code.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        codes.contains(&"RS0034"),
+        "expected RS0034 at the construction, got {codes:?}"
+    );
+}

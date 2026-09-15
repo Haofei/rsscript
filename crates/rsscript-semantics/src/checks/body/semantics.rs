@@ -973,9 +973,11 @@ pub(super) fn check_expr_semantics_with_context(
             callee,
             args,
             resolution,
+            type_arguments,
             span,
             ..
         } => {
+            check_provable_generic_construction(analyzer, callee, resolution, type_arguments, span);
             if let CallResolution::Resolved { signature, .. } = resolution
                 && let Some(diagnostic) = rsscript_semantics::async_call_consumption_diagnostic(
                     &body_callee_display(callee),

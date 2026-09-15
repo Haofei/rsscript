@@ -143,6 +143,64 @@ pub(super) fn check_uninferable_unused_bindings(
     check_uninferable_bindings_in_block(analyzer, block, &uses);
 }
 
+/// A generic record construction must leave the front end with its type
+/// arguments proved.
+///
+/// `lowerer.rs::lower_record_constructor` substitutes the call site's inferred
+/// type arguments into the constructor's declared result, so `(1, "a")` is
+/// recorded as `__Tuple2<Int, String>` and not as the declaration's own
+/// parameter names (§2.9). The checker proves a call site's arguments all at
+/// once or not at all; where it cannot, the constructed value has no type the
+/// typed executable facts can name, and lowering refuses. That refusal is a
+/// real rule, but it belongs to `rss check`, not to `rss build`: report it here,
+/// at the construction, so a program never checks clean and then fails to
+/// build.
+pub(super) fn check_provable_generic_construction(
+    analyzer: &mut Analyzer<'_>,
+    callee: &Callee,
+    resolution: &CallResolution,
+    type_arguments: &[crate::ResolvedType],
+    span: &Span,
+) {
+    let CallResolution::Resolved {
+        signature,
+        kind:
+            ResolvedCalleeKind::Constructor {
+                type_kind: HirTypeKind::Struct | HirTypeKind::Class,
+            },
+    } = resolution
+    else {
+        return;
+    };
+    if signature.type_params.is_empty() || type_arguments.len() == signature.type_params.len() {
+        return;
+    }
+    let name = type_root_name(&body_callee_display(callee)).to_owned();
+    // Tuples are surface sugar over `__TupleN`; naming the synthetic struct in
+    // a diagnostic would point the reader at a declaration they never wrote.
+    let subject = if name.starts_with("__Tuple") {
+        "this tuple".to_owned()
+    } else {
+        format!("`{name}`")
+    };
+    analyzer.diagnostics.push(
+        Diagnostic::error(
+            code::UNINFERABLE_BINDING_TYPE,
+            format!("the type arguments of {subject} cannot be inferred."),
+            span.clone(),
+            "uninferable construction type",
+        )
+        .with_cause(
+            "A generic construction takes its type arguments from its arguments' types, and at least one argument here has no known type: an unannotated closure, a bare `None`, an empty `[]`, or a value whose own binding was never given a type.",
+        )
+        .with_fix(
+            "annotate_construction_source",
+            "Annotate the binding or parameter the untyped argument comes from (e.g. `let n: Int = ...`), so every type argument is proved at the construction.",
+            "manual",
+        ),
+    );
+}
+
 pub(super) fn collect_all_referenced_names_block(block: &HirBlock, uses: &mut HashSet<String>) {
     for statement in &block.statements {
         collect_all_referenced_names_stmt(statement, uses);

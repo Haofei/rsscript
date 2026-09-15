@@ -1,0 +1,10 @@
+// expect: RS0603
+// interface: interface-invalid-fresh-class.rssi
+//
+// The source file is clean. Both diagnostics come from the supplied interface:
+// the `fresh Class` / `fresh Resource` rule reads only the return type, so it
+// is a signature rule and runs over `.rssi` declarations too.
+
+fn main() -> Unit {
+    return Unit
+}

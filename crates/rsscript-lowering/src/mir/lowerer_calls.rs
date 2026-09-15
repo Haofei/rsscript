@@ -585,58 +585,13 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
             }
             let arm_block = self.new_block();
             let next = self.new_block();
-            let variant_bindings = match &arm.pattern {
-                rsscript_syntax::ast::MatchPattern::Wildcard(_) => {
-                    self.terminate(MirTerminator::Jump(arm_block));
-                    None
-                }
-                rsscript_syntax::ast::MatchPattern::Literal { value: literal, .. } => {
-                    let literal = match_literal(literal, &self.function_name)?;
-                    let expected = self.literal(literal)?;
-                    let condition = self.value();
-                    self.emit(MirInstruction::Binary {
-                        destination: condition,
-                        op: MirBinaryOp::Equal,
-                        left: value,
-                        right: expected,
-                    });
-                    self.terminate(MirTerminator::Branch {
-                        condition,
-                        then_target: arm_block,
-                        else_target: next,
-                    });
-                    None
-                }
-                rsscript_syntax::ast::MatchPattern::Variant { name, bindings, .. } => {
-                    if let Some(ok) = result_variant_tag(name) {
-                        let binding = self.result_pattern_binding(bindings)?;
-                        self.terminate(MirTerminator::MatchResult {
-                            value,
-                            ok_target: if ok { arm_block } else { next },
-                            err_target: if ok { next } else { arm_block },
-                        });
-                        Some(MatchBindings::Result { ok, binding })
-                    } else if let Some(some) = option_variant_tag(name) {
-                        let binding = self.option_pattern_binding(some, bindings)?;
-                        self.terminate(MirTerminator::MatchOption {
-                            value,
-                            some_target: if some { arm_block } else { next },
-                            none_target: if some { next } else { arm_block },
-                        });
-                        Some(MatchBindings::Option { some, binding })
-                    } else {
-                        let layout = self.variant_pattern_layout(name, bindings)?;
-                        self.terminate(MirTerminator::MatchVariant {
-                            value,
-                            expected: name.clone(),
-                            match_target: arm_block,
-                            else_target: next,
-                        });
-                        Some(MatchBindings::Variant(layout, bindings.clone()))
-                    }
-                }
-                _ => return self.unsupported("non-literal checked HIR match pattern"),
-            };
+            let variant_bindings = self.lower_pattern_edge(
+                value,
+                &arm.pattern,
+                arm_block,
+                next,
+                "non-literal checked HIR match pattern",
+            )?;
 
             self.current = arm_block;
             if let Some(bindings) = variant_bindings {
@@ -667,57 +622,13 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
             }
             let arm_block = self.new_block();
             let next = self.new_block();
-            let variant_bindings = match &arm.pattern {
-                rsscript_syntax::ast::MatchPattern::Wildcard(_) => {
-                    self.terminate(MirTerminator::Jump(arm_block));
-                    None
-                }
-                rsscript_syntax::ast::MatchPattern::Literal { value: literal, .. } => {
-                    let expected = self.literal(match_literal(literal, &self.function_name)?)?;
-                    let condition = self.value();
-                    self.emit(MirInstruction::Binary {
-                        destination: condition,
-                        op: MirBinaryOp::Equal,
-                        left: value,
-                        right: expected,
-                    });
-                    self.terminate(MirTerminator::Branch {
-                        condition,
-                        then_target: arm_block,
-                        else_target: next,
-                    });
-                    None
-                }
-                rsscript_syntax::ast::MatchPattern::Variant { name, bindings, .. } => {
-                    if let Some(ok) = result_variant_tag(name) {
-                        let binding = self.result_pattern_binding(bindings)?;
-                        self.terminate(MirTerminator::MatchResult {
-                            value,
-                            ok_target: if ok { arm_block } else { next },
-                            err_target: if ok { next } else { arm_block },
-                        });
-                        Some(MatchBindings::Result { ok, binding })
-                    } else if let Some(some) = option_variant_tag(name) {
-                        let binding = self.option_pattern_binding(some, bindings)?;
-                        self.terminate(MirTerminator::MatchOption {
-                            value,
-                            some_target: if some { arm_block } else { next },
-                            none_target: if some { next } else { arm_block },
-                        });
-                        Some(MatchBindings::Option { some, binding })
-                    } else {
-                        let layout = self.variant_pattern_layout(name, bindings)?;
-                        self.terminate(MirTerminator::MatchVariant {
-                            value,
-                            expected: name.clone(),
-                            match_target: arm_block,
-                            else_target: next,
-                        });
-                        Some(MatchBindings::Variant(layout, bindings.clone()))
-                    }
-                }
-                _ => return self.unsupported("non-literal checked HIR match expression pattern"),
-            };
+            let variant_bindings = self.lower_pattern_edge(
+                value,
+                &arm.pattern,
+                arm_block,
+                next,
+                "non-literal checked HIR match expression pattern",
+            )?;
 
             self.current = arm_block;
             if let Some(bindings) = variant_bindings {
@@ -737,6 +648,244 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
             place: result_place,
         });
         Ok(destination)
+    }
+
+    /// Emit one arm's dispatch edge out of the current block and return the
+    /// bindings that arm's block must then materialize.
+    ///
+    /// Shared by statement and expression `match` so the two forms cannot
+    /// drift into accepting different pattern subsets; only the refusal
+    /// wording differs.
+    pub(super) fn lower_pattern_edge(
+        &mut self,
+        value: ValueId,
+        pattern: &rsscript_syntax::ast::MatchPattern,
+        arm_block: BlockId,
+        next: BlockId,
+        unsupported: &'static str,
+    ) -> Result<Option<MatchBindings>, MirLoweringError> {
+        match pattern {
+            rsscript_syntax::ast::MatchPattern::Wildcard(_) => {
+                self.terminate(MirTerminator::Jump(arm_block));
+                Ok(None)
+            }
+            rsscript_syntax::ast::MatchPattern::Literal { value: literal, .. } => {
+                let expected = self.literal(match_literal(literal, &self.function_name)?)?;
+                let condition = self.value();
+                self.emit(MirInstruction::Binary {
+                    destination: condition,
+                    op: MirBinaryOp::Equal,
+                    left: value,
+                    right: expected,
+                });
+                self.terminate(MirTerminator::Branch {
+                    condition,
+                    then_target: arm_block,
+                    else_target: next,
+                });
+                Ok(None)
+            }
+            rsscript_syntax::ast::MatchPattern::Variant { name, bindings, .. } => {
+                if let Some(ok) = result_variant_tag(name) {
+                    let binding = self.result_pattern_binding(bindings)?;
+                    self.terminate(MirTerminator::MatchResult {
+                        value,
+                        ok_target: if ok { arm_block } else { next },
+                        err_target: if ok { next } else { arm_block },
+                    });
+                    Ok(Some(MatchBindings::Result { ok, binding }))
+                } else if let Some(some) = option_variant_tag(name) {
+                    let binding = self.option_pattern_binding(some, bindings)?;
+                    self.terminate(MirTerminator::MatchOption {
+                        value,
+                        some_target: if some { arm_block } else { next },
+                        none_target: if some { next } else { arm_block },
+                    });
+                    Ok(Some(MatchBindings::Option { some, binding }))
+                } else {
+                    let layout = self.variant_pattern_layout(name, bindings)?;
+                    self.terminate(MirTerminator::MatchVariant {
+                        value,
+                        expected: name.clone(),
+                        match_target: arm_block,
+                        else_target: next,
+                    });
+                    Ok(Some(MatchBindings::Variant(layout, bindings.clone())))
+                }
+            }
+            rsscript_syntax::ast::MatchPattern::Struct {
+                name,
+                fields,
+                has_rest,
+                ..
+            } if tuple_struct_arity(name).is_some() => {
+                if *has_rest {
+                    return self.unsupported("checked HIR tuple match rest pattern");
+                }
+                self.lower_tuple_pattern_edge(value, fields, arm_block, next)?;
+                Ok(Some(MatchBindings::Tuple(fields.clone())))
+            }
+            _ => self.unsupported(unsupported),
+        }
+    }
+
+    /// Emit a tuple pattern's element tests as a short-circuiting branch
+    /// ladder from the current block to `arm_block`, with every failure going
+    /// to `next`.
+    ///
+    /// A tuple pattern reaches lowering as the synthetic struct pattern
+    /// `__TupleN { item0: p0, .. }` (`parser/pattern.rs`). A tuple has a single
+    /// shape, so there is no tag to test: an element is refutable only where it
+    /// carries a literal, and an all-binding pattern like `(n, name)` is an
+    /// unconditional jump.
+    pub(super) fn lower_tuple_pattern_edge(
+        &mut self,
+        value: ValueId,
+        fields: &[rsscript_syntax::ast::MatchFieldPattern],
+        arm_block: BlockId,
+        next: BlockId,
+    ) -> Result<(), MirLoweringError> {
+        let mut tests = Vec::new();
+        self.collect_tuple_pattern_tests(fields, &mut Vec::new(), &mut tests)?;
+        let Some(last) = tests.len().checked_sub(1) else {
+            self.terminate(MirTerminator::Jump(arm_block));
+            return Ok(());
+        };
+        for (index, (path, literal)) in tests.into_iter().enumerate() {
+            let mut element = value;
+            for field in &path {
+                element = self.tuple_field(element, field);
+            }
+            let expected = self.literal(literal)?;
+            let condition = self.value();
+            self.emit(MirInstruction::Binary {
+                destination: condition,
+                op: MirBinaryOp::Equal,
+                left: element,
+                right: expected,
+            });
+            let then_target = if index == last {
+                arm_block
+            } else {
+                self.new_block()
+            };
+            self.terminate(MirTerminator::Branch {
+                condition,
+                then_target,
+                else_target: next,
+            });
+            if index != last {
+                self.current = then_target;
+            }
+        }
+        Ok(())
+    }
+
+    /// Flatten a tuple pattern's refutable elements into `(field path, literal)`
+    /// pairs, descending through nested tuple patterns. Pure: the projections
+    /// are only named here, and emitted by the caller in the block that tests
+    /// them.
+    fn collect_tuple_pattern_tests(
+        &self,
+        fields: &[rsscript_syntax::ast::MatchFieldPattern],
+        path: &mut Vec<String>,
+        tests: &mut Vec<(Vec<String>, MirLiteral)>,
+    ) -> Result<(), MirLoweringError> {
+        for field in fields {
+            if field.effect.is_some() {
+                return self.unsupported("checked HIR tuple match field effect");
+            }
+            let Some(pattern) = &field.pattern else {
+                // A bare `(a, _)` element binds or ignores; neither can fail.
+                continue;
+            };
+            path.push(field.name.clone());
+            match &**pattern {
+                rsscript_syntax::ast::MatchPattern::Binding { .. }
+                | rsscript_syntax::ast::MatchPattern::Wildcard(_) => {}
+                rsscript_syntax::ast::MatchPattern::Literal { value: literal, .. } => {
+                    tests.push((path.clone(), match_literal(literal, &self.function_name)?));
+                }
+                rsscript_syntax::ast::MatchPattern::Struct {
+                    name,
+                    fields,
+                    has_rest,
+                    ..
+                } if tuple_struct_arity(name).is_some() => {
+                    if *has_rest {
+                        return self.unsupported("checked HIR tuple match rest pattern");
+                    }
+                    self.collect_tuple_pattern_tests(fields, path, tests)?;
+                }
+                _ => return self.unsupported("nested checked HIR tuple match pattern"),
+            }
+            path.pop();
+        }
+        Ok(())
+    }
+
+    /// Bind a tuple pattern's named elements inside the arm's own block.
+    pub(super) fn lower_tuple_pattern_bindings(
+        &mut self,
+        value: ValueId,
+        fields: &[rsscript_syntax::ast::MatchFieldPattern],
+    ) -> Result<(), MirLoweringError> {
+        for field in fields {
+            if field.ignored {
+                continue;
+            }
+            if let Some(binding) = &field.binding {
+                let element = self.tuple_field(value, &field.name);
+                let place = self.place(binding);
+                self.emit(MirInstruction::WritePlace {
+                    place,
+                    value: element,
+                });
+                continue;
+            }
+            let Some(pattern) = &field.pattern else {
+                continue;
+            };
+            let element = self.tuple_field(value, &field.name);
+            self.lower_tuple_element_bindings(element, pattern)?;
+        }
+        Ok(())
+    }
+
+    fn lower_tuple_element_bindings(
+        &mut self,
+        element: ValueId,
+        pattern: &rsscript_syntax::ast::MatchPattern,
+    ) -> Result<(), MirLoweringError> {
+        match pattern {
+            rsscript_syntax::ast::MatchPattern::Binding { name, .. } => {
+                let place = self.place(name);
+                self.emit(MirInstruction::WritePlace {
+                    place,
+                    value: element,
+                });
+                Ok(())
+            }
+            rsscript_syntax::ast::MatchPattern::Wildcard(_)
+            | rsscript_syntax::ast::MatchPattern::Literal { .. } => Ok(()),
+            rsscript_syntax::ast::MatchPattern::Struct { name, fields, .. }
+                if tuple_struct_arity(name).is_some() =>
+            {
+                self.lower_tuple_pattern_bindings(element, fields)
+            }
+            _ => self.unsupported("nested checked HIR tuple match pattern"),
+        }
+    }
+
+    /// Read tuple element `field` off `value`.
+    fn tuple_field(&mut self, value: ValueId, field: &str) -> ValueId {
+        let destination = self.value();
+        self.emit(MirInstruction::GetField {
+            destination,
+            base: value,
+            field: field.to_owned(),
+        });
+        destination
     }
 
     /// Resolve the checked semantic layout before emitting a match edge. The
@@ -814,6 +963,7 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
         bindings: MatchBindings,
     ) -> Result<(), MirLoweringError> {
         match bindings {
+            MatchBindings::Tuple(fields) => self.lower_tuple_pattern_bindings(value, &fields),
             MatchBindings::Variant(layout, bindings) => {
                 self.lower_variant_pattern_bindings(value, &layout, &bindings)
             }
@@ -902,6 +1052,71 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 Ok(())
             }
             checked::HirStmt::Return { .. } => self.lower_statement(last),
+            // A branching statement in value position contributes the value of
+            // whichever branch runs, so each branch is lowered as an arm of its
+            // own and writes the same result place. This is what lets the
+            // checker type `match n { 0 => { if … { 5 } else { 6 } } … }` as
+            // `Int` and still have it build.
+            checked::HirStmt::If {
+                condition,
+                then_body,
+                else_body,
+                ..
+            } => {
+                let Some(else_body) = else_body else {
+                    return self.unsupported(
+                        "checked HIR match expression arm ending in an `if` with no `else`",
+                    );
+                };
+                let condition = self.lower_expression(condition)?;
+                let then_block = self.new_block();
+                let else_block = self.new_block();
+                let join_block = self.new_block();
+                self.terminate(MirTerminator::Branch {
+                    condition,
+                    then_target: then_block,
+                    else_target: else_block,
+                });
+                for (block, body) in [(then_block, then_body), (else_block, else_body)] {
+                    self.current = block;
+                    self.lower_match_expression_arm(body, result_place)?;
+                    if self.current_block().terminator.is_none() {
+                        self.terminate(MirTerminator::Jump(join_block));
+                    }
+                }
+                self.current = join_block;
+                Ok(())
+            }
+            checked::HirStmt::Match { value, arms, .. } => {
+                let value = self.lower_expression(value)?;
+                let join = self.new_block();
+                for arm in arms {
+                    if arm.guard.is_some() {
+                        return self.unsupported("checked HIR match expression guard");
+                    }
+                    let arm_block = self.new_block();
+                    let next = self.new_block();
+                    let bindings = self.lower_pattern_edge(
+                        value,
+                        &arm.pattern,
+                        arm_block,
+                        next,
+                        "non-literal checked HIR match expression pattern",
+                    )?;
+                    self.current = arm_block;
+                    if let Some(bindings) = bindings {
+                        self.lower_match_bindings(value, bindings)?;
+                    }
+                    self.lower_match_expression_arm(&arm.body, result_place)?;
+                    if self.current_block().terminator.is_none() {
+                        self.terminate(MirTerminator::Jump(join));
+                    }
+                    self.current = next;
+                }
+                self.terminate(MirTerminator::Unreachable);
+                self.current = join;
+                Ok(())
+            }
             _ => self.unsupported("checked HIR match expression arm without value"),
         }
     }

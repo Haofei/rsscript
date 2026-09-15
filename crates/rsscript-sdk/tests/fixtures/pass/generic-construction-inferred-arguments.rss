@@ -1,0 +1,46 @@
+// A generic construction is as provable as its arguments' types. Each argument
+// below is an expression form that used to carry no inferred type, which left
+// the call site's type arguments unproved and the construction unlowerable.
+struct Tagged<T: Struct> {
+    value: T
+    label: String
+}
+
+fn lookup(key: String) -> Option<Int> {
+    return Some(String.len(value: key))
+}
+
+// `?` on a typed `Option<T>` proves `T`.
+fn from_option(key: String) -> Option<fresh Tagged<Int>> {
+    let n = lookup(key: key)?
+    return Some(Tagged(value: n, label: "opt"))
+}
+
+// `true`, `false`, and `Unit` are literals the surface spells as identifiers.
+fn from_literal_ident() -> fresh Tagged<Bool> {
+    let flag = false
+    return Tagged(value: flag, label: "bool")
+}
+
+// A `match` used as a value whose first arm takes its own value from a nested
+// `if`: the arm proves nothing by itself, its branches do.
+fn from_branching_match(n: Int) -> fresh Tagged<Int> {
+    let score = match n {
+        0 => {
+            let base = 1
+            if base > 0 { 5 } else { 6 }
+        }
+        _ => { 20 }
+    }
+    return Tagged(value: score, label: "match")
+}
+
+fn main() -> Unit {
+    match from_option(key: "abcd") {
+        Some(tagged) => { Output.write(message: String.from_int(value: tagged.value)) }
+        None => { Output.write(message: "none") }
+    }
+    Output.write(message: String.from_bool(value: from_literal_ident().value))
+    Output.write(message: String.from_int(value: from_branching_match(n: 0).value))
+    return Unit
+}
