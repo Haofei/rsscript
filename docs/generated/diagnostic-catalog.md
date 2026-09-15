@@ -78,7 +78,7 @@ Machine-readable catalog: [diagnostic-catalog.json](diagnostic-catalog.json). St
 | `RS0603` | invalid fresh return type | `fresh` may only be used with struct types. Classes and resources are not fresh values. |
 | `RS0604` | fresh value requires local binding | A direct `fresh` expression may materialize as a managed temporary for `read`, but `mut` and `take` require an explicit `local` binding first. |
 | `RS0701` | resource field | Resource values cannot be stored directly in ordinary class or struct fields. Use them through `with`. |
-| `RS0702` | resource escape | A resource introduced by `with` must not escape the block through return, managed binding, manage, retention, or managed closure capture. |
+| `RS0702` | resource escape | A resource introduced by `with` must not escape the block through return, managed binding, manage, retention, or managed closure capture. A resource slot is host-owned, so a `.rss` body cannot construct one either: declare the producer bodyless in an `.rssi` interface. |
 | `RS0704` | resource in ordinary generic type | Ordinary generic containers must not be instantiated with resource types. |
 | `RS0706` | Result resource producer missing try | A `with` resource context consuming `Result<Resource, E>` must use explicit `?` on the producer expression. |
 | `RS0801` | local captured by managed closure | A closure bound with `let` is managed and may outlive clean local values. Use a local/noescape callback shape instead. |

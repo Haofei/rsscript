@@ -777,7 +777,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::RESOURCE_ESCAPE,
         title: "resource escape",
-        explanation: "A resource introduced by `with` must not escape the block through return, managed binding, manage, retention, or managed closure capture.",
+        explanation: "A resource introduced by `with` must not escape the block through return, managed binding, manage, retention, or managed closure capture. A resource slot is host-owned, so a `.rss` body cannot construct one either: declare the producer bodyless in an `.rssi` interface.",
     },
     DiagnosticExplanation {
         code: code::RESOURCE_GENERIC_ARGUMENT,

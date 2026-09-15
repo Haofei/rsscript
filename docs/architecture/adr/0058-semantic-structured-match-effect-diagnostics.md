@@ -2,7 +2,12 @@
 
 ## Status
 
-Accepted.
+Accepted; superseded in part on 2026-09-15. The structured-pattern effect
+diagnostic this record moved into semantics was removed when the two pattern
+forms were made consistent: an omitted scrutinee effect now means `read` for
+every pattern form, the same rule as a bare call argument (see
+`docs/spec/RSScript_Semantics_v0.7.md` §6.5). The ownership decision, that
+pattern-effect rules belong to semantics, still stands.
 
 ## Problem
 

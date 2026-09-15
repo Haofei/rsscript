@@ -322,10 +322,11 @@ Within one checked program, `pub` has exactly one *semantic* consequence today:
 > every argument (`checks/calls.rs`, `RS0201`).
 
 It also governs what appears in a package's `.rssi` public contract, which is
-checked against the implementation by `RS1301` at package granularity. The
-checker does **not** reject a cross-module reference to a non-`pub` declaration:
-module isolation rewrites the name regardless of `pub`. Cross-module privacy
-enforcement is *unspecified* in the current front end.
+checked against the implementation by `RS1301` at package granularity. A
+cross-module reference to a non-`pub` declaration, whether through `use` or a
+module-qualified path, is rejected with `RS0019` (§12.1.1); `use a.b.*` binds
+only the module's `pub` names. Declarations supplied by an `.rssi`, the prelude
+interfaces, and `main` are exempt.
 
 ### 1.7 Reserved names
 
@@ -1720,8 +1721,10 @@ The checker imposes **no** signature constraint on `main`: `fn main() -> Unit`,
 `fn main() -> Int`, `fn main() -> Result<Unit, String>`, and
 `fn main(args: List<String>) -> Unit` all check clean, and a file with **no**
 `main` at all also checks clean (`rss check` is a library-friendly check).
-Which of those the runner accepts, and how `args` is supplied, is a runner
-concern and is *unspecified* by the language front end. Note that `Arguments.*`
+Which of those the runner accepts, and how `args` is supplied, is the runner's
+half of the contract, stated in §12.1.1: `main` takes either no parameters or
+exactly one `List<String>` parameter that receives the program arguments, and
+any other shape is a runtime error. Note that `Arguments.*`
 (`stdlib/arguments/arguments.rssi`) takes an explicit `args: read List<String>`
 parameter precisely so that argument access is never ambient.
 
@@ -2906,8 +2909,10 @@ The algorithm, per scrutinee type:
 For structs, sums with payloads, and nested patterns the checker builds a
 **witness product** over the fields' finite domains (`Bool` → two witnesses,
 `Option` → `Some`/`None`, and so on) and requires every witness row to be
-matched. The product is capped at 512 rows; beyond that the match is treated as
-*not* provably exhaustive, so a very wide product needs an explicit `_`.
+matched. The product is capped at 512 rows
+(`rsscript_semantics::MAX_PATTERN_WITNESSES`); beyond that the match is treated
+as *not provably* exhaustive and needs an explicit `_`, and `RS0021` names the
+cap as the reason rather than implying a missing arm.
 
 Because the `List` rule needs a rest pattern to close the tail, a `match` over a
 list with only fixed-length arms is never exhaustive.
@@ -4269,6 +4274,7 @@ explanations).
 | `RS0007` | invalid retained parameter | §5.7 |
 | `RS0015` | unsupported syntax | §1.3, §1.4, §1.7, §1.8, §1.10, §2.3, §2.6, §2.12, §7.1, §9.3 |
 | `RS0018` | unresolved import | §1.4 |
+| `RS0019` | using a non-`pub` declaration from another module | §1.6 |
 | `RS0028` | invalid `self` parameter | §4.3, §7.1 |
 | `RS0035` | lowered name conflict / invalid pin | §4.1 |
 | `RS0040` | semantic analysis incomplete (work budget exhausted) | §3.4 |
