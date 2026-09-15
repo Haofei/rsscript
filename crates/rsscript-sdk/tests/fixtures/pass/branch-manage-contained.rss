@@ -1,9 +1,8 @@
+// interface: branch-manage-contained.rssi
 
 struct Image {
     pixels: Buffer
 }
-
-fn Image.load(path: Path) -> fresh Image
 
 fn maybe_store(path: Path, should_store: Bool) -> Unit {
     local image = Image.load(path)

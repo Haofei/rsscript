@@ -1,9 +1,8 @@
+// interface: noescape-local-callback.rssi
+// interface: ../interfaces/host-fs.rssi
 
 struct Picture
 struct PictureError
-
-fn Picture.load(path: Path) -> Result<fresh Picture, PictureError>
-fn Picture.inspect(picture: Picture) -> Unit
 
 fn apply(callback: noescape Fn()) -> Unit {
     callback()

@@ -1,0 +1,3 @@
+pub fn File.open_read(path: Path) -> Result<File, FileError>
+
+pub fn File.read_all(file: mut File) -> Result<fresh Bytes, FileError>

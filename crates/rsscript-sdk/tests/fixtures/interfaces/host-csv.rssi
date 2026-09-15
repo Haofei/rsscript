@@ -1,0 +1,9 @@
+// Host CSV streaming API. `Csv.parse_row` and `Row.field_string` come from
+// `stdlib/csv/csv.rssi`; opening and refilling a stream is host-provided, so
+// the corpus declares it here.
+
+resource CsvFile
+
+pub fn Csv.open_read(path: Path) -> Result<CsvFile, CsvError>
+
+pub fn Csv.read_into(file: mut CsvFile, buffer: mut RowBuffer) -> Result<Unit, CsvError>

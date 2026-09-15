@@ -1,3 +1,4 @@
+// interface: multiline-with-as-resource.rssi
 
 resource File {
     fd: Int

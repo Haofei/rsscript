@@ -1,4 +1,7 @@
 // expect: RS0603
-fn make_default<T>() -> fresh T {
-    return value
+
+// `fresh T` needs `T: Struct`; without the bound the checker cannot know the
+// return value is a freshly constructed struct.
+fn make_default<T>(value: T) -> fresh T {
+    return make_default(value)
 }

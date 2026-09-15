@@ -1,4 +1,5 @@
-// expect: RS0702
+// expect: RS0702 RS0704
+// interface: ../interfaces/file-resource.rssi
 
 resource File {
     fd: Int
@@ -18,7 +19,7 @@ fn register(registry: mut Registry, file: File) -> Unit
 }
 
 fn bad_retain(registry: mut Registry, path: Path) -> Unit {
-    with File.open(path)? as file {
+    with File.open(path) as file {
         register(registry: mut registry, file)
     }
 }

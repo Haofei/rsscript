@@ -1,5 +1,7 @@
 // expect: RS0702
 
+// interface: resource-wrapped-managed-closure-capture.rssi
+
 resource File {
     fd: Int
 
@@ -7,9 +9,6 @@ resource File {
         OS.close(fd: fd)
     }
 }
-
-fn File.open(path: Path) -> File
-fn File.read_all(file: mut File) -> String
 
 fn bad_capture(path: Path) -> Unit {
     with File.open(path) as file {

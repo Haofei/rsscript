@@ -1,4 +1,5 @@
 // expect: RS0501
+// interface: ../interfaces/image.rssi
 
 class Cache {
     entries: Map<String, Image>

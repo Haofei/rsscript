@@ -1,10 +1,10 @@
 // expect: RS0401
 
+// interface: noescape-callback-local-use-after-manage.rssi
+
 struct ImageData {
     size: Int
 }
-
-fn inspect(image: ImageData) -> Unit
 
 fn apply(callback: noescape Fn()) -> Unit {
     callback()

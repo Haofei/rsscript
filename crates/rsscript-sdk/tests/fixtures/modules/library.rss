@@ -1,0 +1,21 @@
+module lib.core
+
+pub const LIMIT: Int = 10
+
+const SECRET_LIMIT: Int = 99
+
+pub struct Widget {
+    id: Int
+}
+
+struct Blueprint {
+    id: Int
+}
+
+pub fn public_helper(value: Int) -> Int {
+    return value + 1
+}
+
+fn private_helper(value: Int) -> Int {
+    return value + 2
+}

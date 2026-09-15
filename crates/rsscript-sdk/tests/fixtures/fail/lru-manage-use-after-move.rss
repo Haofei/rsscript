@@ -1,4 +1,5 @@
 // expect: RS0401
+// interface: ../interfaces/image.rssi
 
 class LruCache {
     entries: Map<String, Image>

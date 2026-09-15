@@ -139,15 +139,15 @@ pub use completion::{
     semantic_completion_with_interface_sources, semantic_completion_with_interfaces,
 };
 pub use control_flow::{
-    bool_condition_diagnostic, conflicting_pattern_field_effect_diagnostic,
+    MAX_PATTERN_WITNESSES, bool_condition_diagnostic, conflicting_pattern_field_effect_diagnostic,
     definite_assignment_diagnostics, duplicate_pattern_field_diagnostic, for_iterable_diagnostic,
     function_fallthrough_diagnostics, loop_control_flow_diagnostics,
     managed_pattern_field_effect_diagnostic, match_expression_arm_type_diagnostics,
     match_guard_mutation_diagnostic, match_literal_type_diagnostic, match_pattern_type_diagnostic,
     match_scrutinee_diagnostic, match_variant_family_diagnostic, missing_return_value_diagnostics,
     non_exhaustive_match_diagnostic, omitted_pattern_fields_diagnostic,
-    structured_match_effect_diagnostic, unknown_pattern_field_diagnostic,
-    variant_pattern_arity_diagnostic, weakened_pattern_field_effect_diagnostic,
+    unknown_pattern_field_diagnostic, variant_pattern_arity_diagnostic,
+    weakened_pattern_field_effect_diagnostic,
 };
 pub use database::{
     AnalysisResult, CompilationSession, CompilationSessionStats, FrontendCompletion,
@@ -215,8 +215,8 @@ pub use local_flow_solver::{
 };
 pub use local_flow_state::{LocalFlowState, initial_local_flow_state, path_root};
 pub use module_isolation::{
-    demangle_diagnostics, isolate_module_namespaces, isolate_sources_with_interfaces,
-    unresolved_use_diagnostics,
+    cross_module_privacy_diagnostics, demangle_diagnostics, isolate_module_namespaces,
+    isolate_sources_with_interfaces, unresolved_use_diagnostics,
 };
 pub use moved_use_flow::moved_uses_from_flow;
 pub use operators::{
@@ -347,8 +347,9 @@ pub use take_handle_fields::take_handle_fields;
 pub use task_groups::task_group_async_let_diagnostics;
 pub use type_aliases::cyclic_type_alias_diagnostics;
 pub use types::{
-    ResolvedParamEffect, ResolvedType, ResolvedTypeKind, SemanticTypeFacts, TypeArena, TypeId,
-    TypeQualifiers,
+    BUILTIN_PROTOCOL_TABLE, BuiltinProtocolRow, ResolvedParamEffect, ResolvedType,
+    ResolvedTypeKind, SemanticTypeFacts, TypeArena, TypeId, TypeQualifiers, builtin_protocol_row,
+    builtin_type_satisfies_protocol,
 };
 pub(crate) use types::{
     builtin_generic_type_params, substitute_type_args, type_arg_names, type_root_name,

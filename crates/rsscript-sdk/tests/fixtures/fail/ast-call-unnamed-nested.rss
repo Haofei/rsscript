@@ -1,5 +1,5 @@
-// expect: RS0201
+// expect: RS0201 RS0204
 
-fn bad_nested(path: Path) -> Unit {
-    Output.write(message: String.concat("prefix", right: path))
+fn bad_nested(text: String) -> Unit {
+    Output.write(message: String.concat("prefix", right: text))
 }

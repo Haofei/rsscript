@@ -1,3 +1,5 @@
+// interface: ../interfaces/host-fs.rssi
+
 fn count_common_helpers(path: Path) -> Result<Int, FileError> {
     let mut items = List<Int>.new()
     List.push(list: mut items, value: 1)

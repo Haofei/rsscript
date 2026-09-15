@@ -1,4 +1,4 @@
-// expect: RS1002
+// expect: RS0015 RS1002
 
 fn widen(value: Int) -> Int64 {
     let widened = value as Int64

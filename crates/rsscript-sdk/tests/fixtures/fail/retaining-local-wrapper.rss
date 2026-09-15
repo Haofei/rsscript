@@ -1,18 +1,12 @@
 // expect: RS0501
 
+// interface: retaining-local-wrapper.rssi
+
 struct Image
 struct Holder {
     image: Image
 }
 struct Cache
-
-fn Cache.store_option(cache: mut Cache, value: Option<Image>) -> Unit
-    retains(value)
-
-fn Cache.store_result(cache: mut Cache, value: Result<Image, StoreError>) -> Unit
-    retains(value)
-
-fn make_holder() -> fresh Holder
 
 fn bad_store(cache: mut Cache) -> Unit {
     local holder = make_holder()

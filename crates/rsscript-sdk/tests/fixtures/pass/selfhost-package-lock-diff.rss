@@ -1,3 +1,4 @@
+// interface: ../interfaces/host-fs.rssi
 
 struct PackageLockDiffFacts {
     declared_risk: Int

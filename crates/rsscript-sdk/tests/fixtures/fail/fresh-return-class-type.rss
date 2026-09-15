@@ -1,4 +1,4 @@
-// expect: RS0603
+// expect: RS0602 RS0603
 
 class User {
     name: String

@@ -1,5 +1,7 @@
 // expect: RS0303
 
+// interface: field-handle-boundary-conflict.rssi
+
 class Cache {
     entries: Entries
     stats: Stats
@@ -16,9 +18,6 @@ struct Stats {
 struct State {
     cache: handle Cache
 }
-
-fn use_cache_parts(entries: mut Entries, stats: mut Stats) -> Unit
-fn make_state() -> fresh State
 
 fn run() -> Unit {
     local state = make_state()

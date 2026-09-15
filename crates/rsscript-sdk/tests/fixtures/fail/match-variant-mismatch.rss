@@ -1,4 +1,4 @@
-// expect: RS0209
+// expect: RS0021 RS0209
 
 fn maybe() -> Option<String> {
     return Some("x")

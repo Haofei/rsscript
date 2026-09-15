@@ -1,3 +1,4 @@
+// interface: field-move-base-split.rssi
 
 struct Workspace {
     id: Int
@@ -6,10 +7,6 @@ struct Workspace {
 struct Config {
     workspace: Workspace
 }
-
-fn inspect_workspace(workspace: Workspace) -> Unit
-fn publish(config: Config) -> Unit
-fn make_config() -> fresh Config
 
 fn run() -> Unit {
     local config = make_config()

@@ -1,5 +1,6 @@
 // expect: RS0702
 
+// interface: result-resource-producer-binding.rssi
 
 resource LogFile {
     fd: Int
@@ -8,8 +9,6 @@ resource LogFile {
 class IOError {
     code: Int
 }
-
-fn LogFile.open(path: Path) -> Result<LogFile, IOError>
 
 fn bad(path: Path) -> Result<Unit, IOError> {
     let file = LogFile.open(path)?

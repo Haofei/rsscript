@@ -1,0 +1,3 @@
+pub fn Image.load(path: Path) -> fresh Image
+
+pub fn Image.resize(image: mut Image, width: Int, height: Int) -> Unit

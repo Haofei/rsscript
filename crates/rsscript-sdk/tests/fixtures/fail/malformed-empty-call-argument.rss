@@ -1,4 +1,4 @@
-// expect: RS0015
+// expect: RS0015 RS0201 RS0203
 
 fn main() -> Unit {
     Output.write(, message: "hello")

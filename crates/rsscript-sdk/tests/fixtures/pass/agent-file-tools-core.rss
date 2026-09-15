@@ -1,9 +1,11 @@
+// interface: ../interfaces/host-fs.rssi
+
 fn write_workspace_file(root: Path, relative: String, text: String) -> Result<Unit, String> {
     match Workspace.resolve(root, relative) {
         Ok(path) => {
             match path.parent() {
                 Some(parent) => {
-                    match Directory.create_dir_all(path: parent) {
+                    match Directory.create_all(path: parent) {
                         Ok(unit) => {
                         }
                         Err(error) => {

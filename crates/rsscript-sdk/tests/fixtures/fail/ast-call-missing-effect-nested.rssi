@@ -1,0 +1,5 @@
+resource File
+
+pub fn File.open_write(path: Path) -> Result<File, IOError>
+
+pub fn File.write(file: mut File, data: String) -> Result<Unit, IOError>

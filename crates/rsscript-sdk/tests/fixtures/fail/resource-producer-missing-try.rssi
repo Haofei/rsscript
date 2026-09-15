@@ -1,0 +1,3 @@
+pub fn File.open_result(path: Path) -> Result<File, IOError>
+
+pub fn File.stat(file: File) -> Unit

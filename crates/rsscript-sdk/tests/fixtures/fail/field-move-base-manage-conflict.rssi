@@ -1,0 +1,3 @@
+pub fn use_config(config: Config, workspace: Workspace) -> Unit
+
+pub fn make_config() -> fresh Config

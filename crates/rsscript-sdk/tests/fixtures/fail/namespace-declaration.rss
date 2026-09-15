@@ -1,9 +1,9 @@
 // expect: RS0015
+// interface: namespace-declaration.rssi
+
 namespace Json
 
 opaque struct JsonValue
-
-pub fn parse(text: String) -> Result<fresh JsonValue, JsonError>
 
 fn main() -> Unit {
     return Unit

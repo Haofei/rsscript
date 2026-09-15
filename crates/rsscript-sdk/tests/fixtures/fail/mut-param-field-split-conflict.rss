@@ -1,4 +1,6 @@
 // expect: RS0309
+// interface: mut-param-field-split-conflict.rssi
+
 struct Cache {
     value: Int
 }
@@ -11,8 +13,6 @@ struct State {
     cache: Cache
     buffer: Buffer
 }
-
-fn use_parts(cache: mut Cache, buffer: mut Buffer) -> Unit
 
 fn run(state: mut State) -> Unit {
     use_parts(cache: mut state.cache, buffer: mut state.buffer)

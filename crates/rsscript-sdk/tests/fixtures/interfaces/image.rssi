@@ -1,0 +1,8 @@
+// The `Image` demo API the ownership fixtures are written against. Each
+// fixture declares `struct Image` itself; only the host functions live here.
+
+pub fn Image.load(path: Path) -> fresh Image
+
+pub fn Image.inspect(image: Image) -> Unit
+
+pub fn Image.resize(image: mut Image, width: Int, height: Int) -> Unit

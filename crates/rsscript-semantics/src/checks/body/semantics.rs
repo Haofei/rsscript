@@ -667,13 +667,6 @@ pub(super) fn check_match_pattern_effects(
         .map(type_root_name)
         .is_some_and(|root| analyzer.hir.type_kind(root) == Some(HirTypeKind::Class));
     for arm in arms {
-        if let Some(diagnostic) = rsscript_semantics::structured_match_effect_diagnostic(
-            &arm.pattern,
-            scrutinee_effect,
-            &arm.span,
-        ) {
-            analyzer.diagnostics.push(diagnostic);
-        }
         check_pattern_field_effects(
             analyzer,
             scrutinee_type.as_deref(),
@@ -1317,5 +1310,63 @@ pub(super) fn check_expr_semantics_with_context(
         | HirExpr::String { .. }
         | HirExpr::Char { .. }
         | HirExpr::Unknown(_) => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::analyze_source;
+    use crate::diagnostic::code;
+
+    const POINT: &str = "struct Point {\n    x: Int,\n    y: Int\n}\n\n";
+
+    fn codes(source: &str) -> Vec<String> {
+        let mut codes = analyze_source("pattern-effects.rss", source)
+            .into_iter()
+            .map(|diagnostic| diagnostic.code)
+            .collect::<Vec<_>>();
+        codes.sort();
+        codes.dedup();
+        codes
+    }
+
+    /// An omitted scrutinee effect is `read` for every pattern form, so a
+    /// struct pattern and a variant pattern are accepted on the same terms
+    /// (spec §6.5).
+    #[test]
+    fn an_omitted_scrutinee_effect_reads_for_every_pattern_form() {
+        let structured = format!(
+            "{POINT}fn describe(point: read Point) -> Int {{\n    match point {{\n        Point {{ x, y }} => {{ return x + y }}\n    }}\n}}\n"
+        );
+        assert!(codes(&structured).is_empty(), "{:?}", codes(&structured));
+
+        let variant = "fn pick(value: Option<Int>) -> Int {\n    match value {\n        Some(n) => { return n }\n        None => { return 0 }\n    }\n}\n";
+        assert!(codes(variant).is_empty(), "{:?}", codes(variant));
+
+        let list = "fn head(values: read List<Int>) -> Int {\n    match values {\n        [first, ..rest] => { return first }\n        [] => { return 0 }\n    }\n}\n";
+        assert!(codes(list).is_empty(), "{:?}", codes(list));
+    }
+
+    /// Spelling the effect explicitly is still legal and means the same thing.
+    #[test]
+    fn spelling_read_matches_omitting_it() {
+        let explicit = format!(
+            "{POINT}fn describe(point: read Point) -> Int {{\n    match read point {{\n        Point {{ x, y }} => {{ return x + y }}\n    }}\n}}\n"
+        );
+        assert!(codes(&explicit).is_empty(), "{:?}", codes(&explicit));
+    }
+
+    /// Field effects stay monotonic against the defaulted `read` scrutinee.
+    #[test]
+    fn a_field_effect_may_not_exceed_the_defaulted_scrutinee_effect() {
+        let source = format!(
+            "{POINT}fn bump(point: mut Point) -> Int {{\n    match point {{\n        Point {{ x: mut a, y }} => {{ return y }}\n    }}\n}}\n"
+        );
+        assert_eq!(codes(&source), vec![code::READ_VIEW_MUTATION.to_string()]);
+
+        let allowed = format!(
+            "{POINT}fn bump(point: mut Point) -> Int {{\n    match mut point {{\n        Point {{ x: mut a, y }} => {{ return y }}\n    }}\n}}\n"
+        );
+        assert!(codes(&allowed).is_empty(), "{:?}", codes(&allowed));
     }
 }

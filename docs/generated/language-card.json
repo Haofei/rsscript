@@ -15,7 +15,7 @@
   "contextual_keyword_count": 2,
   "parser_keyword_count": 17,
   "builtin_constant_count": 7,
-  "diagnostic_count": 107,
+  "diagnostic_count": 108,
   "core_interface_count": 35,
   "diagnostic_fixes": {
     "scope": "instance_only",

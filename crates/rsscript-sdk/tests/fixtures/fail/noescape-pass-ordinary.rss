@@ -1,8 +1,7 @@
-// expect: RS0802
-struct Callback
+// expect: RS0207 RS0802
+// interface: noescape-pass-ordinary.rssi
 
-fn store(callback: Callback) -> Unit
-    retains(callback)
+struct Callback
 
 fn bad(callback: noescape Fn()) -> Unit {
     store(callback)

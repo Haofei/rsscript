@@ -1,0 +1,9 @@
+// expect: RS0032
+
+// A `Map` key must be `Hashable`, and `Float` is not (spec §2.1).
+
+fn index_by_float() -> fresh Map<Float, Int> {
+    let mut counts = Map<Float, Int>.new()
+    Map.insert(map: mut counts, key: 1.0, value: 1)
+    return counts
+}

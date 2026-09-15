@@ -1,10 +1,10 @@
 // expect: RS0309
+// interface: managed-field-split-conflict.rssi
+
 class Cache {
     a: Buffer
     b: Buffer
 }
-
-fn touch(x: mut Buffer, y: mut Buffer) -> Unit
 
 fn run(cache: mut Cache) -> Unit {
     touch(x: mut cache.a, y: mut cache.b)

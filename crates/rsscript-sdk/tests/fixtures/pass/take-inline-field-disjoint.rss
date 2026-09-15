@@ -1,3 +1,4 @@
+// interface: take-inline-field-disjoint.rssi
 
 struct Image
 
@@ -5,12 +6,6 @@ struct Pair {
     left: Image
     right: Image
 }
-
-fn make_pair(path: Path) -> fresh Pair
-
-fn consume(image: take Image) -> Unit
-
-fn inspect(image: Image) -> Unit
 
 fn ok_take_disjoint(path: Path) -> Unit {
     local pair = make_pair(path)

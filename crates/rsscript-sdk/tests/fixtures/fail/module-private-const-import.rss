@@ -1,0 +1,10 @@
+// expect: RS0019
+// source: ../modules/library.rss
+
+module app
+
+use lib.core.SECRET_LIMIT
+
+fn run() -> Int {
+    return SECRET_LIMIT
+}

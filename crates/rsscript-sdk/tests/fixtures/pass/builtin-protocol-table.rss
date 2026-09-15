@@ -1,0 +1,24 @@
+// Every builtin scalar except `Float` satisfies `Eq`, `Ord`, `Hashable`, and
+// `Clone` (spec §2.1). `Char` and `Byte` are ordered, so they sort; so are the
+// sized integer widths.
+
+fn sort_chars(values: mut List<Char>) -> Unit {
+    List.sort(list: mut values)
+    return Unit
+}
+
+fn sort_bytes(values: mut List<Byte>) -> Unit {
+    List.sort(list: mut values)
+    return Unit
+}
+
+fn sort_widths(values: mut List<Int64>) -> Unit {
+    List.sort(list: mut values)
+    return Unit
+}
+
+fn index_by_char() -> fresh Map<Char, Int> {
+    let mut counts = Map<Char, Int>.new()
+    Map.insert(map: mut counts, key: 'a', value: 1)
+    return counts
+}

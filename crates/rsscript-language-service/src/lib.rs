@@ -794,7 +794,9 @@ mod tests {
             "lib.rss",
             1,
             DocumentKind::Source,
-            "module lib\nfn value() -> Int { return 1 }\n",
+            // `pub`, because a cross-module import of a private declaration is
+            // now `RS0019`.
+            "module lib\npub fn value() -> Int { return 1 }\n",
         );
         service.set_file(
             "other.rss",
@@ -824,7 +826,7 @@ mod tests {
             "lib.rss",
             2,
             DocumentKind::Source,
-            "module lib\nfn value() -> String { return \"changed\" }\n",
+            "module lib\npub fn value() -> String { return \"changed\" }\n",
         );
         let changed = service.diagnostics("main.rss");
         assert!(

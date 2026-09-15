@@ -1,5 +1,7 @@
 // expect: RS0207
 
+struct BuildError
+
 fn apply(callback: noescape Fn() -> Result<String, BuildError>) -> Unit {
     return Unit
 }

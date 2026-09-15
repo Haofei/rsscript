@@ -1,11 +1,11 @@
 // expect: RS0301
 
+// interface: handle-field-wrapper-to-local.rssi
+
 struct Rules
 struct Holder {
     rules: handle Rules
 }
-
-fn make_holder() -> fresh Holder
 
 fn bad() -> Unit {
     local holder = make_holder()

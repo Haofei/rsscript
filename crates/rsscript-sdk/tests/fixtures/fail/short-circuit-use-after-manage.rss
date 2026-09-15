@@ -1,4 +1,5 @@
-// expect: RS0401
+// expect: RS0210 RS0401
+// interface: ../interfaces/image.rssi
 
 struct Image {
     pixels: Buffer

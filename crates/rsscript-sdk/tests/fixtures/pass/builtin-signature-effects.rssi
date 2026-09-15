@@ -1,0 +1,8 @@
+pub fn Image.load(path: Path) -> Result<fresh Image, ImageError>
+
+pub fn Image.resize(image: mut Image, width: Int, height: Int) -> Unit
+
+pub fn Image.save(image: Image, path: Path) -> Result<Unit, ImageError>
+
+pub fn RetainedImageStore.store(cache: mut RetainedImageStore, image: Image) -> Unit
+    retains(image)

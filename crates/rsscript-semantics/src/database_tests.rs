@@ -587,7 +587,11 @@ fn document_semantic_analysis_tracks_imported_source_revisions() {
         )
         .unwrap();
     session
-        .set_file("lib.rss", "module lib\nfn value() -> Int { return 1 }\n")
+        // `pub`: a cross-module import of a private declaration is `RS0019`.
+        .set_file(
+            "lib.rss",
+            "module lib\npub fn value() -> Int { return 1 }\n",
+        )
         .unwrap();
     session
         .set_file(
@@ -623,7 +627,7 @@ fn document_semantic_analysis_tracks_imported_source_revisions() {
     session
         .set_file(
             "lib.rss",
-            "module lib\nfn value() -> String { return \"changed\" }\n",
+            "module lib\npub fn value() -> String { return \"changed\" }\n",
         )
         .unwrap();
     let changed = session

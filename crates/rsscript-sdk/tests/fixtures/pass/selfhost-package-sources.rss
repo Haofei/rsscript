@@ -1,3 +1,4 @@
+// interface: ../interfaces/host-fs.rssi
 
 struct PackageSourceSetFacts {
     total_files: Int

@@ -1,4 +1,5 @@
-// expect: RS0701 RS0702
+// expect: RS0208 RS0701 RS0702
+// interface: ../interfaces/file-resource.rssi
 
 resource File {
     fd: Int
@@ -13,7 +14,7 @@ struct Logger {
 }
 
 fn leak(path: Path) -> Unit {
-    with File.open(path)? as file {
+    with File.open(path) as file {
         return file
     }
 }

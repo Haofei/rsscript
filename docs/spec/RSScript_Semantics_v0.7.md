@@ -483,6 +483,40 @@ fn take_it(value: Widget) -> Unit {
 }
 ```
 
+#### Builtin protocol conformance
+
+`BUILTIN_PROTOCOL_TABLE` in `crates/rsscript-semantics/src/types.rs` is the
+single source of truth for which builtin type satisfies which builtin protocol.
+Both the generic-bound check (`generic_constraints.rs`, `RS0032`, §3.5) and the
+derive check (`derive_fields.rs`, `RS0211`, §2.12) read it, so the answer cannot
+differ between a bound and a derive.
+
+| Type | `Eq` | `Ord` | `Hashable` | `Clone` |
+| --- | --- | --- | --- | --- |
+| `Int`, `Int8`, `Int16`, `Int32`, `Int64` | yes | yes | yes | yes |
+| `UInt`, `UInt8`, `UInt16`, `UInt32`, `UInt64` | yes | yes | yes | yes |
+| `Byte` | yes | yes | yes | yes |
+| `Char` | yes | yes | yes | yes |
+| `Bool` | yes | yes | yes | yes |
+| `Unit` | yes | yes | yes | yes |
+| `String` | yes | yes | yes | yes |
+| `Float`, `Float32`, `Float64` | **no** | **no** | **no** | yes |
+
+`Float` is the only asymmetric row, and deliberately so: IEEE-754 equality is
+not reflexive (`NaN != NaN`) and its ordering is partial, so a total `Eq`, a
+total `Ord`, and a hash consistent with equality are all unavailable. `Float` is
+still `Clone`, and still Copy (§2.2) — Copy and `Clone` are about storage, the
+other three are about semantics.
+
+A type name that is not a row above gets no answer from the table; the checker
+falls through to the container rule, the caller's own bounds, a visible `impl`,
+or a declared derive (§3.5).
+
+`Bytes`, `Buffer`, `Path`, `Url`, `Fd`, `StringView`, `BytesView`,
+`BufferView`, and the error types are **not** in the table: the front end has no
+builtin conformance for them, so a bound on one is `RS0032` unless an interface
+declares an `impl`.
+
 ### 2.2 Which types are Copy
 
 `crates/rsscript-semantics/src/value_properties.rs` owns the single source of
@@ -761,9 +795,19 @@ to `__Tuple2(item0: a, item1: b)` and `(T, U)` to `__Tuple2<T, U>`;
 `expand_tuple_destructuring` turns `let (a, b) = e` into a temporary plus
 `.itemN` projections.
 
-Because the checker recognises a generic type variable only as a single
-uppercase letter, tuple type parameters are `A`, `B`, `C`, …, capping tuple
-arity at 26.
+`desugar.rs::tuple_type_param` names element `i`'s type parameter
+`(b'A' + i) as char`, so the parameters are `A`, `B`, `C`, … . Past `Z` that
+arithmetic produces characters that are not identifiers at all (`[`, `\`, `]`,
+`^`, …).
+
+The front end does **not** cap tuple arity, and earlier drafts of this document
+were wrong to say it caps at 26: substitution is by declared parameter name, not
+by spelling, so element types still resolve correctly above 26 — `(Int, …, Int,
+String)` at arity 64 still reports `RS0208` against the right element. What the
+generated names do mean is that **arity above 26 must not be relied on**: the
+synthetic parameter names stop being valid identifiers, so nothing downstream of
+the checker is expected to handle them. Treat 26 as the supported ceiling and the
+front end's silence above it as an accident, not a contract.
 
 **Accepted**
 
@@ -888,6 +932,28 @@ looks like one, or an operand that is a type name rather than a value, is
 | `&& \|\|` | `Bool` | `Bool` |
 
 A mismatch is `RS0210`.
+
+#### `Int` arithmetic traps; it does not wrap
+
+`+`, `-`, `*`, `/`, and `%` on `Int` are **checked**. The VM evaluates them with
+Rust's `checked_add`/`checked_sub`/`checked_mul`/`checked_div`/`checked_rem`
+(`crates/rsscript-vm/src/reg_vm/value_ops.rs::eval_numeric_binary`), and on
+overflow raises the language-level runtime error
+`integer <operation> overflow: <lhs> and <rhs> exceed the Int range`
+(`reg_vm/mod.rs::int_overflow_error`) rather than wrapping or panicking the host.
+Division and modulo by zero are the same kind of runtime error
+(`integer division by zero`, `integer modulo by zero`). `Int` is 64-bit signed,
+so the trapping range is `i64`.
+
+This is a *runtime* rule: the front end does not reject an expression that will
+overflow, and there is no compile-time constant evaluation to catch it. A program
+that wants wrapping must say so with `Math.wrapping_add` and friends
+(`stdlib/math/math.rssi`).
+
+Float arithmetic is IEEE-754 and does not trap: `+`, `-`, `*`, `/` on `Float` are
+the plain Rust operators, so overflow yields an infinity and `0.0 / 0.0` yields
+`NaN`. `%` on `Float` is rejected by the VM. This is the runtime counterpart of
+`Float` having no `Eq`/`Ord`/`Hashable` row (§2.1).
 
 **Rejected — `RS0210`**
 
@@ -1188,11 +1254,12 @@ fn wrap<T>(value: take T) -> fresh T {
 concrete type satisfies a protocol bound at a resolved call site. In order:
 
 1. `Dyn<P>` satisfies `P`.
-2. Builtin structural facts:
-   * `Ord` is satisfied by `Int`, `String`, `Bool`;
-   * `Hashable` and `Eq` by `Int*`, `UInt*`, `Bool`, `Byte`, `Char`, `Unit`,
-     `String`;
-   * `Clone` by all of those plus `Float*`.
+2. Builtin conformance, read from the one table in §2.1
+   (`types.rs::BUILTIN_PROTOCOL_TABLE`). A row in that table is the final
+   answer for that type: every integer width, `Byte`, `Char`, `Bool`, `Unit`,
+   and `String` satisfy `Eq`, `Ord`, `Hashable`, and `Clone`; `Float`,
+   `Float32`, and `Float64` satisfy `Clone` and nothing else, and do **not**
+   fall through to the steps below.
 3. For `Hashable` / `Eq` / `Clone`, a `List`, `Option`, or `Result` satisfies the
    bound iff every type argument does (recursively).
 4. A caller's own type parameter with a matching `T: P` bound satisfies `P`.
@@ -1204,9 +1271,8 @@ concrete type satisfies a protocol bound at a resolved call site. In order:
 Nothing else. In particular structural method matching never satisfies a bound —
 protocols are nominal.
 
-Note the asymmetry in step 2: `Float` is `Clone` but neither `Ord` nor `Eq`, and
-`Bool` is `Ord` but `Byte`/`Char` are not. A failure is `RS0032`, with guidance
-specialised for `Hashable` and `Eq`.
+The only asymmetry in step 2 is `Float`, which is `Clone` and nothing else. A
+failure is `RS0032`, with guidance specialised for `Hashable` and `Eq`.
 
 **Rejected — `RS0032`** — `List.sort<T: Ord>` over a struct with no `Ord`
 
@@ -1593,9 +1659,13 @@ fn main() -> Unit {
   `return`, `break`, and `continue` cannot fall through; an `if` with **both**
   branches can fall through iff either branch can; a non-empty `match` or
   `select` can fall through iff any arm can; a `with` can fall through iff its
-  body can. Everything else — including `loop` and `while` — is treated as
-  falling through, so an infinite `loop { }` with no trailing `return` still
-  produces `RS0208`.
+  body can. A `loop { … }` — the unconditional form only — can fall through iff
+  its body contains a `break` that targets *it*; with no such `break` the loop
+  is diverging, the statements after it are unreachable, and the function needs
+  no trailing `return`. `break` is unlabelled, so a `break` inside a nested
+  `loop`/`while`/`for`, or inside a closure body, does not target the outer
+  loop. Everything else — including `while` and `for`, whose condition or
+  iterator may be false or empty on entry — is treated as falling through.
 * A function whose return type mentions one of its own generic parameters is
   exempt from the fall-through check.
 * An explicit bare `return` in a non-`Unit` function is `RS0208`.
@@ -2535,10 +2605,10 @@ Three loop forms (`ast.rs`):
 `loop`/`while`/`for` *of the same control-flow region*; a closure body starts a
 new region, so a `break` written inside a closure does not reach a loop around
 the closure. With no such enclosing loop the statement is `RS0016`
-(`control_flow.rs::loop_control_flow_diagnostics`). Note that a `loop` is
-treated as *possibly falling through* by the return check (§4.7), so an
-unconditional `loop { }` at the end of a non-`Unit` function still produces
-`RS0208`.
+(`control_flow.rs::loop_control_flow_diagnostics`). Because `break` is the only
+way out of an unconditional `loop`, a `loop { … }` whose body contains no
+`break` targeting it is *diverging*: the return check (§4.7) treats it as not
+falling through, so it may end a non-`Unit` function with no trailing `return`.
 
 The `for` element binding is a read view for non-Copy struct elements (§5.6).
 
@@ -2574,6 +2644,31 @@ fn main() -> Unit {
         break
     }
     return Unit
+}
+```
+
+**Accepted** — a diverging `loop` ends a non-`Unit` function
+
+```rsscript
+fn serve(start: Int) -> Int {
+    let mut count = start
+    loop {
+        count = count + 1
+    }
+}
+```
+
+**Rejected — `RS0208`** — the `break` makes the loop completable
+
+```rsscript
+fn serve(start: Int) -> Int {
+    let mut count = start
+    loop {
+        count = count + 1
+        if count > 10 {
+            break
+        }
+    }
 }
 ```
 
@@ -2688,33 +2783,43 @@ fn area(shape: Shape) -> Int {
 }
 ```
 
-### 6.5 Scrutinee effects on structured patterns
+### 6.5 Scrutinee effects on patterns
 
 A `match` may carry a scrutinee effect: `match read x { … }`,
-`match mut x { … }`, `match take x { … }`. The rule
-(`control_flow.rs::structured_match_effect_diagnostic`, `RS0202`):
+`match mut x { … }`, `match take x { … }`.
 
-> A **structured** pattern — one that projects a field place, i.e. a struct
-> pattern, a positional variant pattern with bindings, or a list pattern —
-> requires an explicit scrutinee effect. Literal patterns, bare variant names,
-> plain bindings, and wildcards do not project a place and are outside the rule.
+> **An omitted scrutinee effect is `read`**, for every pattern form. This is the
+> same rule as the call site (§4.6, "a bare argument *is* `read`"): `match x`
+> and `match read x` are the same match, exactly as `f(bag: b)` and
+> `f(bag: read b)` are the same call.
 
-Additional per-field rules in the same family:
+The rule is uniform across pattern forms. A variant pattern that binds a payload
+(`Some(n)`) and a struct pattern that binds a field (`Point { x }`) project the
+same kind of place, so they answer to the same rule: under a `read` scrutinee a
+Copy field is bound by copy and a non-Copy field is bound as a read view, and
+neither form needs the effect spelled. Until v0.7 the struct and list forms
+demanded an explicit effect (`RS0202`) while the variant form did not; the
+demand was purely syntactic — the per-field rules below already treated an
+omitted effect as `read` — so it has been removed.
+
+What still constrains a pattern is the per-field effect, and those rules are
+unchanged:
 
 | Rule | Diagnostic |
 | --- | --- |
-| a field pattern requesting `mut`/`take` on a **managed class** value | `managed_pattern_field_effect_diagnostic` |
-| a field effect stronger than the scrutinee effect | `weakened_pattern_field_effect_diagnostic` |
+| a field pattern requesting `mut`/`take` on a **managed class** value | `managed_pattern_field_effect_diagnostic`, `RS0310` |
+| a field effect stronger than the scrutinee effect (spelled or defaulted `read`) | `weakened_pattern_field_effect_diagnostic`, `RS0310` |
 | the same field projected twice when either projection mutates or takes | `conflicting_pattern_field_effect_diagnostic` |
 | the same field listed twice | `duplicate_pattern_field_diagnostic` |
-| a field name not declared by the type | `unknown_pattern_field_diagnostic` |
-| declared fields omitted without `..` | `omitted_pattern_fields_diagnostic` |
+| a field name not declared by the type | `unknown_pattern_field_diagnostic`, `RS0025` |
+| declared fields omitted without `..` | `omitted_pattern_fields_diagnostic`, `RS0209` |
 
-Note the asymmetry that catches people out: `match value { Some(n) => … }` on an
-`Option<Int>` is fine without an effect, but `match point { Point { x } => … }`
-is `RS0202`.
+Field effects are monotonic: a field may never request more authority than the
+scrutinee provides. So `match point { Point { x: mut a } => … }` is `RS0310` —
+the scrutinee defaulted to `read` — and writing `match mut point` makes it legal
+(`crates/rsscript-semantics/src/checks/body/semantics.rs::check_pattern_field_effects`).
 
-**Rejected — `RS0202`**
+**Accepted** — the two pattern forms behave the same way
 
 ```rsscript
 struct Point {
@@ -2725,6 +2830,28 @@ struct Point {
 fn describe(point: read Point) -> Int {
     match point {
         Point { x, y } => { return x + y }
+    }
+}
+
+fn pick(value: Option<Int>) -> Int {
+    match value {
+        Some(n) => { return n }
+        None => { return 0 }
+    }
+}
+```
+
+**Rejected — `RS0310`** — a field asking for more than the scrutinee gives
+
+```rsscript
+struct Point {
+    x: Int,
+    y: Int
+}
+
+fn bump(point: mut Point) -> Int {
+    match point {
+        Point { x: mut a, y } => { return y }
     }
 }
 ```
@@ -3259,6 +3386,29 @@ a producer when it is a call whose type is a resource
 (`ResourceProducerKind::ResultResource`). Anything but a `with` head — a `let`
 binding, a `return`, an argument position — is `RS0702`.
 
+A **resource constructor counts as a call**, so `return Handle(fd: id)` inside a
+`.rss` body is `RS0702` like any other producer that reaches no `with`. This is
+deliberate, not an oversight in the producer classifier:
+
+* A resource slot is host-owned. `docs/spec/RSScript_Execution_Spec_v0.1.md`:
+  "Resource slots are opaque and provider-owned at the external boundary;
+  cleanup occurs on normal return, error, cancellation, and deadline exit." A
+  value a `.rss` body builds out of ordinary fields has no provider behind it
+  and no declared cleanup contract, so nothing could release it.
+* There is no lowering for it. MIR has `AcquireResource`/`ReleaseResource`, and
+  its verifier "requires every reachable return path to release all live
+  resources" (ADR 0010). A function that returned a constructed resource would
+  be a verified leak; ADR 0010 states that transfer semantics across a function
+  boundary "remain separate milestones".
+* It is the rule §8.6 already states from the other direction: a resource's
+  lifetime is exactly one lexical scope, and there is no way to hand one back to
+  a caller.
+
+So a resource is always produced by a **bodyless function declared in an
+`.rssi` interface**, which is the point at which the host contract exists. A
+`resource` type may still be *declared* in a `.rss` file — including its `drop`
+body — it just cannot be constructed there.
+
 The examples in this section therefore use a companion interface file. They were
 checked with
 `rss check --interface fs.rssi <file>.rss`:
@@ -3657,6 +3807,18 @@ is chosen, every losing arm's task is **cancelled** and reaped
 (`cancel_select_losers`). Cancellation drains a cancelled task's lexical resource
 scopes, including when the task is parked.
 
+**Tie-breaking is by source order.** When more than one arm has finished by the
+time the `select` is resolved, the winner is the finished arm with the **lowest
+arm index** — the one written first. `resolve_wait` picks it with
+`handles.iter().enumerate().find(|(_, h)| … done.is_some())`, which scans the arm
+handles in declaration order, so the choice is deterministic and does not depend
+on completion timing, task ids, or hashing. The winning arm's index is what the
+`select` writes to its winner register.
+
+Being deterministic is not the same as being a priority: an arm that is *not*
+ready never wins over one that is. Source order only decides between arms that
+are already ready at the same resolution point.
+
 **Accepted**
 
 ```rsscript
@@ -3948,13 +4110,24 @@ Guaranteed (`docs/spec/RSScript_Execution_Spec_v0.1.md`,
   `Result`/`Option` contract.
 * **Deadlines are monotonic.** `MonotonicDeadline` is an `Instant`, not a wall
   clock.
+* **`select` tie-breaking is by source order.** Among arms that have finished at
+  the moment the `select` resolves, the earliest-written arm wins (§9.4). This
+  is a guarantee, not an implementation accident.
+* **Execution is single-threaded and cooperative.** `run_scheduler` drives one
+  task at a time from a FIFO ready queue (`VecDeque`, `push_back`/`pop_front`);
+  a task runs until it suspends or completes. A newly created task is pushed to
+  the back of the ready queue, so sibling `async let` children *start* in
+  declaration order.
 
 Explicitly **not** guaranteed, and *unspecified* at the language level:
 
-* **Scheduling order.** Nothing specifies which ready child runs first, whether
-  scheduling is fair, or in what order sibling `async let` children start.
-* **`select` tie-breaking.** When two arms are ready simultaneously, which one
-  wins is unspecified.
+* **Wake order after a park.** `satisfy_waiters` scans the task table, which is
+  a `HashMap`, so when one event makes several parked tasks runnable at once the
+  order in which they are woken is not defined. Only the *start* order of tasks
+  and the FIFO ready queue are stable; a program must not depend on which of
+  several simultaneously-unblocked tasks resumes first.
+* **Fairness.** Nothing bounds how long a ready task may wait, and a task that
+  never suspends never yields.
 * **Parallelism.** Nothing in the language says whether children run on separate
   OS threads or are interleaved on one. Purity and parallelism are inferred from
   validated source or supplied by provider metadata.
@@ -4239,24 +4412,105 @@ and finding no enforcing code.
 
 ### 12.1 Genuinely unspecified
 
-* **`main`'s signature.** The checker imposes no constraint (§4.9). Which return
-  types the runner accepts, and how program arguments reach `main`, is a runner
-  concern.
-* **Scheduling order, fairness, and parallelism.** Nothing specifies which ready
-  child runs first, whether sibling `async let` children start in declaration
-  order, or whether children run in parallel (§9.9).
-* **`select` tie-breaking** when two arms are ready at once (§9.9).
+* **Wake order after a park.** When one event unblocks several parked tasks at
+  once, the order in which they resume is not defined (§9.9). Task *start* order
+  and the FIFO ready queue are stable; this is not.
+* **Fairness.** Nothing bounds how long a ready task may wait, and a task that
+  never suspends never yields (§9.9).
+* **Parallelism.** Nothing in the language says whether children run on separate
+  OS threads or are interleaved on one; the register VM interleaves on one, but
+  that is an implementation fact, not a contract (§9.9).
 * **Cancellation latency.** Cooperative; depends on the provider descriptor
   (§9.9).
-* **Cross-module privacy.** `pub` gates positional arguments and package
-  contracts, but module isolation rewrites a cross-module reference regardless
-  of `pub`, and no diagnostic rejects using a non-`pub` declaration from another
-  module (§1.6).
-* **Evaluation order of call arguments.** Not stated anywhere in the front end.
-* **Integer overflow behaviour** for `+`/`-`/`*` on `Int`. `Math.wrapping_add`
-  and friends exist, which implies the plain operators are *not* wrapping, but
-  the front end does not say what they are.
-* **`Float` semantics** beyond "it is not `Ord` and not `Eq`" (§3.5).
+* **`Float` semantics** beyond its row in the builtin protocol table (§2.1) and
+  its non-trapping arithmetic (§2.13): rounding mode, `NaN` payload propagation,
+  and `Float` formatting are runtime concerns the front end does not constrain.
+* **Tuple arity above 26.** Not capped and not supported; the generated type
+  parameter names stop being identifiers past `Z` (§2.9).
+
+### 12.1.1 Specified since v0.7
+
+Rules this document previously reported as *unspecified* and that are in fact
+deterministic. Each is now stated normatively in its own section; they are
+collected here so a reader of an older draft can find what changed.
+
+**Cross-module privacy — `RS0019`** (new;
+`module_isolation.rs::cross_module_privacy_diagnostics`):
+
+> A declaration without `pub` is visible only inside the module that declares
+> it. Another module may neither `use` it nor name it through a
+> module-qualified path (`a.b.name`), and `use a.b.*` binds only the module's
+> `pub` names.
+
+It applies to free functions, `struct`/`class`/`resource` types, `sum` types,
+type aliases, and constants — every declaration form that carries `is_public`
+(`rsscript-syntax/src/ast.rs`). Two exemptions:
+
+* **Interface declarations.** A declaration read from a supplied `.rssi` keeps
+  its current visibility, public or not: an interface is a host contract whose
+  surface is checked against its implementation by `RS1301` at package
+  granularity, not by this rule. The prelude and core interfaces are `.rssi`
+  and are never part of the isolation graph at all (§10.2), so they are
+  unaffected.
+* **`main`.** The entry point keeps its global symbol inside a module (§1.5) and
+  is not reachable by import in the first place.
+
+`protocol` declarations carry no visibility in the AST — `ProtocolDecl` has only
+a name and a span — and protocol names are global rather than module-scoped, so
+there is no private protocol for the rule to reject.
+
+**Evaluation order of call arguments**
+(`crates/rsscript-semantics/src/call_binding.rs::CallBinding::bind`, consumed by
+`crates/rsscript-lowering/src/mir/lowerer_calls.rs`, which sorts the lowered
+arguments by `evaluation_index`):
+
+> A call's arguments are evaluated left to right **as written at the call site**,
+> not in parameter-declaration order. Precisely: the receiver of a receiver-call
+> is evaluated first; then every explicit argument in source order, whatever
+> parameter each one names; then each omitted defaulted parameter's default
+> expression, in declaration order.
+
+Because labelled arguments may be written in any order, this is observable:
+`f(second: g(), first: h())` evaluates `g()` before `h()` even though `first` is
+declared first. The binding's `by_parameter` view is the ABI layout; its
+`evaluation_order` view is this language contract, and lowering consumes the
+latter.
+
+**`Int` overflow** (`reg_vm/value_ops.rs::eval_numeric_binary`): checked, not
+wrapping. `+`, `-`, `*`, `/`, `%` on `Int` trap on overflow with a language-level
+runtime error, and `/`/`%` by zero likewise; nothing wraps and nothing panics the
+host (§2.13).
+
+**`select` tie-breaking** (`reg_vm/scheduler.rs::resolve_wait`): the finished arm
+with the lowest arm index — the one written first — wins. Deterministic, and
+independent of completion timing, task ids, and hashing (§9.4). Read from the
+implementation; the scheduler's module tests cover cancellation but not yet this
+rule.
+
+**The `main` contract** (`reg_vm/scheduler.rs::run_program`,
+`reg_vm/executable.rs`). The checker still imposes no signature constraint on
+`main` and a file with no `main` still checks clean (§4.9), but the runner's
+contract is not unspecified:
+
+> An entry point must declare **either no parameters, or exactly one parameter
+> whose type is `List<String>`**, which receives the program arguments. Any
+> other arity, or a single parameter of any other type, is the runtime error
+> "entry point `main` must accept either no parameters or one `List<String>`
+> parameter". The return type is unconstrained: the runner returns `main`'s
+> value, and the execution report carries it as a typed wire value when the
+> declared return type parses as one and omits it otherwise
+> (`executable.rs::main_result_wire_value`). A program with no `main` fails at
+> run time with "cannot resolve function `main`".
+
+`Arguments.*` (`stdlib/arguments/arguments.rssi`) takes an explicit
+`args: read List<String>` precisely so argument access is never ambient: the
+`List<String>` parameter is the only way arguments enter a program.
+
+**The exhaustiveness witness cap** (§6.7) is unchanged at 512 rows, but it is no
+longer silent: when the cap is what forced the verdict, `RS0021` says so as an
+explicit note and offers a `_` arm rather than implying a missing case
+(`control_flow.rs::non_exhaustive_match_diagnostic`,
+`rsscript_semantics::MAX_PATTERN_WITNESSES`).
 
 ### 12.2 Gaps — rules the design implies but the checker does not enforce
 
@@ -4272,30 +4526,20 @@ These are findings for the maintainer, not features.
 
 * **A `.rss` function cannot construct a resource.** Returning a resource
   constructor is `RS0702`. Every resource must be produced by a bodyless
-  function in an `.rssi` interface (§8.2). Several "pass" fixtures under
-  `crates/rsscript-sdk/tests/fixtures/pass/` therefore do *not* pass a plain
-  `rss check` — they rely on bodyless `.rss` declarations, which also emit
-  `RS0015`. Treat those fixtures as shape examples, not as checkable programs.
+  function in an `.rssi` interface, because a resource slot is host-owned and
+  its cleanup contract lives at the external boundary (§8.2). Declaring the
+  `resource` type, `drop` body included, in a `.rss` file is fine.
 * **`String` is not Copy** (§2.2), so `retains(s: String)` is legal while
   `retains(n: Int)` is `RS0007`.
-* **`Float` is `Clone` but not `Eq` and not `Ord`; `Bool` is `Ord` but `Char`
-  and `Byte` are not** (§3.5). The three builtin predicates in
-  `generic_constraints.rs` have different membership and are easy to misread as
-  one set.
-* **Structured patterns need a scrutinee effect, variant patterns do not.**
-  `match value { Some(n) => … }` is fine; `match point { Point { x } => … }` is
-  `RS0202` (§6.5).
-* **`loop { }` does not count as diverging** for the return check, so an
-  intentional infinite loop at the end of a non-`Unit` function produces
-  `RS0208` (§4.7).
+* **`Float` is `Clone` but not `Eq`, not `Ord`, and not `Hashable`** (§2.1).
+  Every other builtin scalar satisfies all four.
 * **`Type.method` dispatch is by inferred receiver type**, not by method name,
   so a receiver whose type is unknown makes `x.m()` unresolvable — `RS0206`
   (§4.2).
-* **Tuple arity is capped at 26** because the checker recognises a generic type
-  variable only as a single uppercase letter (§2.9).
 * **The exhaustiveness witness product is capped at 512 rows.** A struct or sum
-  with many finite-domain fields silently becomes "not provably exhaustive" and
-  needs an explicit `_` (§6.7).
+  with many finite-domain fields becomes "not provably exhaustive" and needs an
+  explicit `_`. The diagnostic now says when the cap is the reason (§12.1.1), so
+  this is a surprise about the shape of the rule, not about a silent one (§6.7).
 
 ### 12.4 Documentation drift found while writing this reference
 

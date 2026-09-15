@@ -1,6 +1,10 @@
 // expect: RS0303
-fn apply(image: mut Image, callback: noescape Fn()) -> Unit
-fn save_image(image: Image) -> Unit
+
+// interface: noescape-capture-same-call-conflict.rssi
+
+struct Image {
+    id: Int
+}
 
 fn run(image: mut Image) -> Unit {
     apply(

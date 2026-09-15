@@ -1,0 +1,7 @@
+pub fn Cache.store_option(cache: mut Cache, value: Option<Image>) -> Unit
+    retains(value)
+
+pub fn Cache.store_result(cache: mut Cache, value: Result<Image, StoreError>) -> Unit
+    retains(value)
+
+pub fn make_holder() -> fresh Holder

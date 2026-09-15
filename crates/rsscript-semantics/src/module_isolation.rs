@@ -12,6 +12,7 @@
 //! construction and lowering) so the checker, the register VM, and the Rust
 //! backend all observe the same isolated names.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use crate::{type_arg_names, type_root_name};
@@ -133,8 +134,53 @@ fn unresolved_import_diagnostic(
     )
 }
 
+fn private_declaration_diagnostic(
+    module_path: &str,
+    name: &str,
+    span: rsscript_syntax::Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        rsscript_diagnostics::code::PRIVATE_DECLARATION_ACCESS,
+        format!("`{name}` is not `pub` in module `{module_path}`."),
+        span,
+        "private declaration",
+    )
+    .with_cause(
+        "A declaration without `pub` is visible only inside the module that declares it; module isolation gives it a module-scoped symbol, not a global one.",
+    )
+    .with_fix(
+        "mark_declaration_public",
+        format!("Mark `{name}` as `pub` in `{module_path}`, or move the caller into that module."),
+        "manual",
+    )
+}
+
+/// Cross-module privacy diagnostics (`RS0019`) for one source program and the
+/// interfaces it is checked against.
+///
+/// The check runs the real isolation rewrite on a copy, so it sees exactly the
+/// resolutions the compiler will see: a named `use` of another module's private
+/// declaration, and a module-qualified reference to one. Declarations that come
+/// from a supplied `.rssi` interface are exempt — an interface is a host
+/// contract whose surface is governed by the package contract (`RS1301`).
+pub fn cross_module_privacy_diagnostics(
+    sources: &Program,
+    interfaces: &[Program],
+) -> Vec<Diagnostic> {
+    let mut sources = sources.clone();
+    let mut interfaces = interfaces.to_vec();
+    isolate_sources_with_interfaces_collecting(&mut sources, &mut interfaces)
+}
+
 /// Rewrite a program so each `module`-scoped symbol becomes globally unique.
 pub fn isolate_module_namespaces(program: &mut Program) {
+    isolate_module_namespaces_collecting(program, &HashSet::new());
+}
+
+fn isolate_module_namespaces_collecting(
+    program: &mut Program,
+    interface_files: &HashSet<String>,
+) -> Vec<Diagnostic> {
     // Desugar named-function values into forwarding closures first, so the
     // synthesized calls are then mangled by isolation like any other reference.
     // This runs for every program (module-less ones included), unlike the module
@@ -147,10 +193,11 @@ pub fn isolate_module_namespaces(program: &mut Program) {
     let file_module = collect_file_modules(program);
     if file_module.is_empty() {
         // No `module` declarations anywhere: pure root namespace, nothing to do.
-        return;
+        return Vec::new();
     }
-    let resolver = Resolver::build(program, &file_module);
+    let resolver = Resolver::build(program, &file_module, interface_files);
     resolver.rewrite(program);
+    resolver.privacy.into_inner()
 }
 
 /// Isolate one source program and its interface programs as a single module
@@ -161,15 +208,28 @@ pub fn isolate_module_namespaces(program: &mut Program) {
 /// contracts. Keeping this operation beside namespace isolation gives every
 /// frontend client one canonical rewrite before workspace HIR construction.
 pub fn isolate_sources_with_interfaces(sources: &mut Program, interfaces: &mut [Program]) {
+    let _ = isolate_sources_with_interfaces_collecting(sources, interfaces);
+}
+
+fn isolate_sources_with_interfaces_collecting(
+    sources: &mut Program,
+    interfaces: &mut [Program],
+) -> Vec<Diagnostic> {
     let source_files = program_files(sources);
     let interface_files = interfaces.iter().map(program_files).collect::<Vec<_>>();
+    let all_interface_files = interface_files
+        .iter()
+        .flatten()
+        .cloned()
+        .collect::<HashSet<_>>();
     let mut combined =
         merge_programs(std::iter::once(sources.clone()).chain(interfaces.iter().cloned()));
-    isolate_module_namespaces(&mut combined);
+    let privacy = isolate_module_namespaces_collecting(&mut combined, &all_interface_files);
     *sources = program_for_files(&combined, &source_files);
     for (interface, files) in interfaces.iter_mut().zip(interface_files) {
         *interface = program_for_files(&combined, &files);
     }
+    privacy
 }
 
 fn program_files(program: &Program) -> HashSet<String> {
@@ -289,11 +349,26 @@ struct Resolver {
     /// local name is the `as` alias when present, otherwise the path's last
     /// segment; the real name is always the path's last segment.
     file_imports: HashMap<String, HashMap<String, (String, String)>>,
+    /// module prefix -> the bare names it declares **without** `pub`. A module
+    /// may use these freely; another module may not (`RS0019`). Declarations
+    /// from a supplied `.rssi` interface never appear here: an interface is a
+    /// host contract whose visibility is governed by the package contract
+    /// (`RS1301`), not by this rule.
+    module_private: HashMap<String, HashSet<String>>,
+    /// Privacy violations found while resolving. Collected during the rewrite
+    /// because that is where a reference's module, target, and span are all in
+    /// hand; `cross_module_privacy_diagnostics` harvests them.
+    privacy: RefCell<Vec<Diagnostic>>,
 }
 
 impl Resolver {
-    fn build(program: &Program, file_module: &HashMap<String, String>) -> Self {
+    fn build(
+        program: &Program,
+        file_module: &HashMap<String, String>,
+        interface_files: &HashSet<String>,
+    ) -> Self {
         let mut module_defs: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut module_private: HashMap<String, HashSet<String>> = HashMap::new();
         let mut module_types: HashMap<String, HashSet<String>> = HashMap::new();
         let mut module_consts: HashMap<String, HashSet<String>> = HashMap::new();
         let mut module_variants: HashMap<String, HashSet<String>> = HashMap::new();
@@ -302,6 +377,9 @@ impl Resolver {
         let mut file_imports: HashMap<String, HashMap<String, (String, String)>> = HashMap::new();
         // (file, module prefix) for each `use module.*`, expanded after the loop.
         let mut glob_imports: Vec<(String, String)> = Vec::new();
+        // Non-glob imports, checked for privacy after every module's tables are
+        // populated: `use` order must not decide whether a name is visible.
+        let mut import_sites: Vec<(String, String, String, rsscript_syntax::Span)> = Vec::new();
 
         for item in &program.items {
             let Some(file) = item_file(item) else {
@@ -320,6 +398,12 @@ impl Resolver {
                             .entry(prefix.clone())
                             .or_default()
                             .insert(function.name.clone());
+                        if !function.is_public && !interface_files.contains(file) {
+                            module_private
+                                .entry(prefix.clone())
+                                .or_default()
+                                .insert(function.name.clone());
+                        }
                         if !function.has_body {
                             external_functions
                                 .entry(prefix.clone())
@@ -330,6 +414,12 @@ impl Resolver {
                 }
                 Item::Const(decl) => {
                     if !decl.name.contains('.') {
+                        if !decl.is_public && !interface_files.contains(file) {
+                            module_private
+                                .entry(prefix.clone())
+                                .or_default()
+                                .insert(decl.name.clone());
+                        }
                         module_defs
                             .entry(prefix.clone())
                             .or_default()
@@ -341,6 +431,12 @@ impl Resolver {
                     }
                 }
                 Item::Type(decl) => {
+                    if !decl.is_public && !interface_files.contains(file) {
+                        module_private
+                            .entry(prefix.clone())
+                            .or_default()
+                            .insert(decl.name.clone());
+                    }
                     module_defs
                         .entry(prefix.clone())
                         .or_default()
@@ -351,6 +447,12 @@ impl Resolver {
                         .insert(decl.name.clone());
                 }
                 Item::SumType(decl) => {
+                    if !decl.is_public && !interface_files.contains(file) {
+                        module_private
+                            .entry(prefix.clone())
+                            .or_default()
+                            .insert(decl.name.clone());
+                    }
                     module_defs
                         .entry(prefix.clone())
                         .or_default()
@@ -367,6 +469,12 @@ impl Resolver {
                     }
                 }
                 Item::TypeAlias(decl) => {
+                    if !decl.is_public && !interface_files.contains(file) {
+                        module_private
+                            .entry(prefix.clone())
+                            .or_default()
+                            .insert(decl.name.clone());
+                    }
                     module_defs
                         .entry(prefix.clone())
                         .or_default()
@@ -390,6 +498,12 @@ impl Resolver {
                             .local_name()
                             .map(str::to_string)
                             .unwrap_or_else(|| real_name.clone());
+                        import_sites.push((
+                            decl.span.file.clone(),
+                            import_prefix.clone(),
+                            real_name.clone(),
+                            decl.span.clone(),
+                        ));
                         file_imports
                             .entry(decl.span.file.clone())
                             .or_default()
@@ -413,13 +527,43 @@ impl Resolver {
             let Some(names) = module_defs.get(&prefix) else {
                 continue;
             };
+            // A glob imports a module's *public* surface. Private names are
+            // simply not bound, exactly as `use module.*` reads.
+            let own_module = file_module.get(&file);
+            let private = (own_module != Some(&prefix))
+                .then(|| module_private.get(&prefix))
+                .flatten();
             let entry = file_imports.entry(file).or_default();
             for name in names {
+                if private.is_some_and(|private| private.contains(name)) {
+                    continue;
+                }
                 entry
                     .entry(name.clone())
                     .or_insert_with(|| (prefix.clone(), name.clone()));
             }
         }
+
+        // A named import of another module's private declaration is rejected at
+        // the `use`, which is where the author spelled the name.
+        let privacy = import_sites
+            .into_iter()
+            .filter(|(file, prefix, name, _)| {
+                file_module.get(file) != Some(prefix)
+                    && module_private
+                        .get(prefix)
+                        .is_some_and(|private| private.contains(name))
+            })
+            .map(|(_, prefix, name, span)| {
+                private_declaration_diagnostic(
+                    module_display
+                        .get(&prefix)
+                        .map_or(prefix.as_str(), |s| s.as_str()),
+                    &name,
+                    span,
+                )
+            })
+            .collect::<Vec<_>>();
 
         Self {
             file_module: file_module.clone(),
@@ -430,7 +574,40 @@ impl Resolver {
             module_display,
             external_functions,
             file_imports,
+            module_private,
+            privacy: RefCell::new(privacy),
         }
+    }
+
+    /// Record a module-qualified reference to another module's private
+    /// declaration. Named imports are reported in `build`; this covers the
+    /// qualified form `a.b.helper()`, which needs no `use`.
+    fn check_qualified_privacy(
+        &self,
+        file: &str,
+        prefix: &str,
+        name: &str,
+        span: &rsscript_syntax::Span,
+    ) {
+        if self.file_module.get(file).map(String::as_str) == Some(prefix) {
+            return;
+        }
+        if !self
+            .module_private
+            .get(prefix)
+            .is_some_and(|private| private.contains(name))
+        {
+            return;
+        }
+        self.privacy
+            .borrow_mut()
+            .push(private_declaration_diagnostic(
+                self.module_display
+                    .get(prefix)
+                    .map_or(prefix, |display| display.as_str()),
+                name,
+                span.clone(),
+            ));
     }
 
     /// Build the mangled value symbol for `name` declared in module `prefix`,
@@ -846,6 +1023,7 @@ impl Resolver {
                         .is_some_and(|names| names.contains(method))
                 {
                     let effect = *effect;
+                    self.check_qualified_privacy(file, &prefix, method, span);
                     let mangled = self.mangle_value(&prefix, method);
                     for arg in args.iter_mut() {
                         self.rewrite_expr(&mut arg.value, file, scope);
@@ -866,7 +1044,7 @@ impl Resolver {
                 // Bare module receiver call (effect None) and everything else:
                 // `rewrite_callee` collapses a module receiver call to the plain
                 // mangled free call by value.
-                self.rewrite_callee(callee, file, scope);
+                self.rewrite_callee(callee, file, scope, span);
                 for arg in args {
                     self.rewrite_expr(&mut arg.value, file, scope);
                 }
@@ -967,7 +1145,13 @@ impl Resolver {
         }
     }
 
-    fn rewrite_callee(&self, callee: &mut Callee, file: &str, scope: &mut HashSet<String>) {
+    fn rewrite_callee(
+        &self,
+        callee: &mut Callee,
+        file: &str,
+        scope: &mut HashSet<String>,
+        span: &rsscript_syntax::Span,
+    ) {
         match callee {
             Callee::Name(name) => {
                 *name = self.rewrite_bare_callee_segment(name, file, scope);
@@ -1016,6 +1200,7 @@ impl Resolver {
                         .get(&prefix)
                         .is_some_and(|names| names.contains(method_root.as_str()))
                 {
+                    self.check_qualified_privacy(file, &prefix, &method_root, span);
                     *callee = Callee::Name(self.rewrite_callee_segment_with_root(
                         method,
                         &self.mangle_value(&prefix, &method_root),
@@ -1268,6 +1453,102 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    const LIBRARY: &str = "module lib.core\n\npub const LIMIT: Int = 1\nconst SECRET: Int = 2\npub struct Widget { id: Int }\nstruct Blueprint { id: Int }\npub fn open(value: Int) -> Int { return value }\nfn closed(value: Int) -> Int { return value }\n";
+
+    const PRIVATE: &str = rsscript_diagnostics::code::PRIVATE_DECLARATION_ACCESS;
+
+    fn privacy_codes(app: &str) -> Vec<String> {
+        let program = merge_programs([
+            parse_source("lib.rss", LIBRARY),
+            parse_source("app.rss", app),
+        ]);
+        cross_module_privacy_diagnostics(&program, &[])
+            .into_iter()
+            .map(|diagnostic| diagnostic.code)
+            .collect()
+    }
+
+    #[test]
+    fn a_public_declaration_crosses_module_boundaries() {
+        assert!(
+            privacy_codes(
+                "module app\n\nuse lib.core.open\nuse lib.core.Widget\nuse lib.core.LIMIT\nfn run(value: Int) -> Int { return open(value: value) }\n",
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn importing_a_private_declaration_is_rejected() {
+        for import in ["closed", "Blueprint", "SECRET"] {
+            let app =
+                format!("module app\n\nuse lib.core.{import}\nfn run() -> Int {{ return 1 }}\n");
+            assert_eq!(privacy_codes(&app), [PRIVATE], "use lib.core.{import}");
+        }
+    }
+
+    #[test]
+    fn a_module_qualified_reference_to_a_private_function_is_rejected() {
+        assert_eq!(
+            privacy_codes(
+                "module app\n\nfn run(value: Int) -> Int { return lib.core.closed(value: value) }\n",
+            ),
+            [PRIVATE]
+        );
+        assert!(
+            privacy_codes(
+                "module app\n\nfn run(value: Int) -> Int { return lib.core.open(value: value) }\n",
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_module_may_use_its_own_private_declarations() {
+        let program = merge_programs([
+            parse_source("lib.rss", LIBRARY),
+            parse_source(
+                "lib-more.rss",
+                "module lib.core\n\nfn also(value: Int) -> Int { return closed(value: value) }\n",
+            ),
+        ]);
+        assert!(cross_module_privacy_diagnostics(&program, &[]).is_empty());
+    }
+
+    #[test]
+    fn a_glob_import_binds_only_the_public_surface() {
+        // `closed` is not imported, so the reference stays unresolved rather
+        // than silently reaching another module's private function.
+        let mut program = merge_programs([
+            parse_source("lib.rss", LIBRARY),
+            parse_source(
+                "app.rss",
+                "module app\n\nuse lib.core.*\nfn run(value: Int) -> Int { return open(value: value) }\nfn sneak(value: Int) -> Int { return closed(value: value) }\n",
+            ),
+        ]);
+        assert!(cross_module_privacy_diagnostics(&program, &[]).is_empty());
+        isolate_module_namespaces(&mut program);
+        let app = program_for_files(&program, &HashSet::from(["app.rss".to_string()]));
+        let rendered = format!("{app:?}");
+        assert!(rendered.contains("lib_core__open"));
+        assert!(!rendered.contains("lib_core__closed"));
+    }
+
+    #[test]
+    fn interface_declarations_keep_their_current_visibility() {
+        let interface = parse_source(
+            "host.rssi",
+            "module host\n\nstruct Token\nfn issue() -> Token\n",
+        );
+        let program = parse_source(
+            "app.rss",
+            "module app\n\nuse host.issue\nuse host.Token\nfn run() -> Token { return issue() }\n",
+        );
+        assert!(
+            cross_module_privacy_diagnostics(&program, std::slice::from_ref(&interface)).is_empty()
+        );
     }
 
     #[test]

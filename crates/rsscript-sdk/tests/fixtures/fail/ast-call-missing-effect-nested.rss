@@ -1,4 +1,5 @@
 // expect: RS0202
+// interface: ast-call-missing-effect-nested.rssi
 
 fn bad_nested(path: Path) -> Result<Unit, IOError> {
     with File.open_write(path)? as file {

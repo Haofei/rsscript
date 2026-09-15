@@ -1,0 +1,4 @@
+pub fn Image.load(path: Path) -> fresh Image
+
+pub fn RetainedImageStore.store(cache: mut RetainedImageStore, image: Image) -> Unit
+    retains(image)

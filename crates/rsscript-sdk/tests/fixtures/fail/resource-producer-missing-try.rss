@@ -1,4 +1,6 @@
-// expect: RS0706
+// expect: RS0207 RS0706
+
+// interface: resource-producer-missing-try.rssi
 
 resource File {
     fd: Int
@@ -7,9 +9,6 @@ resource File {
         OS.close(fd: fd)
     }
 }
-
-fn File.open_result(path: Path) -> Result<File, IOError>
-fn File.stat(file: File) -> Unit
 
 fn bad_with_missing_try(path: Path) -> Unit {
     with File.open_result(path) as file {

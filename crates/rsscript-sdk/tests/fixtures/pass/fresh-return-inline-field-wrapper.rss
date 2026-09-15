@@ -1,3 +1,4 @@
+// interface: fresh-return-inline-field-wrapper.rssi
 
 struct Image {
     pixels: Buffer
@@ -10,8 +11,6 @@ struct DecodeResult {
     image: Image
     metadata: Metadata
 }
-
-fn decode(path: Path) -> fresh DecodeResult
 
 fn load_image(path: Path) -> Result<fresh Image, ImageError> {
     local decoded = decode(path)

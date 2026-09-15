@@ -1,0 +1,15 @@
+// expect: RS0310
+
+// Field effects are monotonic: the scrutinee defaulted to `read`, so a `mut`
+// field pattern asks for more authority than it provides (spec §6.5).
+
+struct Point {
+    x: Int,
+    y: Int
+}
+
+fn bump(point: mut Point) -> Int {
+    match point {
+        Point { x: mut a, y } => { return y }
+    }
+}

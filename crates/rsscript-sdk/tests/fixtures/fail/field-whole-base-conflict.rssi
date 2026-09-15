@@ -1,0 +1,3 @@
+pub fn use_state(state: State, cache: mut Cache) -> Unit
+
+pub fn make_state() -> fresh State

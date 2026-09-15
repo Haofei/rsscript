@@ -1,0 +1,3 @@
+pub fn use_parts(cache: mut Cache, buffer: mut Buffer) -> Unit
+
+pub fn make_state() -> fresh State

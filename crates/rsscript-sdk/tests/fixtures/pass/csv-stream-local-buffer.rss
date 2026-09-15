@@ -1,3 +1,4 @@
+// interface: ../interfaces/host-csv.rssi
 
 struct RowBuffer {
     bytes: Buffer

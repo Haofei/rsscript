@@ -1,6 +1,6 @@
-struct Image
+// interface: omitted-features-managed-default.rssi
 
-fn Image.load(path: Path) -> Image
+struct Image
 
 fn render(path: Path) -> Image {
     return Image.load(path)

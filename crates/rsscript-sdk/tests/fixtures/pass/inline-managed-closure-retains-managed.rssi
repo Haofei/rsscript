@@ -1,0 +1,4 @@
+pub fn Image.inspect(image: Image) -> Unit
+
+pub fn store(callback: Callback) -> Unit
+    retains(callback)

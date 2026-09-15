@@ -1,4 +1,6 @@
-// expect: RS0603
+// expect: RS0602 RS0603
+
+struct UserError
 
 class User {
     name: String

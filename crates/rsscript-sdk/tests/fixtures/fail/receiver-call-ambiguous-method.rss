@@ -1,4 +1,4 @@
-// expect: RS0206
+// expect: RS0206 RS0602
 
 protocol Formatter {
     fn format(self: Self) -> fresh String

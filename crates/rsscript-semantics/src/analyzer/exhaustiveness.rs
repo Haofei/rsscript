@@ -79,11 +79,14 @@ impl Analyzer<'_> {
                     }
                     self.check_match_exhaustiveness_block(&arm.body);
                 }
+                self.witness_cap_exceeded.set(false);
                 if !self.match_is_exhaustive_with_context(value, arms) {
+                    let capped = self.witness_cap_exceeded.get();
                     self.diagnostics
                         .push(rsscript_semantics::non_exhaustive_match_diagnostic(
                             false,
                             span.clone(),
+                            capped,
                         ));
                 }
             }
@@ -294,13 +297,15 @@ impl Analyzer<'_> {
         &self,
         fields: &[FieldInfo],
     ) -> Option<Vec<Vec<(String, PatternWitness)>>> {
-        const MAX_PATTERN_WITNESSES: usize = 512;
         let mut rows: Vec<Vec<(String, PatternWitness)>> = vec![Vec::new()];
         for field in fields {
             let domain = self
                 .finite_type_witnesses(&field.ty.to_string())
                 .unwrap_or_else(|| vec![PatternWitness::Any]);
-            if rows.len().saturating_mul(domain.len()) > MAX_PATTERN_WITNESSES {
+            if rows.len().saturating_mul(domain.len()) > rsscript_semantics::MAX_PATTERN_WITNESSES {
+                // Record why: the caller turns this into an explicit note on
+                // `RS0021` rather than implying a missing arm.
+                self.witness_cap_exceeded.set(true);
                 return None;
             }
             let mut next = Vec::new();
@@ -545,11 +550,14 @@ impl Analyzer<'_> {
                 for arm in arms {
                     self.check_match_exhaustiveness_block(&arm.body);
                 }
+                self.witness_cap_exceeded.set(false);
                 if !self.match_is_exhaustive_with_context(value, arms) {
+                    let capped = self.witness_cap_exceeded.get();
                     self.diagnostics
                         .push(rsscript_semantics::non_exhaustive_match_diagnostic(
                             true,
                             span.clone(),
+                            capped,
                         ));
                 }
             }

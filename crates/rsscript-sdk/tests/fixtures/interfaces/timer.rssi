@@ -1,0 +1,12 @@
+// Host timer API used by the async fixtures. `Timer` is not part of the
+// standard package set; the corpus supplies it so those fixtures exercise
+// `await`, `task_group`, and cancellation rather than name resolution.
+
+struct TimerError
+
+pub async fn Timer.sleep(ms: Int) -> Result<Unit, TimerError>
+
+pub async fn Timer.sleep_cancellable(
+    ms: Int,
+    token: CancellationToken,
+) -> Result<Unit, TimerError>

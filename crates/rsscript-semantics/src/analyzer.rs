@@ -88,6 +88,9 @@ struct PreparedAnalysis {
     interface_programs: Vec<crate::syntax::ast::Program>,
     hir: Hir,
     type_aliases: BTreeMap<String, AliasDefinition>,
+    /// Cross-module privacy findings (`RS0019`). Collected here because the
+    /// check needs the *pre*-isolation program, which only this function sees.
+    module_privacy: Vec<Diagnostic>,
     budget: Rc<FrontendBudget>,
 }
 
@@ -139,6 +142,7 @@ fn prepare_analysis(input: AnalysisInput<'_>, budget: Rc<FrontendBudget>) -> Pre
             interface_programs: Vec::new(),
             hir,
             type_aliases: BTreeMap::new(),
+            module_privacy: Vec::new(),
             budget,
         };
     }
@@ -159,6 +163,10 @@ fn prepare_analysis(input: AnalysisInput<'_>, budget: Rc<FrontendBudget>) -> Pre
             crate::syntax::parse_source_tokens(file, &tokens, budget.clone())
         })
         .collect::<Vec<_>>();
+    let module_privacy = rsscript_semantics::cross_module_privacy_diagnostics(
+        &syntax_program,
+        &supplied_interface_programs,
+    );
     rsscript_semantics::isolate_sources_with_interfaces(
         &mut syntax_program,
         &mut supplied_interface_programs,
@@ -221,6 +229,7 @@ fn prepare_analysis(input: AnalysisInput<'_>, budget: Rc<FrontendBudget>) -> Pre
         interface_programs,
         hir,
         type_aliases,
+        module_privacy,
         budget,
     }
 }
@@ -621,6 +630,7 @@ fn analyze_program(prepared: PreparedAnalysis) -> AnalysisResult {
         interface_programs,
         hir,
         type_aliases,
+        module_privacy,
         budget,
     } = prepared;
     let mut analyzer = Analyzer {
@@ -632,7 +642,11 @@ fn analyze_program(prepared: PreparedAnalysis) -> AnalysisResult {
         budget,
         type_aliases,
         async_let_names: Vec::new(),
+        witness_cap_exceeded: std::cell::Cell::new(false),
     };
+    // Cross-module privacy (`RS0019`) is decided before isolation rewrites the
+    // names, so its findings are merged in rather than produced by a pass.
+    analyzer.diagnostics.extend(module_privacy);
     analyzer.run();
     analyzer.diagnostics.push_incomplete();
     crate::syntax::demangle_diagnostics(
@@ -690,6 +704,7 @@ fn analyze_syntax_program(prepared: PreparedAnalysis) -> AnalysisResult {
         interface_programs,
         hir,
         type_aliases,
+        module_privacy: _,
         budget,
     } = prepared;
     let mut analyzer = Analyzer {
@@ -701,6 +716,7 @@ fn analyze_syntax_program(prepared: PreparedAnalysis) -> AnalysisResult {
         budget,
         type_aliases,
         async_let_names: Vec::new(),
+        witness_cap_exceeded: std::cell::Cell::new(false),
     };
     analyzer.run_syntax_only();
     analyzer.diagnostics.push_incomplete();
@@ -733,6 +749,10 @@ pub(crate) struct Analyzer<'a> {
     pub(crate) budget: Rc<FrontendBudget>,
     pub(crate) type_aliases: std::collections::BTreeMap<String, AliasDefinition>,
     pub(crate) async_let_names: Vec<String>,
+    /// Set while checking one `match` when the exhaustiveness witness product
+    /// hit its cap, so `RS0021` can say the cap is what forced the verdict
+    /// instead of implying an arm is missing.
+    pub(crate) witness_cap_exceeded: std::cell::Cell<bool>,
 }
 
 fn render_type_ref(ty: &TypeRef) -> String {

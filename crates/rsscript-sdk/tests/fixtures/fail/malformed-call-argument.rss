@@ -1,4 +1,4 @@
-// expect: RS0015
+// expect: RS0015 RS0206
 fn main() -> Unit {
     print(value:)
     return Unit

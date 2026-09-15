@@ -145,6 +145,9 @@ pub fn resource_producer_escape_diagnostic(type_name: &str, span: Span) -> Diagn
     .with_cause(
         "Resource-producing calls create transient linear values that cannot be stored, returned, retained, managed, or passed as ordinary values.",
     )
+    .with_cause(
+        "A resource slot is host-owned: it is acquired at the external boundary and released by the runtime on every exit from its `with` scope. A `.rss` body therefore cannot mint one — a resource constructor in a body, including `return Handle(fd: id)`, is a producer with no owning scope. Declare the producer bodyless in an `.rssi` interface.",
+    )
     .with_fix(
         "use_with",
         "Use `with producer(...)? as resource { ... }`.",

@@ -1,0 +1,12 @@
+// expect: RS0019
+// source: ../modules/library.rss
+
+// `private_helper` has no `pub`, so it is visible only inside `lib.core`.
+
+module app
+
+use lib.core.private_helper
+
+fn run(value: Int) -> Int {
+    return private_helper(value: value)
+}
