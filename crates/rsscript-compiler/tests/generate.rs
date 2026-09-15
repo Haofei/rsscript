@@ -426,6 +426,91 @@ fn namespace_cursor_lists_that_namespace_signatures() {
     );
 }
 
+/// A callable candidate carries its resolved parameters as data, not only as a
+/// rendered signature string.
+///
+/// Wrong call-site effects and invented labels are the two classes the language
+/// card made worse: it teaches that effects and labels are explicit without
+/// saying *which*. The continuation response answers both at the cursor, so the
+/// call is written from the same facts the checker will apply to it.
+#[test]
+fn namespace_candidates_carry_resolved_parameter_effects_and_labels() {
+    let mut session = GenerationSession::with_source(
+        "main.rss",
+        "fn main(items: mut List<Int>) -> Unit {\n    List.",
+    );
+    let response = session.query(options(500));
+
+    let push = response
+        .names
+        .iter()
+        .find(|candidate| candidate.text == "push")
+        .expect("the namespace's own functions are offered");
+    let list = &push.parameters[0];
+    assert_eq!(list.name, "list");
+    assert_eq!(list.effect, Effect::Mut);
+    assert!(
+        list.effect_written,
+        "a `mut` parameter must be spelled at the call site"
+    );
+    assert!(
+        !list.label_omittable,
+        "a core-interface call requires every label"
+    );
+    let value = &push.parameters[1];
+    assert_eq!(value.effect, Effect::Read);
+    assert!(
+        !value.effect_written,
+        "`read` is the default and is written by omission"
+    );
+
+    // The whole namespace answers the question, not just one entry; a
+    // parameterless function reports an empty list rather than nothing at all.
+    let answered = response
+        .names
+        .iter()
+        .filter(|candidate| {
+            candidate.kind == CompletionKind::Function && !candidate.parameters.is_empty()
+        })
+        .count();
+    assert!(answered > 10, "{:#?}", response.names);
+    assert!(
+        response
+            .names
+            .iter()
+            .find(|candidate| candidate.text == "new")
+            .expect("List.new is offered")
+            .parameters
+            .is_empty()
+    );
+}
+
+/// Only a private helper in this program accepts positional arguments, so only
+/// its labels are reported as droppable.
+#[test]
+fn label_omittability_follows_the_call_checker_rule() {
+    let mut session = GenerationSession::with_source(
+        "main.rss",
+        concat!(
+            "fn helper(value: take Int) -> Unit {}\n",
+            "pub fn exported(value: take Int) -> Unit {}\n",
+            "fn main() -> Unit {\n    ",
+        ),
+    );
+    let response = session.query(options(500));
+    let omittable = |name: &str| {
+        response
+            .names
+            .iter()
+            .find(|candidate| candidate.kind == CompletionKind::Function && candidate.text == name)
+            .unwrap_or_else(|| panic!("missing function {name}"))
+            .parameters[0]
+            .label_omittable
+    };
+    assert!(omittable("helper"), "a private helper accepts positionals");
+    assert!(!omittable("exported"), "a public call requires labels");
+}
+
 /// A local binding still resolves as a receiver, not as a namespace.
 #[test]
 fn a_typed_local_still_completes_as_a_receiver_not_a_namespace() {

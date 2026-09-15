@@ -1,0 +1,3 @@
+fn main() -> Unit {
+    let account: String = "acct-7"
+}

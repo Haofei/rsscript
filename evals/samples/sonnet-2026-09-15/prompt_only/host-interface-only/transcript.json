@@ -1,0 +1,11 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 29744,
+    "check_ok": false,
+    "codes": [
+      "RS0201",
+      "RS0204"
+    ]
+  }
+]

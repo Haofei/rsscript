@@ -1,0 +1,37 @@
+struct Tally {
+    total: Int,
+    count: Int
+}
+
+fn add_amount(tally: read Tally, raw: read String) -> Result<fresh Tally, String> {
+    let parsed: Result<Int, String> = Int.parse(value: raw)
+    match parsed {
+        Ok(amount) => {
+            if amount < 0 {
+                return Err("amount must not be negative")
+            }
+            return Ok(Tally(total: tally.total + amount, count: tally.count + 1))
+        }
+        Err(message) => {
+            return Err(message)
+        }
+    }
+}
+
+fn tally_all(raws: read List<String>) -> Result<fresh Tally, String> {
+    let start: Tally = Tally(total: 0, count: 0)
+    return List.tryFold(list: raws, init: take start, f: add_amount)
+}
+
+fn main() -> Unit {
+    let amounts: List<String> = ["120", "45", "300"]
+    let result: Result<Tally, String> = tally_all(raws: amounts)
+    match result {
+        Ok(tally) => {
+            print(tally.total)
+        }
+        Err(message) => {
+            print(message)
+        }
+    }
+}

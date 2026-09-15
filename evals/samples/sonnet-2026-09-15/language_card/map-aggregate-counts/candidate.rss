@@ -1,0 +1,41 @@
+fn level_of(line: read String) -> fresh String {
+    match String.index_of(text: line, pattern: " ") {
+        Some(index) => { return String.slice(text: line, start: 0, end: index) }
+        None => { return "unknown" }
+    }
+}
+
+fn count_by_level(lines: read List<String>) -> fresh Map<String, Int> {
+    let mut counts: Map<String, Int> = Map.new()
+    for line in lines {
+        let level: String = level_of(line: line)
+        let updated: Int = match Map.get(map: counts, key: level) {
+            Some(value) => { value + 1 }
+            None => { 1 }
+        }
+        Map.insert(map: mut counts, key: level, value: updated)
+    }
+    return counts
+}
+
+fn render_counts(counts: read Map<String, Int>) -> fresh String {
+    let mut parts: List<String> = List.new()
+    for level in Map.keys(map: counts) {
+        let count: Int = match Map.get(map: counts, key: level) {
+            Some(value) => { value }
+            None => { 0 }
+        }
+        List.push(list: mut parts, value: String.concat(a: level, b: String.concat(a: ": ", b: Int.to_string(value: count))))
+    }
+    return String.join(list: parts, separator: ", ")
+}
+
+fn main() -> Unit {
+    let mut lines: List<String> = List.new()
+    List.push(list: mut lines, value: "INFO starting up")
+    List.push(list: mut lines, value: "ERROR disk full")
+    List.push(list: mut lines, value: "INFO ready")
+    let counts: Map<String, Int> = count_by_level(lines: lines)
+    let rendered: String = render_counts(counts: counts)
+    print(rendered)
+}

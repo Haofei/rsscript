@@ -1,0 +1,33 @@
+fn copy_setting(path: read String, key: read String, target: read String) -> Result<Unit, String> {
+    let mut outcome: Result<Unit, String> = Err("copy_setting: store not opened")
+
+    match ConfigStore.open(path: path) {
+        Ok(opened) => {
+            with opened as store {
+                match ConfigStore.read_key(store: mut store, key: key) {
+                    Ok(value) => {
+                        match ConfigStore.write_key(store: mut store, key: target, value: value) {
+                            Ok(_) => { outcome = Ok(Unit) }
+                            Err(e) => { outcome = Err(e) }
+                        }
+                    }
+                    Err(e) => { outcome = Err(e) }
+                }
+            }
+        }
+        Err(e) => { outcome = Err(e) }
+    }
+
+    return outcome
+}
+
+fn main() -> Unit {
+    match copy_setting(path: "config.toml", key: "source_key", target: "target_key") {
+        Ok(_) => {
+            let report: String = "copy_setting succeeded"
+        }
+        Err(error) => {
+            let report: String = error
+        }
+    }
+}

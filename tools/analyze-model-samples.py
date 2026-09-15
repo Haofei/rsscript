@@ -163,11 +163,17 @@ def load_tasks() -> dict[str, dict]:
     return tasks
 
 
-def run_check(source: Path, task: dict) -> list[dict]:
-    command = [
-        "cargo", "run", "-q", "-p", "rsscript-cli", "--bin", "rss", "--",
-        "check", "--json", str(source),
-    ]
+def run_check(source: Path, task: dict, rss: str | None = None) -> list[dict]:
+    # A prebuilt binary keeps every candidate in a comparison scored by the same
+    # checker, and does not rebuild the workspace while a collection is running.
+    command = (
+        [rss, "check", "--json", str(source)]
+        if rss
+        else [
+            "cargo", "run", "-q", "-p", "rsscript-cli", "--bin", "rss", "--",
+            "check", "--json", str(source),
+        ]
+    )
     for relative in task.get("interfaces", []):
         command += ["--interface", str(EVALS / relative)]
     completed = subprocess.run(
@@ -183,7 +189,7 @@ def run_check(source: Path, task: dict) -> list[dict]:
     return [d for d in parsed if d.get("severity") == "error"] if isinstance(parsed, list) else []
 
 
-def analyze(model: str) -> dict:
+def analyze(model: str, rss: str | None = None) -> dict:
     tasks = load_tasks()
     root = EVALS / "samples" / model
     out: dict = {"model": model, "modes": {}}
@@ -204,7 +210,7 @@ def analyze(model: str) -> dict:
             if not source.is_file():
                 mode_data["missing_candidates"].append(task_id)
                 continue
-            diagnostics = run_check(source, tasks[task_id])
+            diagnostics = run_check(source, tasks[task_id], rss)
             codes = sorted({d["code"] for d in diagnostics})
             classes = sorted({CLASS_OF.get(code, f"unclassified {code}") for code in codes})
             transcript_path = mode_dir / task_id / "transcript.json"
@@ -359,6 +365,11 @@ def main() -> int:
     parser.add_argument(
         "--only", help="with --examples, restrict to a class substring or a code"
     )
+    parser.add_argument(
+        "--rss",
+        default=None,
+        help="path to a prebuilt `rss` binary to check with (pins the checker)",
+    )
     args = parser.parse_args()
     target = (
         Path(args.out)
@@ -368,7 +379,7 @@ def main() -> int:
     if args.reuse and target.is_file():
         data = json.loads(target.read_text())
     else:
-        data = analyze(args.model)
+        data = analyze(args.model, args.rss)
         target.write_text(json.dumps(data, indent=2) + "\n")
 
     if args.examples:

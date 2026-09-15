@@ -63,6 +63,16 @@
       "form": "mutable binding",
       "right": "let mut total: Int = 0",
       "wrong": "mut total: Int = 0"
+    },
+    {
+      "form": "a value you will `take` is bound with `local`",
+      "right": "local title = \"daily\"",
+      "wrong": "let title = \"daily\""
+    },
+    {
+      "form": "`take` moves a binding, never a literal",
+      "right": "local title = \"daily\"; build(title: take title)",
+      "wrong": "build(title: take \"daily\")"
     }
   ],
   "signature_count": 450,

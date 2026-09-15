@@ -1,0 +1,51 @@
+struct ServiceConfig {
+    name: String,
+    port: Int,
+    enabled: Bool,
+}
+
+fn describe_json_error(error: read JsonError) -> String {
+    match error {
+        JsonError.Syntax(message) => { return message }
+        JsonError.MissingField(field) => { return "missing field: " + field }
+        JsonError.TypeMismatch(field, expected) => { return "field " + field + " must be " + expected }
+    }
+}
+
+fn load_config(text: read String) -> Result<fresh ServiceConfig, String> {
+    let parsed: Result<Json, JsonError> = Json.parse(text: text)
+
+    match parsed {
+        Err(error) => { return Err(describe_json_error(error: error)) }
+        Ok(document) => {
+            let name_result: Result<String, JsonError> = Json.get_string(value: document, field: "name")
+            let port_result: Result<Int, JsonError> = Json.get_int(value: document, field: "port")
+
+            match name_result {
+                Err(error) => { return Err(describe_json_error(error: error)) }
+                Ok(name) => {
+                    match port_result {
+                        Err(error) => { return Err(describe_json_error(error: error)) }
+                        Ok(port) => {
+                            if port < 1 || port > 65535 {
+                                return Err("port must be between 1 and 65535")
+                            }
+
+                            return Ok(ServiceConfig(name: take name, port: port, enabled: true))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn main() -> Unit {
+    let text: String = "{\"name\": \"api-gateway\", \"port\": 8080, \"enabled\": true}"
+    let result: Result<fresh ServiceConfig, String> = load_config(text: text)
+
+    match result {
+        Ok(config) => { Output.write(text: config.name) }
+        Err(error) => { Output.write(text: error) }
+    }
+}

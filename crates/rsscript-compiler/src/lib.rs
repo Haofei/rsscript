@@ -39,8 +39,8 @@ pub use generate::{
     ExpectedType, GenerateContext, GenerationCheckpoint, GenerationCoreInterfacePolicy,
     GenerationInterfaceSetSnapshot, GenerationInterfaceSnapshot, GenerationQueryIdentity,
     GenerationQuerySnapshot, GenerationRestoreError, GenerationSession, GenerationSessionStats,
-    IdentifierRoleName, LiteralKindName, ParserTerminal, PrefixStatus, SemanticValidity, TextRange,
-    TypeRef, valid_continuations,
+    IdentifierRoleName, LiteralKindName, ParameterFact, ParserTerminal, PrefixStatus,
+    SemanticValidity, TextRange, TypeRef, valid_continuations,
 };
 pub use rsscript_semantics::{
     analyze_frontend_input_snapshot_with_operation, analyze_source, analyze_source_result,

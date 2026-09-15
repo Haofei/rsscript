@@ -1,0 +1,27 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 119358,
+    "check_ok": false,
+    "codes": [
+      "RS0206",
+      "RS1001"
+    ]
+  },
+  {
+    "turn": 2,
+    "duration_ms": 40318,
+    "check_ok": false,
+    "codes": [
+      "RS0021",
+      "RS0203",
+      "RS0204",
+      "RS0209"
+    ]
+  },
+  {
+    "turn": 3,
+    "error": "exit 1: You've hit your session limit \u00b7 resets 1:20pm (America/Los_Angeles)",
+    "duration_ms": 4192
+  }
+]

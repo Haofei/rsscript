@@ -1,0 +1,95 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 68733,
+    "check_ok": false,
+    "codes": [
+      "RS0202"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `value` for `EvalApi.consume` must use `take`.",
+        "line": 13,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Write `value: take ...` at the call site.",
+            "applicability": "machine-applicable",
+            "replacement": "take ",
+            "replace_line": 13,
+            "replace_column": 32,
+            "replace_length": 0
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 2,
+    "duration_ms": 9384,
+    "check_ok": false,
+    "codes": [
+      "RS0604"
+    ],
+    "source": "turn2.rss",
+    "diagnostics": [
+      {
+        "code": "RS0604",
+        "severity": "error",
+        "summary": "`fresh` expression must be bound locally before `mut` or `take` use.",
+        "line": 13,
+        "label": "fresh value requires local binding",
+        "causes": [
+          "Direct fresh expressions can materialize as managed temporaries for `read`; `mut` and `take` require an explicit local owner."
+        ],
+        "fixes": [
+          {
+            "title": "Bind the value first, for example `local value = Buffer.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 3,
+    "duration_ms": 11356,
+    "check_ok": false,
+    "codes": [
+      "RS0308"
+    ],
+    "source": "turn3.rss",
+    "diagnostics": [
+      {
+        "code": "RS0308",
+        "severity": "error",
+        "summary": "`take` requires a local value.",
+        "line": 14,
+        "label": "not a local value",
+        "causes": [
+          "`buffer` is not a local binding and cannot be consumed with `take`."
+        ],
+        "fixes": [
+          {
+            "title": "Pass a local value with `take`, or use `read`/`mut` for managed values.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

@@ -1,0 +1,39 @@
+async fn drain(stream: Stream<Int>, limit: Int) -> Result<Int, ChannelError> {
+    let mut total: Int = 0
+    let mut consumed: Int = 0
+    while consumed < limit {
+        let next = await Stream.next(stream: stream)
+        match next {
+            Ok(item) => {
+                match item {
+                    Some(value) => {
+                        total = total + value
+                        consumed = consumed + 1
+                    }
+                    None => {
+                        return Ok(total)
+                    }
+                }
+            }
+            Err(e) => {
+                return Err(e)
+            }
+        }
+    }
+    return Ok(total)
+}
+
+fn main() -> Result<Unit, ChannelError> {
+    local values: List<Int> = [10, 20]
+    let stream: Stream<Int> = Stream.from_list(items: take values)
+    let mut total: Int = 0
+    task_group {
+        async let result = drain(stream: stream, limit: 2)
+        let outcome = await result
+        match outcome {
+            Ok(value) => { total = value }
+            Err(e) => { return Err(e) }
+        }
+    }
+    return Ok(Unit)
+}

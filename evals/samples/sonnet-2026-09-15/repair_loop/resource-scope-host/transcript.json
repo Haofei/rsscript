@@ -1,0 +1,28 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 7425,
+    "check_ok": false,
+    "codes": [
+      "RS0206",
+      "RS0207",
+      "RS0706",
+      "RS1001"
+    ]
+  },
+  {
+    "turn": 2,
+    "duration_ms": 25562,
+    "check_ok": false,
+    "codes": [
+      "RS0203",
+      "RS0204"
+    ]
+  },
+  {
+    "turn": 3,
+    "duration_ms": 8420,
+    "check_ok": true,
+    "codes": []
+  }
+]

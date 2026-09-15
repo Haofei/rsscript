@@ -1,0 +1,12 @@
+{
+  "schema": "rsscript.eval.candidate.v1",
+  "task_id": "generic-struct-bound",
+  "source": "generic-struct-bound/candidate.rss",
+  "mode": "prompt_only",
+  "model": "sonnet",
+  "model_version": "unknown",
+  "temperature": null,
+  "attempt": 1,
+  "generation_duration_ms": 20832,
+  "repair_turns": 0
+}

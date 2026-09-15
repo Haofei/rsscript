@@ -1,0 +1,17 @@
+async fn main() -> Result<Unit, String> {
+    let mut source = CancellationSource.new()
+    let token = CancellationSource.token(source: source)
+    task_group {
+        async let pending = EvalApi.fetch(key: "work")
+        CancellationSource.cancel(source: mut source)
+        let cancelled = CancellationToken.is_cancelled(token: token)
+        let value = await pending?
+        if cancelled {
+            return Ok(Unit)
+        }
+        let described = EvalApi.describe(input: value)
+        EvalApi.consume(value: take Buffer(text: described))
+        return Ok(Unit)
+    }
+    return Ok(Unit)
+}

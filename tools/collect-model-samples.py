@@ -26,6 +26,7 @@ Example
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import re
 import shutil
@@ -46,7 +47,13 @@ AGENT_GUIDE = ROOT / "AGENT.md"
 
 MODES = ("prompt_only", "language_card", "repair_loop")
 
-CODE_FENCE = re.compile(r"```(?:rsscript|rss)?[ \t]*\n(.*?)```", re.DOTALL)
+# Any fence info string is accepted, not just `rsscript`/`rss`. RSScript has no
+# highlighter, and models routinely label the block with the language it looks
+# most like: three of the first thirty `prompt_only` samples were lost to
+# ```rust and ```rescript fences. Dropping those candidates silently removed
+# exactly the confused attempts the measurement exists to count, so the sample
+# was biased towards success by the runner rather than by the model.
+CODE_FENCE = re.compile(r"```[^\n`]*\n(.*?)```", re.DOTALL)
 
 OUTPUT_CONTRACT = (
     "Reply with exactly one fenced code block containing the complete "
@@ -186,25 +193,35 @@ def extract_code(reply: str) -> str | None:
 CHECK_LOCK = threading.Lock()
 
 
-def run_check(source_path: Path, task: dict) -> tuple[bool, list[dict]]:
-    command = [
-        "cargo",
-        "run",
-        "-q",
-        "-p",
-        "rsscript-cli",
-        "--bin",
-        "rss",
-        "--",
-        "check",
-        "--json",
-        str(source_path),
-    ]
+def run_check(source_path: Path, task: dict, rss: str | None = None) -> tuple[bool, list[dict]]:
+    """Check one candidate, returning (no errors, diagnostics).
+
+    `rss` names a prebuilt binary. Prefer it: `cargo run` rebuilds whenever the
+    workspace changes, so a run that spans an edit is checked by two different
+    compilers and its transcripts stop being comparable with each other.
+    """
+    if rss:
+        command = [rss, "check", "--json", str(source_path)]
+    else:
+        command = [
+            "cargo",
+            "run",
+            "-q",
+            "-p",
+            "rsscript-cli",
+            "--bin",
+            "rss",
+            "--",
+            "check",
+            "--json",
+            str(source_path),
+        ]
     for path in interface_paths(task):
         command += ["--interface", str(path)]
     # `cargo run` takes a workspace lock; serialise so parallel sampling does
-    # not turn into a queue of blocked builds.
-    with CHECK_LOCK:
+    # not turn into a queue of blocked builds. A prebuilt binary needs neither.
+    lock = CHECK_LOCK if not rss else contextlib.nullcontext()
+    with lock:
         completed = subprocess.run(
             command, capture_output=True, text=True, cwd=ROOT, check=False
         )
@@ -221,7 +238,15 @@ def run_check(source_path: Path, task: dict) -> tuple[bool, list[dict]]:
     return not errors, diagnostics
 
 
-def compact_diagnostics(diagnostics: list[dict]) -> str:
+def diagnostic_rows(diagnostics: list[dict]) -> list[dict]:
+    """The error rows a repair turn is shown, and the transcript records.
+
+    `fixes` keeps each fix's applicability and its concrete edit, not only its
+    title. A machine-applicable fix already carries the exact replacement text
+    and the span it belongs at; forwarding only the prose title made the model
+    re-derive an edit the compiler had already computed, and made the
+    transcript unable to answer whether a suggestion was taken.
+    """
     rows = []
     for diagnostic in diagnostics:
         if diagnostic.get("severity") != "error":
@@ -234,10 +259,30 @@ def compact_diagnostics(diagnostics: list[dict]) -> str:
                 "line": (diagnostic.get("primary_span") or {}).get("line"),
                 "label": (diagnostic.get("primary_span") or {}).get("label"),
                 "causes": diagnostic.get("causes"),
-                "fixes": [f.get("title") for f in diagnostic.get("fixes") or []],
+                "fixes": [
+                    {
+                        "title": fix.get("title"),
+                        "applicability": fix.get("applicability"),
+                        "replacement": (fix.get("edit") or {}).get("replacement"),
+                        "replace_line": ((fix.get("edit") or {}).get("span") or {}).get(
+                            "line"
+                        ),
+                        "replace_column": (
+                            (fix.get("edit") or {}).get("span") or {}
+                        ).get("column"),
+                        "replace_length": (
+                            (fix.get("edit") or {}).get("span") or {}
+                        ).get("length"),
+                    }
+                    for fix in diagnostic.get("fixes") or []
+                ],
             }
         )
-    return json.dumps(rows, indent=2)
+    return rows
+
+
+def compact_diagnostics(diagnostics: list[dict]) -> str:
+    return json.dumps(diagnostic_rows(diagnostics), indent=2)
 
 
 # ---------------------------------------------------------------------------
@@ -276,13 +321,19 @@ def sample_task(task: dict, mode: str, args, out_dir: Path) -> dict:
         return {"task_id": task_id, "status": "no_code_block"}
 
     source_path.write_text(code)
-    ok, diagnostics = run_check(source_path, task)
+    ok, diagnostics = run_check(source_path, task, args.rss)
+    # Each turn keeps its own source and the exact rows the next turn is shown.
+    # Without them a repair transcript can say a class persisted but not whether
+    # the model was offered a replacement and declined it.
+    (task_dir / "turn1.rss").write_text(code)
     transcript.append(
         {
             "turn": 1,
             "duration_ms": duration_ms,
             "check_ok": ok,
             "codes": sorted({d["code"] for d in diagnostics if d.get("severity") == "error"}),
+            "source": "turn1.rss",
+            "diagnostics": diagnostic_rows(diagnostics),
         }
     )
 
@@ -317,7 +368,8 @@ def sample_task(task: dict, mode: str, args, out_dir: Path) -> dict:
                 )
                 break
             source_path.write_text(code)
-            ok, diagnostics = run_check(source_path, task)
+            ok, diagnostics = run_check(source_path, task, args.rss)
+            (task_dir / f"turn{turns + 1}.rss").write_text(code)
             transcript.append(
                 {
                     "turn": turns + 1,
@@ -330,6 +382,8 @@ def sample_task(task: dict, mode: str, args, out_dir: Path) -> dict:
                             if d.get("severity") == "error"
                         }
                     ),
+                    "source": f"turn{turns + 1}.rss",
+                    "diagnostics": diagnostic_rows(diagnostics),
                 }
             )
 
@@ -374,6 +428,11 @@ def main() -> int:
         "--out",
         default=None,
         help="sample root (default: evals/samples/<model>)",
+    )
+    parser.add_argument(
+        "--rss",
+        default=None,
+        help="path to a prebuilt `rss` binary to check with (pins the checker)",
     )
     parser.add_argument(
         "--dump-prompt",

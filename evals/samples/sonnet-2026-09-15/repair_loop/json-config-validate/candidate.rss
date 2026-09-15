@@ -1,0 +1,39 @@
+struct ServiceConfig {
+    name: String,
+    port: Int,
+    enabled: Bool,
+}
+
+fn load_config(text: read String) -> Result<fresh ServiceConfig, String> {
+    let value: JsonValue = Json.parse(text: text)
+    match Json.string(value: value, field: "name") {
+        Err(_) => { return Err("missing or invalid string field: name") },
+        Ok(name) => {
+            match Json.int(value: value, field: "port") {
+                Err(_) => { return Err("missing or invalid integer field: port") },
+                Ok(port) => {
+                    match Json.bool(value: value, field: "enabled") {
+                        Err(_) => { return Err("missing or invalid boolean field: enabled") },
+                        Ok(enabled) => {
+                            if port < 1 {
+                                return Err("port must be between 1 and 65535")
+                            }
+                            if port > 65535 {
+                                return Err("port must be between 1 and 65535")
+                            }
+                            return Ok(ServiceConfig(name: name, port: port, enabled: enabled))
+                        },
+                    }
+                },
+            }
+        },
+    }
+}
+
+fn main() -> Unit {
+    let text: String = "{\"name\": \"api-gateway\", \"port\": 8080, \"enabled\": true}"
+    match load_config(text: text) {
+        Ok(config) => { Output.write(message: config.name) },
+        Err(message) => { Output.write(message: message) },
+    }
+}

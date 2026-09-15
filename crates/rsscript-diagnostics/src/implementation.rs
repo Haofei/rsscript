@@ -539,7 +539,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::MISSING_DATA_EFFECT,
         title: "call-site data-effect mismatch",
-        explanation: "A bare argument has the default `read` effect. Arguments for `mut` or `take` parameters must spell that non-default effect explicitly and match the callee signature.",
+        explanation: "A bare argument has the default `read` effect. Arguments for `mut` or `take` parameters must spell that non-default effect explicitly and match the callee signature. The instance carries the edit that makes the call match: the keyword is added to a bare argument, replaced when a different one was written, and removed in front of a `read` parameter, where omission is the canonical spelling.",
     },
     DiagnosticExplanation {
         code: code::UNKNOWN_ARGUMENT,

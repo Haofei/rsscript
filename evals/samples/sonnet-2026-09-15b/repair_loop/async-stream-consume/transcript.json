@@ -1,0 +1,143 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 96574,
+    "check_ok": false,
+    "codes": [
+      "RS0031",
+      "RS0202",
+      "RS0206"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `stream` for `Stream.next` uses `mut` but the parameter is `read`.",
+        "line": 5,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Remove `mut` from `stream`: a `read` parameter takes the bare value.",
+            "applicability": "machine-applicable",
+            "replacement": "",
+            "replace_line": 5,
+            "replace_column": 46,
+            "replace_length": 4
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Stream.fromList` does not resolve.",
+        "line": 28,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Stream.from_list`?",
+            "applicability": "machine-applicable",
+            "replacement": "Stream.from_list",
+            "replace_line": 28,
+            "replace_column": 35,
+            "replace_length": 15
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0031",
+        "severity": "error",
+        "summary": "local value `stream` cannot live across `await`.",
+        "line": 5,
+        "label": "value live across await",
+        "causes": [
+          "Suspending an RSScript async frame may keep managed handles and Copy snapshots, but local values, resources, and runtime guards must not be retained across suspension."
+        ],
+        "fixes": [
+          {
+            "title": "End the lifetime of `stream` before this `await`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 2,
+    "duration_ms": 155770,
+    "check_ok": false,
+    "codes": [
+      "RS0203",
+      "RS0204"
+    ],
+    "source": "turn2.rss",
+    "diagnostics": [
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Stream.from_list` has no argument named `list`.",
+        "line": 28,
+        "label": "unknown argument",
+        "causes": [
+          "`Stream.from_list` does not declare a parameter named `list`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `items`? Declared: items.",
+            "applicability": "machine-applicable",
+            "replacement": "items",
+            "replace_line": 28,
+            "replace_column": 48,
+            "replace_length": 4
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Stream.from_list` is missing required argument `items`.",
+        "line": 28,
+        "label": "missing argument",
+        "causes": [
+          "`Stream.from_list` requires a named argument `items`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `items: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 3,
+    "duration_ms": 9915,
+    "check_ok": true,
+    "codes": [],
+    "source": "turn3.rss",
+    "diagnostics": []
+  }
+]

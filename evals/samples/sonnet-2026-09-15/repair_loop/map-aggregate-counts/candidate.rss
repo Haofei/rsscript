@@ -1,0 +1,55 @@
+fn level_of(line: read String) -> fresh String {
+    let space_index: Option<Int> = String.index_of(value: line, needle: " ")
+    match space_index {
+        Some(index) => {
+            let level: String = String.slice(value: line, start: 0, len: index)
+            if String.is_empty(value: level) {
+                return "unknown"
+            }
+            return level
+        }
+        None => {
+            return "unknown"
+        }
+    }
+}
+
+fn count_by_level(lines: read List<String>) -> fresh Map<String, Int> {
+    let mut counts: Map<String, Int> = Map.new()
+    for line in lines {
+        let level: String = level_of(line: line)
+        let existing: Option<Int> = Map.get(map: counts, key: level)
+        let current: Int = match existing {
+            Some(value) => { value }
+            None => { 0 }
+        }
+        Map.insert(map: mut counts, key: level, value: current + 1)
+    }
+    return counts
+}
+
+fn render_counts(counts: read Map<String, Int>) -> fresh String {
+    let mut result: String = ""
+    let mut is_first: Bool = true
+    for key in Map.keys(map: counts) {
+        let existing: Option<Int> = Map.get(map: counts, key: key)
+        let count: Int = match existing {
+            Some(value) => { value }
+            None => { 0 }
+        }
+        let entry: String = String.concat(left: key, right: String.concat(left: ": ", right: Int.to_string(value: count)))
+        if is_first {
+            result = entry
+            is_first = false
+        } else {
+            result = String.concat(left: result, right: String.concat(left: ", ", right: entry))
+        }
+    }
+    return result
+}
+
+fn main() -> Unit {
+    let lines: List<String> = ["ERROR failed to connect", "INFO started service", "ERRORnospace"]
+    let counts: Map<String, Int> = count_by_level(lines: lines)
+    let output: String = render_counts(counts: counts)
+}

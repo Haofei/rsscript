@@ -269,6 +269,128 @@ fn fix_write_resolves_missing_data_effects_to_a_clean_check() {
     );
 }
 
+/// A call site that already spells an effect, but the wrong one, must be
+/// *rewritten* rather than prefixed.
+///
+/// The measured repair data shows models apply what a fix names, so a
+/// machine-applicable edit that produces `take mut value` does not merely fail
+/// to help — it hands back a file that no longer parses. Both wrong-effect
+/// shapes are covered: a keyword that must become another keyword, and a
+/// keyword in front of a `read` parameter, which is canonical by omission and
+/// so must be deleted along with its trailing space.
+#[test]
+fn fix_write_rewrites_and_removes_wrong_call_site_effects() {
+    let bin = env!("CARGO_BIN_EXE_rss");
+    let temp = tempfile::tempdir().expect("temp dir should be creatable");
+    let file = temp.path().join("wrong-effects.rss");
+    fs::write(
+        &file,
+        concat!(
+            "fn touch(target: mut List<Int>, note: read String) -> Unit {\n",
+            "    return Unit\n",
+            "}\n",
+            "fn main() -> Unit {\n",
+            "    let mut items = List<Int>.new()\n",
+            "    touch(target: take items, note: mut \"hello\")\n",
+            "    return Unit\n",
+            "}\n",
+        ),
+    )
+    .expect("fixture should write");
+    let path = file.to_str().expect("path is utf-8");
+
+    let json_out = Command::new(bin)
+        .args(["fix", "--json", path])
+        .output()
+        .expect("rss fix --json runs");
+    let report: serde_json::Value =
+        serde_json::from_slice(&json_out.stdout).expect("fix emits JSON");
+    assert_eq!(
+        report["applied"].as_array().map(Vec::len),
+        Some(2),
+        "both wrong effects carry an edit: {report}"
+    );
+
+    let write = Command::new(bin)
+        .args(["fix", "--write", path])
+        .output()
+        .expect("rss fix --write runs");
+    assert!(
+        write.status.success(),
+        "fix --write failed: {}",
+        String::from_utf8_lossy(&write.stderr)
+    );
+    let fixed = fs::read_to_string(&file).unwrap();
+    assert!(
+        fixed.contains("touch(target: mut items, note: \"hello\")"),
+        "fixed source:\n{fixed}"
+    );
+
+    let check = Command::new(bin)
+        .args(["check", path])
+        .output()
+        .expect("rss check runs");
+    let check_out = String::from_utf8_lossy(&check.stdout);
+    assert!(
+        check_out.contains("ok"),
+        "post-fix check not clean:\n{check_out}\n{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+}
+
+/// A call written with another language's argument names is renamed to the
+/// declared ones, and one rename clears both errors it caused.
+///
+/// A wrong label is charged twice — the label is unknown (`RS0203`) and the
+/// parameter it should have filled is missing (`RS0204`) — so four errors here
+/// are two edits.
+#[test]
+fn fix_write_renames_wrong_argument_labels_to_the_declared_ones() {
+    let bin = env!("CARGO_BIN_EXE_rss");
+    let temp = tempfile::tempdir().expect("temp dir should be creatable");
+    let file = temp.path().join("wrong-labels.rss");
+    fs::write(
+        &file,
+        concat!(
+            "pub fn record(target: mut List<Int>, note: read String) -> Unit {\n",
+            "    return Unit\n",
+            "}\n",
+            "fn main() -> Unit {\n",
+            "    let mut items: List<Int> = List<Int>.new()\n",
+            "    return record(tgt: mut items, text: \"hi\")\n",
+            "}\n",
+        ),
+    )
+    .expect("fixture should write");
+    let path = file.to_str().expect("path is utf-8");
+
+    let write = Command::new(bin)
+        .args(["fix", "--write", path])
+        .output()
+        .expect("rss fix --write runs");
+    assert!(
+        write.status.success(),
+        "fix --write failed: {}",
+        String::from_utf8_lossy(&write.stderr)
+    );
+    let fixed = fs::read_to_string(&file).unwrap();
+    assert!(
+        fixed.contains("record(target: mut items, note: \"hi\")"),
+        "fixed source:\n{fixed}"
+    );
+
+    let check = Command::new(bin)
+        .args(["check", path])
+        .output()
+        .expect("rss check runs");
+    let check_out = String::from_utf8_lossy(&check.stdout);
+    assert!(
+        check_out.contains("ok"),
+        "post-fix check not clean:\n{check_out}\n{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+}
+
 #[cfg(feature = "execution")]
 #[test]
 fn run_cli_defaults_to_the_isolated_verified_vm() {

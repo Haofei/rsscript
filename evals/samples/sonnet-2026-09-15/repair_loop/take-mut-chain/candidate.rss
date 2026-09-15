@@ -1,0 +1,21 @@
+fn build_report(title: take String) -> fresh Report {
+    return Report(title: take title, lines: [])
+}
+
+fn add_line(report: mut Report, line: read String) -> Unit
+    retains(line)
+{
+    List.push(list: mut report.lines, value: line)
+}
+
+fn finish_report(report: take Report) -> Unit {
+    ReportSink.emit(report: take report)
+}
+
+fn main() -> Unit {
+    let title_value: String = "Q3 Summary"
+    let mut report_value: Report = build_report(title: take title_value)
+    add_line(report: mut report_value, line: "Revenue up 12%")
+    add_line(report: mut report_value, line: "Headcount steady")
+    finish_report(report: take report_value)
+}

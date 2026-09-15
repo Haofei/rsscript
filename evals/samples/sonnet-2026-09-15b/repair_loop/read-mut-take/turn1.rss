@@ -1,0 +1,6 @@
+fn main() -> Unit {
+    local buffer = Buffer(text: "a")
+    let suffix = "b"
+    EvalApi.append(buffer: mut buffer, suffix: suffix)
+    EvalApi.consume(value: take buffer)
+}

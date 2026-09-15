@@ -1,0 +1,43 @@
+sum PipelineError {
+    BadInput(detail: String),
+    Upstream(detail: String),
+}
+
+fn PipelineError.detail(error: read PipelineError) -> fresh String {
+    return match error {
+        BadInput(detail: detail) => { return detail }
+        Upstream(detail: detail) => { return detail }
+    }
+}
+
+fn parse_amount(raw: read String) -> Result<Int, PipelineError> {
+    return match Int.parse(value: raw) {
+        Ok(value) => { return Ok(value) }
+        Err(message) => { return Err(BadInput(detail: message)) }
+    }
+}
+
+fn push_amount(id: read String, raw: read String) -> Result<Int, PipelineError> {
+    return match parse_amount(raw: raw) {
+        Err(error) => { return Err(error) }
+        Ok(amount) => {
+            return match Sync.push(id: id, amount: amount) {
+                Ok(accepted) => { return Ok(accepted) }
+                Err(error) => { return Err(Upstream(detail: SyncError.message(error: error))) }
+            }
+        }
+    }
+}
+
+fn main() -> Unit {
+    return match push_amount(id: "acct-1", raw: "42") {
+        Ok(accepted) => {
+            Metrics.record(name: "amounts.accepted", value: accepted)
+            return
+        }
+        Err(error) => {
+            Metrics.record(name: PipelineError.detail(error: error), value: 0)
+            return
+        }
+    }
+}

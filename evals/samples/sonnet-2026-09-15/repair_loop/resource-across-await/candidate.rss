@@ -1,0 +1,32 @@
+fn read_cursor(path: read String) -> Result<fresh String, String> {
+    with ConfigStore.open(path: path)? as store {
+        return ConfigStore.read_key(store: mut store, key: "cursor")
+    }
+}
+
+async fn sync_next_page(path: read String) -> Result<String, String> {
+    match read_cursor(path: path) {
+        Ok(cursor) => {
+            match await Sync.fetch_page(cursor: cursor) {
+                Ok(page) => { return Ok(page) }
+                Err(error) => { return Err(SyncError.message(error: error)) }
+            }
+        }
+        Err(message) => { return Err(message) }
+    }
+}
+
+fn main() -> Result<Unit, String> {
+    task_group {
+        async let page_result = sync_next_page(path: "config.toml")
+        let page_outcome = await page_result
+        match page_outcome {
+            Ok(page) => {
+                with ConfigStore.open(path: "config.toml")? as store {
+                    return ConfigStore.write_key(store: mut store, key: "page", value: page)
+                }
+            }
+            Err(message) => { return Err(message) }
+        }
+    }
+}

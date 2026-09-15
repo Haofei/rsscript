@@ -183,8 +183,8 @@ pub use generation::{
     ExpectedType, GenerateContext, GenerationCheckpoint, GenerationCoreInterfacePolicy,
     GenerationInterfaceSetSnapshot, GenerationInterfaceSnapshot, GenerationQueryIdentity,
     GenerationQuerySnapshot, GenerationRestoreError, GenerationSession, GenerationSessionStats,
-    IdentifierRoleName, LiteralKindName, ParserTerminal, PrefixStatus, SemanticValidity, TextRange,
-    TypeRef, valid_continuations,
+    IdentifierRoleName, LiteralKindName, ParameterFact, ParserTerminal, PrefixStatus,
+    SemanticValidity, TextRange, TypeRef, valid_continuations,
 };
 pub use generic_constraints::{
     ProtocolSatisfactionFacts, SubstitutionBudget, SubstitutionError,

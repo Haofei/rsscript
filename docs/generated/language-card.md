@@ -20,7 +20,7 @@ Machine-readable summary: [language-card.json](language-card.json). Diagnostic e
 
 ## Canonical call spelling
 
-Named arguments stay named. A direct call-site `read` wrapper is omitted because it is the default; `mut` and `take` remain explicit. The formatter does not invent or remove argument labels.
+Named arguments stay named. A direct call-site `read` wrapper is omitted because it is the default; `mut` and `take` remain explicit. The formatter does not invent or remove argument labels. `take` moves the value out of its binding, so its operand must be a `local` binding — a `let` binding and a literal cannot be taken, and a parameter that wants `take` therefore needs a `local` on the caller's side.
 
 ```rsscript
 fn apply(target: mut Buffer, input: take String, note: read String) -> Unit {}
@@ -56,9 +56,11 @@ These are the forms most often written wrong. The right column is what `rss fmt`
 | `task_group`, `with` and `select` are statements | `task_group { spawn work() }` | `let results = task_group { spawn work() }` |
 | no tuple destructuring in `for` | `for key in Map.keys(map: counts) { }` | `for (key, value) in counts { }` |
 | mutable binding | `let mut total: Int = 0` | `mut total: Int = 0` |
+| a value you will `take` is bound with `local` | `local title = "daily"` | `let title = "daily"` |
+| `take` moves a binding, never a literal | `local title = "daily"; build(title: take title)` | `build(title: take "daily")` |
 
 ## Core interface signatures
 
 450 callable signatures across 59 namespaces are prelude-visible to a single-file check. The full list, grouped by namespace and generated from the interface sources themselves, is [signatures.md](signatures.md); the machine-readable form is the `signatures` array of [language-card.json](language-card.json).
 
-At a cursor, `rss generate continuations` returns the signatures for the namespace being typed, so a call can be written from facts rather than guessed.
+At a cursor, `rss generate continuations` returns the signatures for the namespace being typed, and every callable candidate carries its parameters as data: the label to write, whether that label may be dropped, and the effect the call site has to supply. Argument labels are the callee's own names, not the caller's: `String.split` takes `value` and `delimiter`, not `text` and `separator`. Read them rather than guessing them.
