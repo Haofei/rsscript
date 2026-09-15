@@ -952,15 +952,21 @@ pub struct NameSuggestion {
 /// point at a function that was renamed or removed.
 pub const INVENTED_NAME_ALIASES: &[(&str, &str)] = &[
     ("Channel.take_receiver", "Channel.receiver"),
+    ("Console.log", "Output.write"),
+    ("Console.print", "Output.write"),
     ("Console.write_line", "Output.write"),
     ("IO.println", "Output.write"),
     ("Int.parse", "String.parse_int"),
+    ("Json.as_array", "Json.array_get"),
+    ("Json.as_list", "Json.array_get"),
     ("Json.get_bool", "Json.field_bool"),
     ("Json.get_field", "Json.field"),
     ("Json.get_int", "Json.field_int"),
     ("Json.get_string", "Json.field_string"),
     ("List.fold_result", "List.try_fold"),
+    ("List.length", "List.len"),
     ("List.of", "List.new"),
+    ("List.size", "List.len"),
     ("Map.get_or", "Map.get_or_default"),
     ("String.find", "String.index_of"),
     ("print", "Output.write"),
@@ -1359,6 +1365,7 @@ mod tests {
         vec![
             "Channel.receiver<T>",
             "Int.to_string",
+            "Json.array_get",
             "Json.at_int",
             "Json.field",
             "Json.field_bool",
@@ -1388,6 +1395,9 @@ mod tests {
             ("Json.get_bool", "Json.field_bool"),
             ("Json.get_field", "Json.field"),
             ("List.of", "List.new"),
+            ("List.length", "List.len"),
+            ("Console.print", "Output.write"),
+            ("Json.as_array", "Json.array_get"),
             ("Map.get_or", "Map.get_or_default"),
         ] {
             let suggestions = unresolved_call_suggestions(invented, prelude());
