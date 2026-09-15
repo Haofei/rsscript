@@ -1664,6 +1664,13 @@ fn the_default_runner_limit_profile_still_admits_native_dispatch() {
     // whole-function entry because it differs from the VM's `DEFAULT_MAX_DEPTH`.
     // That is why the CLI replaced the profile wholesale; with both gates closed
     // it no longer has to.
+    //
+    // These three shapes keep their hot work in a `main`-resident loop or in a
+    // helper called from one. That is no longer a workaround for anything: the
+    // plain `fn main() { ... hot(200000) ... }` shape, whose whole hot loop lives
+    // in a called helper and whose `main` does nothing else, reaches native under
+    // this same profile and is pinned by
+    // `a_called_hot_helper_reaches_native_under_the_default_runner_limits` below.
     for (name, source) in [
         (
             "runner-profile-scalar-loop.rss",
@@ -1731,6 +1738,221 @@ fn the_default_runner_limit_profile_still_stops_an_over_budget_native_run() {
         native.usage.steps_consumed,
         interpreter.usage.steps_consumed
     );
+}
+
+/// `fn main() { ... hot(200000) ... }`: a `main` whose whole hot loop lives in a
+/// called helper, under the profile `rss run --trusted-in-process --native`
+/// keeps.
+///
+/// This shape used to reach no native tier at all, and the reason was not that
+/// the helper "failed to get hot" — it was never offered. Whole-function native
+/// entry is offered `main` first and declines, because
+/// `whole_function_memory_controls_supported`
+/// (`crates/rsscript-vm/src/reg_vm/tier.rs`) refuses any body containing a call
+/// while an allocation or live-memory control is armed, and this profile arms
+/// both. `RegVm::drive` then handed the frame to the tier-0 executor, which runs
+/// a whole call tree inside one frame: `RegVm::run_jit` executes a `CallKnown`
+/// to a pure-leaf callee through `run_jit_pure_leaf` instead of pushing a frame,
+/// so `hot` never became a `drive` frame and `RegVm::attempt_native` never saw
+/// its body. `drive` now keeps a frame on the interpreter loop when tier-0 would
+/// swallow a callee that is still native-eligible, and the interpreter's own
+/// `CallKnown` pushes a real frame per call and gives the native tier first
+/// refusal on the callee.
+///
+/// Nothing about the allocation proof changed: the helper reaches native on its
+/// own proof (a scalar body cannot grow storage; a `List.push` body goes through
+/// the OSR transaction cell), and `main` still declines.
+const CALLED_HELPER_SCALAR: &str = "fn hot(limit: Int) -> Int { let mut i = 0; let mut total = 0; while i < limit { total = total + i * 3 - i / 2 + 7; i = i + 1 }; return total } fn main() -> Int { return hot(limit: 200000) }";
+
+/// The same shape with a growing helper. `List.push` is the one allocating
+/// helper the OSR memory proof admits, so this reaches generated code through an
+/// OSR entry whose capacity deltas are charged into the transaction-local cell
+/// and committed with the heap transaction.
+const CALLED_HELPER_LIST_PUSH: &str = "fn hot(limit: Int) -> Int { local xs = List<Int>.new(); let mut i = 0; let mut total = 0; while i < limit { List.push<Int>(list: mut xs, value: i); total = total + i; i = i + 1 }; return total } fn main() -> Int { return hot(limit: 200000) }";
+
+/// A scalar helper that reaches native, followed by a growing helper that runs
+/// the run out of memory. Used to pin that an armed ceiling still trips with the
+/// interpreter's reason and counts *after* native code has already executed and
+/// charged part of the run.
+const CALLED_HELPER_WARM_THEN_GROW: &str = "fn hot(limit: Int) -> Int { let mut i = 0; let mut total = 0; while i < limit { total = total + i * 3 - i / 2 + 7; i = i + 1 }; return total } fn grow(limit: Int) -> Int { local xs = List<Int>.new(); let mut i = 0; while i < limit { List.push<Int>(list: mut xs, value: i); i = i + 1 }; return List.len<Int>(list: xs) } fn main() -> Int { let warm = hot(limit: 200000); return warm + grow(limit: 200000) }";
+
+fn assert_called_helper_parity(
+    name: &str,
+    interpreter: &ExecutionReport,
+    native: &ExecutionReport,
+) {
+    assert_eq!(
+        native.outcome(),
+        interpreter.outcome(),
+        "{name} must produce the interpreter's outcome"
+    );
+    assert_eq!(
+        native.termination_reason(),
+        interpreter.termination_reason(),
+        "{name} must terminate for the interpreter's reason"
+    );
+    assert_eq!(
+        native.usage.steps_consumed, interpreter.usage.steps_consumed,
+        "{name} must report the interpreter's step count"
+    );
+    assert_eq!(
+        native.usage.intrinsic_calls, interpreter.usage.intrinsic_calls,
+        "{name} must report the interpreter's intrinsic-call count"
+    );
+    assert_eq!(
+        native.usage.allocation_bytes_consumed, interpreter.usage.allocation_bytes_consumed,
+        "{name} must report the interpreter's allocation bytes"
+    );
+    assert_eq!(
+        native.usage.peak_live_memory_bytes, interpreter.usage.peak_live_memory_bytes,
+        "{name} must report the interpreter's peak live memory"
+    );
+    assert_eq!(
+        native.usage.live_memory_bytes_at_return, interpreter.usage.live_memory_bytes_at_return,
+        "{name} must report the interpreter's live memory at return"
+    );
+}
+
+#[test]
+fn a_called_hot_helper_reaches_native_under_the_default_runner_limits() {
+    for (name, source) in [
+        ("called-helper-scalar.rss", CALLED_HELPER_SCALAR),
+        ("called-helper-list-push.rss", CALLED_HELPER_LIST_PUSH),
+    ] {
+        let (interpreter, native) = accounting_pair(
+            name,
+            source,
+            default_runner_limit_profile(),
+            NativeJitOptions {
+                cost_model: NativeCostModel::Off,
+                collect_telemetry: true,
+                ..NativeJitOptions::default()
+            },
+        );
+        assert_called_helper_parity(name, &interpreter, &native);
+        let telemetry = native_telemetry(&native);
+        assert!(
+            telemetry.native_calls + telemetry.osr_entries > 0,
+            "{name}: a hot helper called from `main` must reach whole-function or OSR dispatch under the default runner profile (native_calls={}, osr_entries={})",
+            telemetry.native_calls,
+            telemetry.osr_entries,
+        );
+    }
+}
+
+fn completed_reference(name: &str, source: &str) -> ExecutionReport {
+    let reference = accounting_pair(
+        name,
+        source,
+        default_runner_limit_profile(),
+        NativeJitOptions {
+            cost_model: NativeCostModel::Off,
+            collect_telemetry: true,
+            ..NativeJitOptions::default()
+        },
+    )
+    .0;
+    assert_eq!(
+        reference.termination_reason(),
+        TerminationReason::Completed,
+        "{name}: the reference run must complete so the derived ceilings are real usage"
+    );
+    reference
+}
+
+#[test]
+fn a_called_hot_helper_stops_on_the_interpreter_memory_reason() {
+    // Size every ceiling from a completed reference run, so the trip point is a
+    // property of the program rather than of this machine.
+    let growing = completed_reference(
+        "called-helper-memory-reference.rss",
+        CALLED_HELPER_WARM_THEN_GROW,
+    );
+    let scalar = completed_reference("called-helper-frame-reference.rss", CALLED_HELPER_SCALAR);
+
+    struct Case {
+        name: &'static str,
+        source: &'static str,
+        limits: RunLimits,
+        expected: TerminationReason,
+        /// Whether generated code must have run before the ceiling tripped.
+        expect_native: bool,
+    }
+
+    for case in [
+        // The scalar helper reaches whole-function native entry and completes;
+        // the growing helper then runs the allocation budget out. The ceiling is
+        // therefore enforced *after* generated code has already executed and
+        // charged part of this run, not by refusing native dispatch outright.
+        Case {
+            name: "called-helper-allocation-budget.rss",
+            source: CALLED_HELPER_WARM_THEN_GROW,
+            limits: default_runner_limit_profile()
+                .with_allocation_budget(growing.usage.allocation_bytes_consumed / 4),
+            expected: TerminationReason::AllocationBudgetExceeded,
+            expect_native: true,
+        },
+        Case {
+            name: "called-helper-live-memory.rss",
+            source: CALLED_HELPER_WARM_THEN_GROW,
+            limits: default_runner_limit_profile()
+                .with_live_memory_limit(growing.usage.peak_live_memory_bytes / 2),
+            expected: TerminationReason::LiveMemoryLimitExceeded,
+            expect_native: true,
+        },
+        // The whole `main -> hot` call graph is tier-0 eligible, so this is the
+        // exact shape the interpreter loop now owns instead of tier-0. The only
+        // storage it grows is the shared register stack `RegVm::ensure_regs`
+        // charges when the callee's frame window is opened, so a budget one byte
+        // short of the completed run has to trip on that charge, on the same
+        // instruction, with the same count — proof that moving the call off
+        // tier-0 did not move an allocation charge with it.
+        Case {
+            name: "called-helper-callee-frame-budget.rss",
+            source: CALLED_HELPER_SCALAR,
+            limits: default_runner_limit_profile()
+                .with_allocation_budget(scalar.usage.allocation_bytes_consumed.saturating_sub(1)),
+            expected: TerminationReason::AllocationBudgetExceeded,
+            expect_native: false,
+        },
+    ] {
+        let Case {
+            name,
+            source,
+            limits,
+            expected,
+            expect_native,
+        } = case;
+        let (interpreter, native) = accounting_pair(
+            name,
+            source,
+            limits,
+            NativeJitOptions {
+                cost_model: NativeCostModel::Off,
+                collect_telemetry: true,
+                ..NativeJitOptions::default()
+            },
+        );
+        assert_eq!(
+            interpreter.termination_reason(),
+            expected,
+            "{name} must trip the expected ceiling on the interpreter"
+        );
+        assert_called_helper_parity(name, &interpreter, &native);
+        let telemetry = native_telemetry(&native);
+        if expect_native {
+            // `native_calls` specifically: that is the scalar helper's own
+            // whole-function entry. The growing helper's OSR region hits the
+            // ceiling and rolls back, which is a fail-closed exit and counts no
+            // entry at all.
+            assert!(
+                telemetry.native_calls > 0,
+                "{name}: the scalar helper must still reach whole-function native entry before the ceiling trips (native_calls={}, osr_entries={})",
+                telemetry.native_calls,
+                telemetry.osr_entries,
+            );
+        }
+    }
 }
 
 /// OSR and continuation regions whose rewrites replace or delete the intrinsic

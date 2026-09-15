@@ -138,6 +138,32 @@ impl RegVm {
                     }
                 }
                 && self.is_jit_eligible(func.ordinal, &func)
+                && {
+                    // Tier-0 runs a whole call tree inside one frame: `run_jit`
+                    // executes a pure-leaf `CallKnown` through
+                    // `run_jit_pure_leaf` rather than pushing a frame, so the
+                    // callee never re-enters this loop and `attempt_native` is
+                    // never offered its body. Whole-function native entry has
+                    // already had first refusal on *this* function above and
+                    // declined — which any body containing a call does under an
+                    // armed allocation or live-memory control — so swallowing
+                    // the callee here is what makes a hot helper unreachable by
+                    // the native tier. Keep such a frame on the interpreter
+                    // loop, whose `CallKnown` pushes a real frame and gives the
+                    // native tier first refusal on the callee. The check reads
+                    // each callee's current native status, so a callee that
+                    // reaches an invariant decline returns this function to
+                    // tier-0.
+                    #[cfg(feature = "native-jit")]
+                    {
+                        self.native.is_none()
+                            || !self.jit_state.tier0_hides_native_callee(func.ordinal)
+                    }
+                    #[cfg(not(feature = "native-jit"))]
+                    {
+                        true
+                    }
+                }
             {
                 let value = self.run_jit(unit, &func, base)?;
                 let frame = self.frames.pop().expect("active frame");

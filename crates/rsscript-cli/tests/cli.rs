@@ -764,43 +764,68 @@ fn trusted_native_execution_keeps_the_default_runner_step_budget() {
 /// actually reach the native tier under that same profile — the profile used to
 /// refuse every whole-function and OSR region because it arms
 /// `intrinsic_call_budget` and a non-default `max_depth`.
+///
+/// The second shape is the one the profile used to shut out completely: a `main`
+/// whose whole hot loop lives in a called helper. `main` declines whole-function
+/// native entry because its body contains a call while the profile arms the
+/// memory controls, and the tier-0 executor used to run the helper inside
+/// `main`'s own frame, so the helper was never offered to the native tier. The
+/// CLI runs with telemetry collection off, so this pins the engine and identical
+/// usage; `a_called_hot_helper_reaches_native_under_the_default_runner_limits`
+/// in `crates/rsscript-sdk/tests/native_jit_differential.rs` pins
+/// `native_calls + osr_entries > 0` for the same source under the same profile.
 #[cfg(feature = "native-jit")]
 #[test]
 fn trusted_native_execution_still_engages_under_the_default_runner_limits() {
-    let source = "fn main() -> Int { let mut i = 0; let mut total = 0; while i < 200000 { total = total + i * 3 - i / 2 + 7; i = i + 1 }; return total }\n";
-    let (success, native) = run_trusted_native_fixture("native-engages.rss", source);
-    assert!(
-        success,
-        "a normal program must complete: {}",
-        native["outcome"]
-    );
-    assert_eq!(native["telemetry"]["engine"]["kind"], "native");
+    for (name, source) in [
+        (
+            "native-engages",
+            "fn main() -> Int { let mut i = 0; let mut total = 0; while i < 200000 { total = total + i * 3 - i / 2 + 7; i = i + 1 }; return total }\n",
+        ),
+        (
+            "native-engages-called-helper",
+            "fn hot(limit: Int) -> Int { let mut i = 0; let mut total = 0; while i < limit { total = total + i * 3 - i / 2 + 7; i = i + 1 }; return total }\nfn main() -> Int { return hot(limit: 200000) }\n",
+        ),
+    ] {
+        let (success, native) = run_trusted_native_fixture(&format!("{name}.rss"), source);
+        assert!(
+            success,
+            "{name}: a normal program must complete: {}",
+            native["outcome"]
+        );
+        assert_eq!(native["telemetry"]["engine"]["kind"], "native");
 
-    let bin = env!("CARGO_BIN_EXE_rss");
-    let temp = tempfile::tempdir().expect("temp dir should be creatable");
-    let path = temp.path().join("native-engages-interpreted.rss");
-    fs::write(&path, source).expect("write interpreter fixture");
-    let output = Command::new(bin)
-        .args([
-            "run",
-            "--trusted-in-process",
-            "--json",
-            path.to_str().expect("path is utf-8"),
-        ])
-        .output()
-        .expect("trusted interpreter run should execute");
-    let interpreted: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("interpreter run emits a report");
-    assert_eq!(
-        native["outcome"], interpreted["outcome"],
-        "`--native` must not change the outcome"
-    );
-    assert_eq!(
-        native["usage"]["steps_consumed"], interpreted["usage"]["steps_consumed"],
-        "`--native` must report the interpreter's step count"
-    );
-    assert_eq!(
-        native["usage"]["intrinsic_calls"], interpreted["usage"]["intrinsic_calls"],
-        "`--native` must report the interpreter's intrinsic-call count"
-    );
+        let bin = env!("CARGO_BIN_EXE_rss");
+        let temp = tempfile::tempdir().expect("temp dir should be creatable");
+        let path = temp.path().join(format!("{name}-interpreted.rss"));
+        fs::write(&path, source).expect("write interpreter fixture");
+        let output = Command::new(bin)
+            .args([
+                "run",
+                "--trusted-in-process",
+                "--json",
+                path.to_str().expect("path is utf-8"),
+            ])
+            .output()
+            .expect("trusted interpreter run should execute");
+        let interpreted: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("interpreter run emits a report");
+        assert_eq!(
+            native["outcome"], interpreted["outcome"],
+            "{name}: `--native` must not change the outcome"
+        );
+        assert_eq!(
+            native["usage"]["steps_consumed"], interpreted["usage"]["steps_consumed"],
+            "{name}: `--native` must report the interpreter's step count"
+        );
+        assert_eq!(
+            native["usage"]["intrinsic_calls"], interpreted["usage"]["intrinsic_calls"],
+            "{name}: `--native` must report the interpreter's intrinsic-call count"
+        );
+        assert_eq!(
+            native["usage"]["allocation_bytes_consumed"],
+            interpreted["usage"]["allocation_bytes_consumed"],
+            "{name}: `--native` must report the interpreter's allocation bytes"
+        );
+    }
 }
