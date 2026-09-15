@@ -2814,16 +2814,21 @@ checks apply (`crates/rsscript-semantics/src/try_checks.rs`):
 * **Operand** — the operand's type must be `Result<…>` or `Option<…>`. Applying
   `?` to anything else whose type is known is `RS0013`. An operand whose type is
   unknown is skipped.
+* **Propagation target** — the enclosing function must return `Result<…>` or
+  `Option<…>`, so the failure case has somewhere to go. `?` in a function with
+  any other concrete return type is `RS0013`.
 * **Error type** — inside a function returning `Result<T, E>`, every `?` on a
   `Result<_, F>` must have `F` compatible with `E`; otherwise `RS0013`.
 
 There is no `From`-style error conversion: the error types must match.
 
-Note what is *not* checked: using `?` inside a function whose return type is not
-a `Result`/`Option` is **not** diagnosed as long as the operand is a `Result`.
-`try_error_type_diagnostics` is driven by the *function's* error type, so a
-function with no error type produces no error-type obligation. This is a real
-gap; see §12.
+The propagation-target check is deliberately conservative
+(`try_checks.rs::TryContext::from_return_type`). It classifies the declared
+return type with type aliases expanded, and derives no obligation at all when
+the return type is a bare type parameter of the function, still carries an
+unresolved generic placeholder, or is a bare `Result`/`Option` with no
+arguments. A `?` inside a **closure body** is also never reported this way: the
+closure has its own return contract, which this check does not model.
 
 **Accepted**
 
@@ -2838,7 +2843,7 @@ fn double(text: String) -> Result<Int, String> {
 }
 ```
 
-**Rejected — `RS0013`**
+**Rejected — `RS0013`** — the operand is not a `Result`/`Option`
 
 ```rsscript
 fn load(value: Int) -> Int {
@@ -2848,6 +2853,19 @@ fn load(value: Int) -> Int {
 fn wrap(value: Int) -> Result<Int, String> {
     let loaded = load(value: value)?
     return Ok(loaded)
+}
+```
+
+**Rejected — `RS0013`** — the enclosing function cannot propagate the failure
+
+```rsscript
+fn parse(text: String) -> Result<Int, String> {
+    return Ok(1)
+}
+
+fn double(text: String) -> Int {
+    let value = parse(text: text)?
+    return value * 2
 }
 ```
 
@@ -4167,12 +4185,6 @@ These are findings for the maintainer, not features.
 
 * **No definite-assignment analysis.** `let x: Int` with no initializer,
   followed by a read of `x`, is accepted (§6.12).
-* **`?` in a function that returns neither `Result` nor `Option`** is not
-  diagnosed as long as the operand is a `Result`. `try_error_type_diagnostics`
-  derives its obligation from the *function's* error type, so a function with no
-  error type produces no obligation (§6.10). The catalog text for `RS0013` says
-  "`?` may only be used inside functions that return a compatible `Result<T, E>`
-  type", which overstates what is enforced.
 * **`use` of a non-existent module is silent.** An unresolvable import simply
   leaves the reference unmangled; only an actual use of an unresolvable *name*
   produces `RS0026`/`RS0206` (§1.4).
@@ -4224,7 +4236,6 @@ These are findings for the maintainer, not features.
   `tests/checker_frontend/async_resources.rs` and
   `tests/vm_eval_parity/async_concurrency.rs`. Neither path exists in the
   repository.
-* The `RS0013` catalog text overstates the enforced rule (§12.2).
 * `docs/generated/grammar.md` lists reserved keyword classes from the lexer
   table only. Words the parser gives declaration meaning to — `sum`, `protocol`,
   `impl`, `type`, `const`, `opaque`, `derives`, `retains`, `noescape`, `owned`,

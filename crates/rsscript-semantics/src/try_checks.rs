@@ -35,29 +35,105 @@ fn is_option_type(type_name: &str) -> bool {
     type_name == "Option" || type_name.starts_with("Option<")
 }
 
-/// Diagnose `Result` error-type mismatches introduced by `?` in a function.
-pub fn try_error_type_diagnostics(
-    block: &HirBlock,
-    function_error_type: Option<&str>,
-) -> Vec<Diagnostic> {
+/// What the enclosing function lets `?` propagate.
+///
+/// `?` is an early return of the failure case, so it needs a return type that
+/// can carry one. Anything the checker cannot classify with confidence — a
+/// generic return type, an unexpanded alias, a closure body whose contract is
+/// not known here — is [`TryContext::Unknown`] and is left alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TryContext<'a> {
+    /// `-> Result<T, E>`: `?` propagates `E`, which must match exactly.
+    ResultError(&'a str),
+    /// `-> Option<T>`: `?` propagates `None`.
+    Option,
+    /// A concrete return type that can carry neither a failure nor a `None`.
+    Unsupported(&'a str),
+    /// Not classifiable; no obligation is derived.
+    Unknown,
+}
+
+impl<'a> TryContext<'a> {
+    /// Classify an enclosing function's rendered return type. Callers are
+    /// expected to have expanded type aliases first.
+    pub fn from_return_type(return_type: Option<&'a str>) -> Self {
+        let Some(return_type) = return_type.map(str::trim) else {
+            return TryContext::Unknown;
+        };
+        if is_option_type(return_type) {
+            return TryContext::Option;
+        }
+        if is_result_type(return_type) {
+            return match result_error_type_name(return_type) {
+                Some(error_type) => TryContext::ResultError(error_type),
+                // `Result` without a spelled-out error type carries a failure
+                // but names no error type to match against.
+                None => TryContext::Unknown,
+            };
+        }
+        if is_unclassifiable_return_type(return_type) {
+            return TryContext::Unknown;
+        }
+        TryContext::Unsupported(return_type)
+    }
+
+    /// The context seen by a closure body nested in this one. A closure has its
+    /// own return contract, which is not modelled here, so a `?` inside it is
+    /// never reported as having no propagation target.
+    fn inside_closure(self) -> Self {
+        match self {
+            TryContext::Unsupported(_) => TryContext::Unknown,
+            other => other,
+        }
+    }
+}
+
+/// A return type the checker will not judge: a generic parameter or any type
+/// still carrying an unresolved generic placeholder.
+fn is_unclassifiable_return_type(return_type: &str) -> bool {
+    return_type.is_empty()
+        || return_type.contains('?')
+        || (return_type.len() == 1
+            && return_type
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_uppercase()))
+}
+
+/// Diagnose `?` used where the enclosing function cannot propagate a failure,
+/// and `Result` error-type mismatches introduced by `?` in a function.
+pub fn try_error_type_diagnostics(block: &HirBlock, context: TryContext<'_>) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
-    collect_block(block, function_error_type, &mut diagnostics);
+    collect_block(block, context, &mut diagnostics);
     diagnostics
 }
 
-fn collect_block(
-    block: &HirBlock,
-    function_error_type: Option<&str>,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
+fn try_without_propagation_target_diagnostic(span: &Span, return_type: &str) -> Diagnostic {
+    Diagnostic::error(
+        code::INVALID_TRY_OPERATOR,
+        "`?` requires a function that returns `Result<T, E>` or `Option<T>`.",
+        span.clone(),
+        "no propagation target",
+    )
+    .with_cause(format!(
+        "`?` returns the failure case out of the enclosing function, but this function returns `{return_type}`."
+    ))
+    .with_fix(
+        "return_result_or_handle",
+        "Return `Result<T, E>` or `Option<T>` from this function, or handle the failure with `match`.",
+        "manual",
+    )
+}
+
+fn collect_block(block: &HirBlock, context: TryContext<'_>, diagnostics: &mut Vec<Diagnostic>) {
     for statement in &block.statements {
-        collect_statement(statement, function_error_type, diagnostics);
+        collect_statement(statement, context, diagnostics);
     }
 }
 
 fn collect_statement(
     statement: &HirStmt,
-    function_error_type: Option<&str>,
+    function_error_type: TryContext<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     match statement {
@@ -121,21 +197,28 @@ fn collect_statement(
 
 fn collect_expression(
     expr: &HirExpr,
-    function_error_type: Option<&str>,
+    function_error_type: TryContext<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     match expr {
         HirExpr::Try { value, span, .. } => {
-            if let (Some(function_error_type), Some(operand_type)) =
-                (function_error_type, hir_expr_type_name(value))
-                && let Some(operand_error_type) = result_error_type_name(operand_type)
-                && operand_error_type != function_error_type
-            {
-                diagnostics.push(try_error_type_mismatch_diagnostic(
-                    span,
-                    operand_error_type,
-                    function_error_type,
-                ));
+            match function_error_type {
+                TryContext::Unsupported(return_type) => {
+                    diagnostics.push(try_without_propagation_target_diagnostic(span, return_type));
+                }
+                TryContext::ResultError(function_error_type) => {
+                    if let Some(operand_error_type) =
+                        hir_expr_type_name(value).and_then(result_error_type_name)
+                        && operand_error_type != function_error_type
+                    {
+                        diagnostics.push(try_error_type_mismatch_diagnostic(
+                            span,
+                            operand_error_type,
+                            function_error_type,
+                        ));
+                    }
+                }
+                TryContext::Option | TryContext::Unknown => {}
             }
             collect_expression(value, function_error_type, diagnostics);
         }
@@ -159,7 +242,9 @@ fn collect_expression(
             collect_expression(base, function_error_type, diagnostics);
             collect_expression(index, function_error_type, diagnostics);
         }
-        HirExpr::Closure { body, .. } => collect_block(body, function_error_type, diagnostics),
+        HirExpr::Closure { body, .. } => {
+            collect_block(body, function_error_type.inside_closure(), diagnostics)
+        }
         HirExpr::Match { value, arms, .. } => {
             collect_expression(value, function_error_type, diagnostics);
             for arm in arms {
@@ -304,9 +389,82 @@ mod tests {
             span: span(),
         };
 
-        let diagnostics = try_error_type_diagnostics(&block, Some("AppError"));
+        let diagnostics = try_error_type_diagnostics(&block, TryContext::ResultError("AppError"));
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].code, code::INVALID_TRY_OPERATOR);
         assert!(diagnostics[0].label.contains("mismatched try error type"));
+    }
+
+    fn try_block() -> HirBlock {
+        HirBlock {
+            statements: vec![HirStmt::Expr(HirExpr::Try {
+                value: Box::new(HirExpr::Ident {
+                    name: "operation".to_owned(),
+                    type_name: Some("Result<Int, AppError>".to_owned()),
+                    span: span(),
+                }),
+                type_name: Some("Int".to_owned()),
+                span: span(),
+            })],
+            span: span(),
+        }
+    }
+
+    #[test]
+    fn classifies_a_function_return_type_into_a_try_context() {
+        assert_eq!(
+            TryContext::from_return_type(Some("Result<Int, AppError>")),
+            TryContext::ResultError("AppError")
+        );
+        assert_eq!(
+            TryContext::from_return_type(Some("Option<Int>")),
+            TryContext::Option
+        );
+        assert_eq!(
+            TryContext::from_return_type(Some("Unit")),
+            TryContext::Unsupported("Unit")
+        );
+        // A bare type parameter, an unresolved placeholder, and a missing
+        // return type are all left unjudged.
+        assert_eq!(TryContext::from_return_type(Some("T")), TryContext::Unknown);
+        assert_eq!(
+            TryContext::from_return_type(Some("List<?>")),
+            TryContext::Unknown
+        );
+        assert_eq!(TryContext::from_return_type(None), TryContext::Unknown);
+    }
+
+    #[test]
+    fn rejects_try_in_a_function_that_cannot_propagate_a_failure() {
+        let diagnostics = try_error_type_diagnostics(&try_block(), TryContext::Unsupported("Int"));
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, code::INVALID_TRY_OPERATOR);
+        assert!(diagnostics[0].label.contains("no propagation target"));
+    }
+
+    #[test]
+    fn accepts_try_in_option_and_matching_result_functions() {
+        assert!(try_error_type_diagnostics(&try_block(), TryContext::Option).is_empty());
+        assert!(
+            try_error_type_diagnostics(&try_block(), TryContext::ResultError("AppError"))
+                .is_empty()
+        );
+        assert!(try_error_type_diagnostics(&try_block(), TryContext::Unknown).is_empty());
+    }
+
+    #[test]
+    fn a_closure_body_is_not_judged_against_the_outer_return_type() {
+        let block = HirBlock {
+            statements: vec![HirStmt::Expr(HirExpr::Closure {
+                params: Vec::new(),
+                captures: Vec::new(),
+                explicit: false,
+                ty: None,
+                body: try_block(),
+                span: span(),
+            })],
+            span: span(),
+        };
+        assert!(try_error_type_diagnostics(&block, TryContext::Unsupported("Unit")).is_empty());
     }
 }

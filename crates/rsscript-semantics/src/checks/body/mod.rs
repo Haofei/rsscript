@@ -89,15 +89,27 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
         }
         let mut state = local_analysis.initial_state();
         if let Some(block) = hir_body.as_ref().and_then(|body| body.block.as_ref()) {
-            let return_error_type = function
-                .return_ty
-                .as_ref()
-                .and_then(result_error_type_ref_name);
+            // `?` needs a return type that can carry the failure case. Classify
+            // the declared return type with aliases expanded; a return type that
+            // names one of the function's own type parameters stays unclassified
+            // so a generic helper is never wrongly rejected.
+            let return_type = function.return_ty.as_ref().map(|return_ty| {
+                let rendered = type_ref_name(return_ty);
+                if function
+                    .type_params
+                    .iter()
+                    .any(|param| param.name == rendered)
+                {
+                    String::new()
+                } else {
+                    analyzer.expand_type_alias(&rendered)
+                }
+            });
             analyzer
                 .diagnostics
                 .extend(rsscript_semantics::try_error_type_diagnostics(
                     block,
-                    return_error_type.as_deref(),
+                    rsscript_semantics::TryContext::from_return_type(return_type.as_deref()),
                 ));
             analyzer
                 .diagnostics

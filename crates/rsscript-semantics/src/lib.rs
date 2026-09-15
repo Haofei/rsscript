@@ -241,7 +241,7 @@ pub use place::{
     indexed_place_conflict_diagnostic, managed_field_split_conflict_diagnostic,
     move_base_field_conflict_diagnostic,
 };
-pub use try_checks::{try_error_type_diagnostics, try_operand_diagnostic};
+pub use try_checks::{TryContext, try_error_type_diagnostics, try_operand_diagnostic};
 pub use type_compatibility::{
     UnresolvedGenericFacts, ambiguous_receiver_call_diagnostic,
     argument_payload_type_mismatch_diagnostic, argument_type_mismatch_diagnostic,

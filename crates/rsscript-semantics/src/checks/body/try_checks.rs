@@ -28,13 +28,6 @@ pub(super) fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
     }
 }
 
-pub(super) fn result_error_type_ref_name(return_ty: &TypeRef) -> Option<String> {
-    if return_ty.name != "Result" || return_ty.args.len() != 2 {
-        return None;
-    }
-    return_ty.args.get(1).map(type_ref_name)
-}
-
 pub(super) fn type_ref_name(ty: &TypeRef) -> String {
     let base = if ty.name == "Fn" {
         let params = ty

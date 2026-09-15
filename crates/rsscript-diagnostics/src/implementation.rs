@@ -483,7 +483,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::INVALID_TRY_OPERATOR,
         title: "invalid try operator",
-        explanation: "`?` may only be used inside functions that return a compatible `Result<T, E>` type.",
+        explanation: "`?` is an early return of the failure case, so three things must hold. The operand must be a `Result<T, E>` or an `Option<T>`. The enclosing function must return `Result<T, E>` or `Option<T>`, so the failure has somewhere to go. And inside a `Result`-returning function the operand's error type must match the function's error type exactly — RSScript performs no implicit error conversion, so convert explicitly with `match` instead.",
     },
     DiagnosticExplanation {
         code: code::UNSUPPORTED_SYNTAX,
