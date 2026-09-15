@@ -17,8 +17,16 @@ pub(super) fn osr_committed_tail_calls(final_logical_depth: usize, physical_dept
 /// account for. In particular, a deadline-only request must not enter a native
 /// loop that has no generated deadline poll.
 #[cfg(feature = "native-jit")]
+/// OSR counterpart of `RegVm::native_preemption_controls_supported`, and for the
+/// same reasons: a Provider call is a barrier the interpreter owns, so an armed
+/// `provider_call_budget` does not need to refuse OSR, while an armed
+/// `intrinsic_call_budget` still does.
+/// OSR counterpart of `RegVm::native_preemption_controls_supported`, and for the
+/// same reasons: a Provider call is a barrier the interpreter owns, so an armed
+/// `provider_call_budget` does not need to refuse OSR, while an armed
+/// `intrinsic_call_budget` still does.
 pub(super) fn osr_execution_controls_supported(limits: &VmLimits) -> bool {
-    limits.intrinsic_call_budget.is_none() && limits.provider_call_budget.is_none()
+    limits.intrinsic_call_budget.is_none()
 }
 
 #[cfg(feature = "native-jit")]

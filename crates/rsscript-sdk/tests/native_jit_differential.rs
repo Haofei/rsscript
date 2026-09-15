@@ -838,6 +838,117 @@ fn provider_barrier_executes_once_and_reenters_native() {
     );
 }
 
+#[test]
+fn an_armed_provider_call_budget_no_longer_refuses_native_dispatch() {
+    // A Provider call is `RegInstr::CallExternal`, a barrier generated code never
+    // lowers, so the interpreter performs and charges every one of them. An armed
+    // `provider_call_budget` therefore has no reason to refuse native dispatch, and
+    // the native run must report the interpreter's counts and its termination
+    // reason both under and over the budget.
+    const SOURCE: &str = "module app\nuse host.math.*\nfn work(seed: Int) -> Int { let mut i = 0; let mut total = seed; while i < 400 { total = total + i * 3 - i / 2; i = i + 1 }; return total }\nfn main() -> Int { let mut round = 0; let mut acc = 1; while round < 4 { let w = work(seed: acc); acc = adjust(value: read w); round = round + 1 }; return acc }";
+    const INTERFACE: &str = "module host.math\npub fn adjust(value: read Int) -> Int\n";
+
+    let symbol = ExternalSymbol::new("host.math.adjust").expect("test symbol is valid");
+    let signature = FunctionSignature {
+        parameters: vec![ParameterSignature {
+            name: "value".into(),
+            effect: DataEffect::Read,
+            ty: "Int".into(),
+            retained: false,
+        }],
+        result: "Int".into(),
+        asynchronous: false,
+    };
+    let descriptor = ProviderDescriptor {
+        provider_id: "jit.test.math".into(),
+        provider_version: "1".into(),
+        supported_abi: vec![RUNTIME_ABI_VERSION],
+        record_layouts: Vec::new(),
+        variant_layouts: Vec::new(),
+        functions: vec![ProviderFunctionDescriptor {
+            symbol: symbol.clone(),
+            signature: signature.clone(),
+            entry: "adjust".into(),
+            call_mode: ProviderCallMode::Sync,
+            blocking: BlockingBehavior::NonBlocking,
+            cancellation: CancellationBehavior::NotApplicable,
+            thread_safe: true,
+            reentrant: true,
+            resource_cleanup: ResourceCleanupContract::None,
+            error_mapping: ProviderErrorMapping::StructuredV1,
+        }],
+    };
+
+    // Two budgets: one the program stays under, one it trips partway through.
+    for (budget, expect_native) in [(8_u64, true), (2, true)] {
+        let mut providers = ProviderRegistry::default();
+        providers
+            .register(
+                &descriptor,
+                BTreeMap::from([(
+                    symbol.clone(),
+                    ProviderFunction {
+                        signature: signature.clone(),
+                        callable: WireInterpreterFn::new(|args| match args.as_slice() {
+                            [WireValue::Int { value }] => Ok(WireValue::Int {
+                                value: value % 1_000 + 4,
+                            }),
+                            _ => Err(ProviderError::invalid_argument(
+                                "adjust expects one Int argument",
+                            )),
+                        }),
+                    },
+                )]),
+            )
+            .expect("test Provider matches its descriptor");
+
+        let built = Compiler
+            .compile_with_interfaces(&[("main.rss", SOURCE)], &[("math.rssi", INTERFACE)])
+            .expect("provider budget source compiles");
+        let admitted = ArtifactVerifier
+            .verify(built)
+            .expect("provider budget artifact verifies")
+            .admit_trusted_input();
+        let linked = Runtime::new(providers)
+            .link(&admitted)
+            .expect("test Provider links");
+
+        let limits = RunLimits::unbounded_for_trusted_host().with_provider_call_budget(budget);
+        let interpreter = linked.execute(ExecutionRequest::default().limits(limits.clone()));
+        let native = linked.execute(ExecutionRequest::default().limits(limits).native_jit(
+            NativeJitOptions {
+                cost_model: NativeCostModel::Off,
+                collect_telemetry: true,
+                ..NativeJitOptions::default()
+            },
+        ));
+
+        assert_eq!(
+            native.outcome(),
+            interpreter.outcome(),
+            "provider budget {budget} must terminate for the interpreter's reason"
+        );
+        assert_eq!(
+            native.usage.provider_calls, interpreter.usage.provider_calls,
+            "provider budget {budget} must report the interpreter's Provider call count"
+        );
+        assert_eq!(
+            native.usage.steps_consumed, interpreter.usage.steps_consumed,
+            "provider budget {budget} must report the interpreter's step count"
+        );
+        if expect_native {
+            // Continuation regions were already reachable under an armed Provider
+            // budget; whole-function and OSR dispatch were the refused ones, so
+            // pin those specifically or this would pass without the change.
+            let telemetry = native_telemetry(&native);
+            assert!(
+                telemetry.native_calls + telemetry.osr_entries > 0,
+                "provider budget {budget} must no longer refuse whole-function or OSR dispatch"
+            );
+        }
+    }
+}
+
 /// One interpreter/native pair for the same program and the same armed limits.
 ///
 /// The interpreter is the accounting oracle: `usage.steps_consumed` and the

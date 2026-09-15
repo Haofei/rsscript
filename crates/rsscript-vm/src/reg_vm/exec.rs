@@ -175,8 +175,32 @@ impl RegVm {
     /// Native regions enforce preemption; intrinsic/provider budgets remain on
     /// interpreter or host dispatch boundaries.
     #[cfg(feature = "native-jit")]
+    /// Whether the native tier may dispatch under the currently armed call meters.
+    ///
+    /// `provider_call_budget` is deliberately absent. A Provider call is
+    /// `RegInstr::CallExternal`, which `native_lowering_class` classifies as
+    /// `NativeLoweringClass::Yield { ExternalCall }`: it is never lowered into
+    /// machine code, an inlinable leaf is rejected when `may_call_provider` is set,
+    /// and a compiled callee must be a scalar leaf whose every instruction lowers
+    /// natively. Generated code therefore cannot reach a Provider, and every
+    /// Provider call the program makes is performed and charged by the interpreter
+    /// at the barrier. `intrinsic_call_budget` *is* still refused: native code runs
+    /// intrinsics through host helpers and direct lowerings without routing them
+    /// through `charge_intrinsic_call`, so the count would be under-reported.
+    /// Whether the native tier may dispatch under the currently armed call meters.
+    ///
+    /// `provider_call_budget` is deliberately absent. A Provider call is
+    /// `RegInstr::CallExternal`, which `native_lowering_class` classifies as
+    /// `NativeLoweringClass::Yield { ExternalCall }`: it is never lowered into
+    /// machine code, an inlinable leaf is rejected when `may_call_provider` is set,
+    /// and a compiled callee must be a scalar leaf whose every instruction lowers
+    /// natively. Generated code therefore cannot reach a Provider, and every
+    /// Provider call the program makes is performed and charged by the interpreter
+    /// at the barrier. `intrinsic_call_budget` *is* still refused: native code runs
+    /// intrinsics through host helpers and direct lowerings without routing them
+    /// through `charge_intrinsic_call`, so the count would be under-reported.
     pub(super) fn native_preemption_controls_supported(&self) -> bool {
-        self.limits.intrinsic_call_budget.is_none() && self.limits.provider_call_budget.is_none()
+        self.limits.intrinsic_call_budget.is_none()
     }
 
     /// Charge one instruction against the step budget. Always increments the
