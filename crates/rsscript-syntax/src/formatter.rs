@@ -1095,6 +1095,34 @@ fn expr_text(expr: &Expr) -> String {
     formatter.out
 }
 
+/// One canonical line for a declared function's signature:
+/// `Namespace.name<T>(param: effect Type, ...) -> fresh Return retains(param)`.
+///
+/// This is the formatter's own spelling of every part — parameter effects,
+/// generic parameters, `fresh`, `retains` — so a generated reference of callable
+/// signatures cannot drift from what `rss fmt` prints. Unlike the block
+/// formatter it never wraps, because a caller listing signatures wants one
+/// searchable line each.
+pub fn format_declaration_signature(function: &FunctionDecl) -> String {
+    let mut signature = String::new();
+    if function.is_async {
+        signature.push_str("async ");
+    }
+    signature.push_str(&function.name);
+    signature.push_str(&generic_params_text(&function.type_params));
+    signature.push_str(&format_params_text(&function.params));
+    signature.push_str(&return_type_text(
+        function.return_ty.as_ref(),
+        function.returns_fresh,
+    ));
+    for retained in &function.retained_params {
+        signature.push_str(" retains(");
+        signature.push_str(retained);
+        signature.push(')');
+    }
+    signature
+}
+
 fn format_params_text(params: &[Param]) -> String {
     format!(
         "({})",
