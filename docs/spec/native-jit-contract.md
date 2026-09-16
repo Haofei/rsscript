@@ -243,7 +243,7 @@ interpreter runs the calling function, pushes a real frame per call, and each
 callee is admitted or declined on its own proof. `fn main() { ... hot(200000)
 ... }` under `RunnerLimitsV1::default()` therefore executes the helper natively —
 whole-function for a scalar helper, OSR for a `List.push` helper — while `main`
-itself stays interpreted. Gap 4 below is what remains: the *calling* region.
+itself stays interpreted. Gap 3 below is what remains: the *calling* region.
 
 ### Recursion depth
 
@@ -314,8 +314,62 @@ accounting segment rather than by one instruction.
    Needed: find and lift whichever canonical-loop precondition the match-shaped
    body fails, which is a loop-recognition change rather than an accounting one.
 
-2. **Closed: a data-dependent key's hash work is charged by its helper.** The
-   obstacle was never the ABI — the limits cell already existed and was already
+2. **A key the loop builds keeps the loop on the interpreter.** The OSR lowering
+   has no arm for a `StringConcat` whose result survives as a live heap `String` —
+   the string length-law fold exists to dissolve such a value, not to keep one — so
+   `while ... { let key = String.concat(...); Map.insert(map: mut table, key, ...) }`
+   is refused with `lower reject: StringConcat` and the interpreter owns the loop.
+   This is a lowering gap rather than an accounting one: the counts are exact
+   because nothing runs natively, and the key-hash charge closed in "Step count"
+   above is covered by the shapes that do reach generated code (a key loaded in the
+   preheader or passed in). Needed: an OSR lowering for a surviving heap `String`
+   producer, which is the same work a heap-allocating native subset would need.
+
+3. **A region containing a call still needs a per-region allocation proof.** See
+   "Allocation bytes" above: whole-function entry admits an armed
+   `allocation_budget` or `live_memory_limit` only for a body that cannot grow
+   retained storage, which a function containing *any* call is not.
+   `whole_function_memory_controls_supported` is unchanged, and the reason it is
+   unchanged is concrete rather than conservative: the interpreter charges a
+   called frame's register-window growth through `RegVm::ensure_regs`
+   (`crates/rsscript-vm/src/reg_vm/exec.rs`), which bills
+   `grew * (size_of::<VmValue>() + 1)` against the high-water mark of the shared
+   register stack. That charge is data-dependent on the stack depth at the call,
+   so an inlined callee body or a native-to-native edge has no compile-time
+   constant to reserve it with, and the region declines rather than
+   under-reporting. Threading the memory controls through the call edge the way
+   the step and intrinsic cells were threaded would still leave that charge
+   unattributed.
+
+   What this no longer costs is the *callee*. A `main` that calls a hot helper
+   now runs the helper natively under the default runner profile, on the helper's
+   own proof: `main` declines whole-function entry exactly as before, and the
+   interpreter's `CallKnown` pushes a real frame for the helper, which
+   `RegVm::attempt_native` then admits (a scalar body cannot grow storage) or
+   which OSR admits through the `List.push` transaction cell. Nothing tiers "up"
+   by call count — `JitState::call_count` is a constant `0` and there is no
+   tier-up threshold for whole-function entry, which is offered on every fresh
+   frame. What used to hide the helper was the tier-0 executor: `RegVm::run_jit`
+   (`crates/rsscript-vm/src/reg_vm/tier/jit_entry.rs`) runs a whole call tree
+   inside one frame, executing a `CallKnown` to a pure-leaf callee through
+   `run_jit_pure_leaf` instead of pushing a frame, so the callee never re-entered
+   `RegVm::drive` and was never offered to the native tier at all. `drive`
+   (`crates/rsscript-vm/src/reg_vm/exec_ops.rs`) now keeps such a frame on the
+   interpreter loop whenever the native engine is active and
+   `JitState::tier0_hides_native_callee` reports that tier-0 would swallow a
+   callee that is not yet `NATIVE_STATUS_NOT_ELIGIBLE`. The check reads each
+   callee's current status, so a callee whose native attempt reaches an invariant
+   decline returns its caller to tier-0. Step and allocation accounting are
+   identical across that switch: both paths tick once per source instruction and
+   both open the callee window through `prepare_frame` -> `ensure_regs`.
+
+### Closed in the most recent round
+
+These were gap-list entries; they are kept as the record of what was measured and
+decided, because both decisions turned on evidence rather than on principle.
+
+- **A data-dependent key's hash work is charged by its helper.** The obstacle was
+   never the ABI — the limits cell already existed and was already
    forwarded into every child frame — but that the running count lives in a
    Cranelift register between charge points, so a helper adding to the cell would
    be overwritten by the next write-back. Codegen now brackets the two hashing
@@ -334,18 +388,12 @@ accounting segment rather than by one instruction.
    already proven to be a `Handle` now keeps it (`native_key_operand_ty` in
    `crates/rsscript-vm/src/reg_vm/native/translate/osr_loop.rs`).
 
-   What still declines is a key the loop *builds*: the OSR lowering has no arm for
-   a `StringConcat` whose result survives as a live heap `String` (the string
-   length-law fold exists to dissolve such a value, not to keep it), so
-   `while ... { let key = String.concat(...); Map.insert(key, ...) }` is refused at
-   `lower reject: StringConcat`. That is a lowering gap, not an accounting one —
-   the interpreter owns the loop and reports every step exactly — and the shapes
-   that do reach generated code (a key loaded in the preheader or passed in) cover
-   the charge on both the armed and unarmed paths.
+   What still declines is a key the loop *builds*; that is gap 2 above, and it is
+   a lowering gap rather than an accounting one.
 
-3. **Closed: a sunk closure's steps are attributed, and the loop now runs
-   natively.** `native_inline_leaf_calls_inner` deletes a sunk `MakeClosure` and
-   its dead copy `Move`s and emits nothing for them, so they owned no source step
+- **A sunk closure's steps are attributed, and the loop now runs natively.**
+   `native_inline_leaf_calls_inner` deletes a sunk `MakeClosure` and its dead copy
+   `Move`s and emits nothing for them, so they owned no source step
    while the interpreter ticked them. Each deleted instruction's step now moves
    onto the next emitted item, which is exact only because the pass first proves
    that item cannot run without the deleted one having run: a sunk definition is
@@ -386,44 +434,6 @@ accounting segment rather than by one instruction.
    worth 45x. `steps_consumed` is 7200035 on both engines in all three rows and
    `intrinsic_calls` is 5, so the win costs no accounting parity.
 
-4. **A region containing a call still needs a per-region allocation proof.** See
-   "Allocation bytes" above: whole-function entry admits an armed
-   `allocation_budget` or `live_memory_limit` only for a body that cannot grow
-   retained storage, which a function containing *any* call is not.
-   `whole_function_memory_controls_supported` is unchanged, and the reason it is
-   unchanged is concrete rather than conservative: the interpreter charges a
-   called frame's register-window growth through `RegVm::ensure_regs`
-   (`crates/rsscript-vm/src/reg_vm/exec.rs`), which bills
-   `grew * (size_of::<VmValue>() + 1)` against the high-water mark of the shared
-   register stack. That charge is data-dependent on the stack depth at the call,
-   so an inlined callee body or a native-to-native edge has no compile-time
-   constant to reserve it with, and the region declines rather than
-   under-reporting. Threading the memory controls through the call edge the way
-   the step and intrinsic cells were threaded would still leave that charge
-   unattributed.
-
-   What this no longer costs is the *callee*. A `main` that calls a hot helper
-   now runs the helper natively under the default runner profile, on the helper's
-   own proof: `main` declines whole-function entry exactly as before, and the
-   interpreter's `CallKnown` pushes a real frame for the helper, which
-   `RegVm::attempt_native` then admits (a scalar body cannot grow storage) or
-   which OSR admits through the `List.push` transaction cell. Nothing tiers "up"
-   by call count — `JitState::call_count` is a constant `0` and there is no
-   tier-up threshold for whole-function entry, which is offered on every fresh
-   frame. What used to hide the helper was the tier-0 executor: `RegVm::run_jit`
-   (`crates/rsscript-vm/src/reg_vm/tier/jit_entry.rs`) runs a whole call tree
-   inside one frame, executing a `CallKnown` to a pure-leaf callee through
-   `run_jit_pure_leaf` instead of pushing a frame, so the callee never re-entered
-   `RegVm::drive` and was never offered to the native tier at all. `drive`
-   (`crates/rsscript-vm/src/reg_vm/exec_ops.rs`) now keeps such a frame on the
-   interpreter loop whenever the native engine is active and
-   `JitState::tier0_hides_native_callee` reports that tier-0 would swallow a
-   callee that is not yet `NATIVE_STATUS_NOT_ELIGIBLE`. The check reads each
-   callee's current status, so a callee whose native attempt reaches an invariant
-   decline returns its caller to tier-0. Step and allocation accounting are
-   identical across that switch: both paths tick once per source instruction and
-   both open the callee window through `prepare_frame` -> `ensure_regs`.
-
 `rss run --trusted-in-process --native`
 (`crates/rsscript-cli/src/cli/runner.rs`) now keeps
 `runner_limits(&RunnerLimitsV1::default())` - the same profile the interpreter
@@ -433,7 +443,7 @@ path runs under - instead of replacing it with
 `DEFAULT_MAX_DEPTH` of `16_384`, both of which used to refuse every
 whole-function and OSR region; neither does now. `--native` selects an
 accelerator, not a trust level. A program whose hot loop lives in a called helper
-now reaches the native tier under that profile too; what gap 4 still costs is
+now reaches the native tier under that profile too; what gap 3 still costs is
 native entry for the *calling* region, not for the helper.
 
 ### Measured cost of unconditional accounting
@@ -455,13 +465,13 @@ measured within run-to-run noise on the same gate (native median 1.65 ms against
 1.61 ms over four paired runs), because the gate's hot loop dispatches no
 intrinsic and therefore materializes no second counter at all. Keeping a frame
 whose tier-0 run would swallow a native-eligible callee on the interpreter loop
-(gap 4) emits no different code and measured 1.83 ms against 1.79 ms over four
+(gap 3) emits no different code and measured 1.83 ms against 1.79 ms over four
 interleaved paired runs, within noise on the same gate: the gate's own `main`
 was never tier-0 eligible, because its `Output.write` barrier is not a tier-0
 instruction. Enabling closure sinking end to end likewise leaves the gate's
 own code untouched — its loop allocates no closure — and measured a native median
 of 1.76 ms against 2.00 ms over four interleaved paired runs; the shape it does
-change, `native_closure_sinking.rss`, is in the gap-3 table above.
+change, `native_closure_sinking.rss`, is in the closure-sinking table above.
 Composing the OSR pass chain's cost vector likewise emits no
 different code for the gate — whose loop is call-free and takes the direct OSR
 entry — and measured a native median of 1.72 ms against 1.79 ms over four
