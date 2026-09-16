@@ -993,8 +993,13 @@ pub struct NativeExecutionEngineTelemetry {
     pub validation_nanos: u128,
     pub codegen_nanos: u128,
     pub finalize_nanos: u128,
-    pub compile_nanos: u128,
-    pub run_nanos: u128,
+    /// Admitted compile and native run time, in nanoseconds. These two are the
+    /// pair the runner protocol's `ExecutionEngineTelemetryV2::Native` summary
+    /// republishes, and that internally tagged enum cannot carry a `u128`, so
+    /// they are produced as saturating `u64` here — the one width both the
+    /// report and the protocol agree on. 584 years of nanoseconds fit.
+    pub compile_nanos: u64,
+    pub run_nanos: u64,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]

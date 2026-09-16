@@ -96,6 +96,12 @@ track migrations without confusing crate versions with wire versions.
 ### Runner protocol
 
 - Runner response v1 carries a typed, versioned execution-report v2 envelope.
+- The native engine telemetry summary's `compile_nanos` and `run_nanos` are
+  `u64` nanoseconds rather than `u128`, so a native execution report can be
+  deserialized at all: an internally tagged enum buffers its content through
+  serde's `Content`, which has no 128-bit carrier (ADR 0235). The JSON is
+  unchanged for every representable value, and no consumer could parse the old
+  shape, so there is no migration.
 
 ### CLI and tooling
 

@@ -1018,6 +1018,56 @@ fn run_trusted_native_fixture(name: &str, source: &str) -> (bool, serde_json::Va
     (output.status.success(), report)
 }
 
+/// The native path's `--json` report must be a report, not just report-shaped
+/// JSON: `serde_json::from_str::<ExecutionReportV2>` has to accept exactly what
+/// the CLI printed.
+///
+/// This used to be impossible. `ExecutionEngineTelemetryV2::Native` declared its
+/// two nanosecond counters as `u128`, and serde's internally tagged enum buffers
+/// the variant's content through `Content`, which has no 128-bit carrier — so a
+/// native report could be written and never read back. The counters are `u64`
+/// now, and the only engine variant the interpreter path can emit never covered
+/// this, so the native path pins it here.
+#[cfg(feature = "native-jit")]
+#[test]
+fn the_native_json_report_parses_as_the_typed_v2_contract() {
+    let bin = env!("CARGO_BIN_EXE_rss");
+    let temp = tempfile::tempdir().expect("temp dir should be creatable");
+    let path = temp.path().join("native-report-parses.rss");
+    fs::write(
+        &path,
+        "fn main() -> Int { let mut i = 0; let mut total = 0; while i < 200000 { total = total + i * 3 - i / 2 + 7; i = i + 1 }; return total }\n",
+    )
+    .expect("write native fixture");
+    let output = Command::new(bin)
+        .args([
+            "run",
+            "--trusted-in-process",
+            "--native",
+            "--json",
+            path.to_str().expect("path is utf-8"),
+        ])
+        .output()
+        .expect("trusted native run should execute");
+    assert!(
+        output.status.success(),
+        "rss run failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = String::from_utf8(output.stdout).expect("the report is utf-8");
+    let report = serde_json::from_str::<rsscript_runner_protocol::ExecutionReportV2>(&json)
+        .unwrap_or_else(|error| panic!("the printed report must parse as v2 ({error}):\n{json}"));
+    assert!(
+        matches!(
+            report.telemetry.engine,
+            rsscript_runner_protocol::ExecutionEngineTelemetryV2::Native { .. }
+        ),
+        "the native path must report native engine telemetry: {:?}",
+        report.telemetry.engine
+    );
+}
+
 /// `--native` selects an accelerator, not a trust level: it keeps the same
 /// default runner limit profile the interpreter path runs under instead of
 /// replacing it with `RunLimits::unbounded_for_trusted_host()`. The profile's

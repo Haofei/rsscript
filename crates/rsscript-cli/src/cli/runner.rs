@@ -139,13 +139,13 @@ pub(crate) fn run_trusted_in_process(
 /// Project the in-process report's engine telemetry onto the runner's typed v2
 /// contract, replacing it in `report` with the payload-free interpreter variant.
 ///
-/// Two things make this a build step rather than a plain reparse. The in-process
+/// This is a build step rather than a plain reparse because the in-process
 /// report carries the VM's full native diagnostic counter set while
 /// `ExecutionEngineTelemetryV2::Native` carries a seven-counter summary and
-/// denies unknown fields. And that variant's nanosecond counters are `u128`,
-/// which serde's internally-tagged enum buffer cannot deserialize at all — the
-/// variant can only be constructed, never parsed. The isolated runner never hits
-/// either problem because its child does not select the native tier.
+/// denies unknown fields. The isolated runner never hits that problem because
+/// its child does not select the native tier. The projected summary is itself
+/// parseable: what this function emits, `serde_json::from_str::<ExecutionReportV2>`
+/// reads back.
 fn take_engine_telemetry_for_the_runner_contract(
     report: &mut serde_json::Value,
 ) -> ExecutionEngineTelemetryV2 {
@@ -154,12 +154,6 @@ fn take_engine_telemetry_for_the_runner_contract(
             .get(key)
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(0)
-    }
-    fn nanos(engine: &serde_json::Map<String, serde_json::Value>, key: &str) -> u128 {
-        engine
-            .get(key)
-            .and_then(serde_json::Value::as_u64)
-            .map_or(0, u128::from)
     }
     let Some(slot) = report
         .get_mut("telemetry")
@@ -180,8 +174,8 @@ fn take_engine_telemetry_for_the_runner_contract(
         native_calls: counter(engine, "native_calls"),
         native_bails: counter(engine, "native_bails"),
         osr_entries: counter(engine, "osr_entries"),
-        compile_nanos: nanos(engine, "compile_nanos"),
-        run_nanos: nanos(engine, "run_nanos"),
+        compile_nanos: counter(engine, "compile_nanos"),
+        run_nanos: counter(engine, "run_nanos"),
     }
 }
 

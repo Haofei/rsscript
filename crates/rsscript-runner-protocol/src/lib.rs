@@ -367,8 +367,12 @@ pub enum ExecutionEngineTelemetryV2 {
         native_calls: u64,
         native_bails: u64,
         osr_entries: u64,
-        compile_nanos: u128,
-        run_nanos: u128,
+        /// Nanoseconds, `u64` rather than `u128`: an internally tagged enum
+        /// buffers its content through serde's `Content`, which has no 128-bit
+        /// carrier, so a `u128` field here can be serialized but never parsed.
+        /// `u64` nanoseconds span 584 years, so the wire shape is unchanged.
+        compile_nanos: u64,
+        run_nanos: u64,
     },
 }
 
@@ -728,6 +732,40 @@ mod tests {
         assert_eq!(
             read_response(bytes.as_slice()).expect("decode response"),
             response
+        );
+    }
+
+    /// The native engine summary must survive a JSON round trip.
+    ///
+    /// Serde's internally tagged enum buffers the variant's content through
+    /// `Content`, which has no 128-bit carrier: while the two nanosecond
+    /// counters were `u128`, this variant serialized and then failed to
+    /// deserialize, so no consumer could parse a native report. The counters
+    /// are `u64` now, and this test is what keeps them that way.
+    #[test]
+    fn native_engine_telemetry_round_trips_through_json() {
+        let engine = ExecutionEngineTelemetryV2::Native {
+            considered: 7,
+            compiled: 5,
+            native_calls: 4_000_000_003,
+            native_bails: 2,
+            osr_entries: 1,
+            compile_nanos: 123_456_789,
+            run_nanos: u64::MAX,
+        };
+        let json = serde_json::to_string(&engine).expect("engine telemetry serializes");
+        assert_eq!(
+            serde_json::from_str::<ExecutionEngineTelemetryV2>(&json)
+                .expect("engine telemetry parses back"),
+            engine
+        );
+
+        let mut report = test_report();
+        report.telemetry.engine = engine;
+        let json = serde_json::to_string(&report).expect("report serializes");
+        assert_eq!(
+            serde_json::from_str::<ExecutionReportV2>(&json).expect("report parses back"),
+            report
         );
     }
 

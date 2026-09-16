@@ -545,7 +545,7 @@ fn native_jit_pass_scorecard() {
                 "cold_e2e_native_mad_ns": native_mad.as_nanos(),
                 "warm_native_instrumented_ns": diagnostic_native_run_nanos,
                 "instrumented_native_nanos_per_entry": diagnostic_native_run_nanos
-                    / u128::from(native_calls.saturating_add(osr_entries).saturating_add(continuation_entries).max(1)),
+                    / native_calls.saturating_add(osr_entries).saturating_add(continuation_entries).max(1),
                 "speedup": interpreter.as_secs_f64() / native.as_secs_f64(),
                 "translation_nanos": translation_nanos,
                 "validation_nanos": validation_nanos,

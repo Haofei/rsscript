@@ -8,6 +8,15 @@ use super::*;
 #[cfg(all(feature = "native-jit", any(test, feature = "jit-diagnostics")))]
 use super::native_stats_impl::jit_missed_opt_report;
 
+/// Narrow a VM nanosecond counter to the width the execution report and the
+/// runner protocol both use. Saturation is the only honest projection: a run
+/// that somehow exceeded 584 years of compilation reports the ceiling rather
+/// than wrapping into a small number.
+#[cfg(feature = "native-jit")]
+fn saturating_nanos(nanos: u128) -> u64 {
+    u64::try_from(nanos).unwrap_or(u64::MAX)
+}
+
 impl RegVmExecutable {
     /// Serialize this already-verified executable as `rsscript.bytecode.v1`.
     pub fn to_bytecode(&self) -> Result<Vec<u8>, EvalError> {
@@ -823,8 +832,8 @@ impl RegVmExecutable {
                             validation_nanos: native.stats.validation_nanos,
                             codegen_nanos: native.stats.codegen_nanos,
                             finalize_nanos: native.stats.finalize_nanos,
-                            compile_nanos: native.stats.compile_nanos,
-                            run_nanos: native.stats.run_nanos,
+                            compile_nanos: saturating_nanos(native.stats.compile_nanos),
+                            run_nanos: saturating_nanos(native.stats.run_nanos),
                         },
                     ))
                 });

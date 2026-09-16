@@ -16,8 +16,9 @@ contract itself.
 
 Records from 0226 onward are the current product contracts: the post-migration
 contract set, the single executable contract, verified typed executable facts,
-the generation oracle, the JIT as a product-owned tier, and function values as a
-wire type. Read these before changing a contract.
+the generation oracle, the JIT as a product-owned tier, function values as a
+wire type, and `u64` nanoseconds in the native engine telemetry summary. Read
+these before changing a contract.
 
 ## Archive
 
