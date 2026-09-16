@@ -1681,3 +1681,174 @@ fn a_closure_call_site_reports_no_parameter_type_it_cannot_prove() {
         "an unannotated closure parameter must be reported as unproved"
     );
 }
+
+/// A payload-free enum case written as a bare name builds, verifies, and runs.
+///
+/// `None`, and a user `sum` case declared without fields, are constructions,
+/// not value bindings. They reached MIR lowering as plain identifiers, so the
+/// lowerer looked for a local named `None` (or `Red`), found none, and refused
+/// the whole program with "unknown checked HIR local" — after `rss check` had
+/// reported the file clean. The split only showed up at `rss build`, so this
+/// covers build → verify → run rather than the checker alone.
+#[test]
+fn bare_enum_case_programs_verify_and_run() {
+    // `return None` after a loop: the shape a search function ends with.
+    const NONE_AFTER_A_LOOP: &str = r#"
+fn first_even(values: List<Int>) -> Option<Int> {
+    let mut i = 0
+    while i < List.len(list: values) {
+        let v = List.get(list: values, index: i)
+        if v % 2 == 0 {
+            return Some(v)
+        }
+        i = i + 1
+    }
+    return None
+}
+
+fn main() -> Int {
+    match first_even(values: [1, 3, 4]) {
+        Some(n) => { return n }
+        None => { return 0 }
+    }
+}
+"#;
+
+    // `return None` inside an `if`, where the surrounding function still ends
+    // with a `Some`.
+    const NONE_INSIDE_AN_IF: &str = r#"
+fn negative_is_nothing(value: Int) -> Option<Int> {
+    if value < 0 {
+        return None
+    }
+    return Some(value)
+}
+
+fn main() -> Int {
+    match negative_is_nothing(value: 0 - 1) {
+        Some(n) => { return n }
+        None => { return 7 }
+    }
+}
+"#;
+
+    // `None` in an `else` branch, so the construction is the only statement on
+    // that edge.
+    const NONE_IN_AN_ELSE: &str = r#"
+fn even_or_nothing(value: Int) -> Option<Int> {
+    if value % 2 == 0 {
+        return Some(value)
+    } else {
+        return None
+    }
+}
+
+fn main() -> Int {
+    match even_or_nothing(value: 7) {
+        Some(n) => { return n }
+        None => { return 7 }
+    }
+}
+"#;
+
+    // `Ok`/`Err` in the same positions. These already lowered — they are
+    // written call-like — and are covered so the two variant families cannot
+    // drift apart.
+    const RESULT_IN_BRANCHES: &str = r#"
+fn checked(value: Int) -> Result<Int, String> {
+    if value < 0 {
+        return Err("negative")
+    }
+    return Ok(value)
+}
+
+fn main() -> Int {
+    let mut total = 0
+    match checked(value: 5) {
+        Ok(v) => { total = total + v }
+        Err(e) => { total = total + 100 }
+    }
+    match checked(value: 0 - 3) {
+        Ok(v) => { total = total + v }
+        Err(e) => { total = total + 2 }
+    }
+    return total
+}
+"#;
+
+    // A user `sum` case declared without fields. `None` is not a special case
+    // of the language; it is the builtin instance of this shape, and both had
+    // to stop being lowered as identifier reads.
+    const NULLARY_SUM_CASE: &str = r#"
+sum Color {
+    Red
+    Green
+    Blue
+}
+
+fn rank(color: Color) -> Int {
+    match color {
+        Red => { return 1 }
+        Green => { return 2 }
+        Blue => { return 3 }
+    }
+}
+
+fn main() -> Int {
+    let c = Green
+    return rank(color: c) + rank(color: Blue)
+}
+"#;
+
+    // A local shadows the case name, so the bare mention is a value binding
+    // again and must read the local.
+    const A_LOCAL_SHADOWS_THE_CASE: &str = r#"
+fn main() -> Int {
+    let None = 4
+    return None + 3
+}
+"#;
+
+    for (file, source, expected) in [
+        ("none-after-a-loop.rss", NONE_AFTER_A_LOOP, "4"),
+        ("none-inside-an-if.rss", NONE_INSIDE_AN_IF, "7"),
+        ("none-in-an-else.rss", NONE_IN_AN_ELSE, "7"),
+        ("result-in-branches.rss", RESULT_IN_BRANCHES, "7"),
+        ("nullary-sum-case.rss", NULLARY_SUM_CASE, "5"),
+        ("local-shadows-the-case.rss", A_LOCAL_SHADOWS_THE_CASE, "7"),
+    ] {
+        let built = Compiler
+            .compile(file, source)
+            .unwrap_or_else(|error| panic!("{file} compiles: {error}"));
+        let admitted = ArtifactVerifier
+            .verify(built)
+            .unwrap_or_else(|error| panic!("{file} verifies: {error}"))
+            .admit_trusted_input();
+        let report = Runtime::default()
+            .link(&admitted)
+            .unwrap_or_else(|error| panic!("{file} links: {error}"))
+            .execute(ExecutionRequest::default());
+
+        assert_eq!(
+            report.termination_reason(),
+            TerminationReason::Completed,
+            "{file} runs to completion"
+        );
+        assert_eq!(report.value(), Some(expected), "{file} result");
+    }
+
+    // `None()` is still the malformed call form: resolving the bare name to a
+    // construction must not make the call spelling legal.
+    let codes = Compiler
+        .check(
+            "none-call-form.rss",
+            "fn bad() -> Option<Int> {\n    return None()\n}\n",
+        )
+        .into_iter()
+        .map(|diagnostic| diagnostic.code)
+        .collect::<Vec<_>>();
+    assert!(
+        codes.contains(&"RS0015".to_string()),
+        "`None()` must stay RS0015, got {codes:?}"
+    );
+}

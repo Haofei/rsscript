@@ -610,6 +610,24 @@ pub(super) fn lower_hir_expr(
             let value = hir.const_values[name].clone();
             lower_hir_expr(hir, function_name, &value, value_types)
         }
+        // A bare mention of a payload-free enum case (`None`, or a user `sum`
+        // case declared without fields) constructs that case; it is not a value
+        // binding. Resolving it here, where the identifier node is built, keeps
+        // every backend from having to recognize the construction itself. A
+        // local of the same name shadows the case, as it does for a `const`.
+        Expr::Ident(name, span)
+            if !value_types.contains_key(name) && hir.is_nullary_enum_variant(name) =>
+        {
+            lower_hir_call_expr(
+                hir,
+                function_name,
+                expr,
+                &Callee::Name(name.clone()),
+                &[],
+                span,
+                value_types,
+            )
+        }
         Expr::Ident(name, span) => HirExpr::Ident {
             name: name.clone(),
             type_name: value_types.get(name).map(ToString::to_string),
@@ -1076,6 +1094,10 @@ pub(super) fn lower_hir_call_expr(
         },
         args: hir_args,
         type_arguments,
+        // `expr` is the source node this call came from: an `Expr::Call` when the
+        // source wrote an argument list, and the identifier itself when a bare
+        // payload-free case was resolved to its construction above.
+        bare_variant: matches!(expr, Expr::Ident(..)),
         type_name,
         resolution,
         events,

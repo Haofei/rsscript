@@ -1,0 +1,43 @@
+fn first_even(values: List<Int>) -> Option<Int> {
+    let mut i = 0
+    while i < List.len(list: values) {
+        let v = List.get(list: values, index: i)
+        if v % 2 == 0 {
+            return Some(v)
+        }
+        i = i + 1
+    }
+    return None
+}
+
+fn negative_is_nothing(value: Int) -> Option<Int> {
+    if value < 0 {
+        return None
+    }
+    return Some(value)
+}
+
+fn even_or_nothing(value: Int) -> Option<Int> {
+    if value % 2 == 0 {
+        return Some(value)
+    } else {
+        return None
+    }
+}
+
+fn main() -> Int {
+    let mut total = 0
+    match first_even(values: [1, 3, 4]) {
+        Some(n) => { total = total + n }
+        None => { total = total + 100 }
+    }
+    match negative_is_nothing(value: 0 - 1) {
+        Some(n) => { total = total + n }
+        None => { total = total + 10 }
+    }
+    match even_or_nothing(value: 7) {
+        Some(n) => { total = total + n }
+        None => { total = total + 1 }
+    }
+    return total
+}

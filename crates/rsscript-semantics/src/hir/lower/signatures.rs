@@ -336,6 +336,22 @@ impl Hir {
         self.sum_variant_fields.get(variant_name).map(Vec::as_slice)
     }
 
+    /// Whether `name` names an enum variant that carries no payload, so a bare
+    /// mention of it is a construction rather than a value binding. This covers
+    /// the builtin `None` and every user `sum` case declared without fields.
+    /// Expression lowering consults this instead of leaving such a mention as an
+    /// identifier that no backend has a place for.
+    pub fn is_nullary_enum_variant(&self, name: &str) -> bool {
+        let name = type_root_name(name);
+        if name == "None" {
+            return true;
+        }
+        self.sum_type_for_variant(name).is_some()
+            && self
+                .sum_variant_fields(name)
+                .is_some_and(<[FieldInfo]>::is_empty)
+    }
+
     /// All sum variants and their owner types, for provider-neutral executable
     /// projection. Backends must not infer this table from observed call sites.
     pub fn sum_variants(&self) -> impl Iterator<Item = (&str, &str, &[FieldInfo])> {

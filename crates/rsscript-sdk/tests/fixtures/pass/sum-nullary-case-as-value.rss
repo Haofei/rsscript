@@ -1,0 +1,18 @@
+sum Color {
+    Red
+    Green
+    Blue
+}
+
+fn rank(color: Color) -> Int {
+    match color {
+        Red => { return 1 }
+        Green => { return 2 }
+        Blue => { return 3 }
+    }
+}
+
+fn main() -> Int {
+    let c = Green
+    return rank(color: c) + rank(color: Blue)
+}

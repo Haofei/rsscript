@@ -402,6 +402,12 @@ pub enum HirExpr {
         /// substitution; backend lowering must not guess the missing values.
         type_arguments: Vec<ResolvedType>,
         resolution: CallResolution,
+        /// True when the source wrote a payload-free enum case as a bare name
+        /// (`None`, or a `sum` case declared without fields) rather than as a
+        /// call with an argument list. Lowering resolves both spellings to the
+        /// same construction, so the surface-form rule that rejects `None()`
+        /// reads this flag instead of re-parsing the call site.
+        bare_variant: bool,
         events: Vec<HirEffectEvent>,
         type_name: Option<String>,
         span: Span,

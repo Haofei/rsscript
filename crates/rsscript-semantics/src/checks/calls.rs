@@ -531,9 +531,21 @@ fn check_expr(
             args,
             span,
             resolution,
+            bare_variant,
             ..
         } => {
-            check_call_args(analyzer, function, callee, args, span, resolution, context);
+            check_call_args(
+                analyzer,
+                function,
+                &CheckedCall {
+                    callee,
+                    args,
+                    bare_variant: *bare_variant,
+                    span,
+                    resolution,
+                },
+                context,
+            );
             for arg in args {
                 check_expr(analyzer, function, &arg.value, context);
             }
@@ -1040,15 +1052,30 @@ fn callee_rename_span(
     None
 }
 
+/// One call node's own facts, as the checked HIR records them.
+struct CheckedCall<'a> {
+    callee: &'a Callee,
+    args: &'a [HirCallArg],
+    /// The call node stands for a payload-free enum case written as a bare
+    /// name rather than as a call with an argument list.
+    bare_variant: bool,
+    span: &'a Span,
+    resolution: &'a CallResolution,
+}
+
 fn check_call_args(
     analyzer: &mut Analyzer<'_>,
     function: &FunctionDecl,
-    callee: &Callee,
-    args: &[HirCallArg],
-    call_span: &Span,
-    resolution: &CallResolution,
+    call: &CheckedCall<'_>,
     context: &CallCheckContext<'_>,
 ) {
+    let CheckedCall {
+        callee,
+        args,
+        bare_variant,
+        span: call_span,
+        resolution,
+    } = *call;
     let noescape_bindings = context.noescape_bindings;
     let callback_bindings = context.callback_bindings;
     let local_closure_bindings = context.local_closure_bindings;
@@ -1065,7 +1092,7 @@ fn check_call_args(
         return;
     }
     if matches!(resolution, CallResolution::EnumVariant) {
-        check_enum_variant_form(analyzer, callee, args, call_span);
+        check_enum_variant_form(analyzer, callee, args, bare_variant, call_span);
         return;
     }
     check_dyn_from_call(analyzer, function, callee, args, call_span);

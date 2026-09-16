@@ -146,6 +146,7 @@ pub(super) fn check_enum_variant_form(
     analyzer: &mut Analyzer<'_>,
     callee: &Callee,
     args: &[HirCallArg],
+    bare_variant: bool,
     call_span: &Span,
 ) {
     let variant = callee_name(callee);
@@ -250,7 +251,9 @@ pub(super) fn check_enum_variant_form(
     }
     let valid = match variant.as_str() {
         "Ok" | "Err" | "Some" => args.len() == 1 && args[0].name.is_none(),
-        "None" | "Result" | "Option" => false,
+        // `None` is spelled bare; `None()` is still the malformed call form.
+        "None" => bare_variant,
+        "Result" | "Option" => false,
         _ => true,
     };
     if valid {

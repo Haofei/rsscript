@@ -1,0 +1,31 @@
+fn checked(value: Int) -> Result<Int, String> {
+    if value < 0 {
+        return Err("negative")
+    }
+    return Ok(value)
+}
+
+fn doubled(value: Int) -> Result<Int, String> {
+    if value % 2 == 0 {
+        return Ok(value * 2)
+    } else {
+        return Err("odd")
+    }
+}
+
+fn main() -> Int {
+    let mut total = 0
+    match checked(value: 5) {
+        Ok(v) => { total = total + v }
+        Err(e) => { total = total + 100 }
+    }
+    match checked(value: 0 - 3) {
+        Ok(v) => { total = total + v }
+        Err(e) => { total = total + 10 }
+    }
+    match doubled(value: 4) {
+        Ok(v) => { total = total + v }
+        Err(e) => { total = total + 1 }
+    }
+    return total
+}
