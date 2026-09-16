@@ -100,6 +100,14 @@ const CASES: &[(&str, &str)] = &[
         "index-assignment-loop.rss",
         "fn hot(limit: Int, values: mut List<Int>) -> Int { let mut i = 0; let mut total = 0; while i < limit { let slot = i % 8; values[slot] = i; total = total + values[slot]; i = i + 1 }; return total } fn main() -> Int { let mut values: List<Int> = [0, 0, 0, 0, 0, 0, 0, 0]; return hot(limit: 20000, values: mut values) }",
     ),
+    // The receiver-call spelling of a mutating core intrinsic. Lowering
+    // normalizes the receiver into parameter zero before an intrinsic is
+    // chosen, so this must reach exactly the `ListPush`/`ListGet` native
+    // lowering the namespaced spelling reaches.
+    (
+        "receiver-call-loop.rss",
+        "fn hot(limit: Int) -> Int { let mut values = List<Int>.new(); let mut i = 0; let mut total = 0; while i < limit { mut values.push(i); total = total + values.len(); i = i + 1 }; return total } fn main() -> Int { return hot(limit: 2000) }",
+    ),
     (
         "native-map-match.rss",
         include_str!("../../../benchmarks/vm-jit/kernels/native_map_get_match_loop.rss"),

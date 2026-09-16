@@ -429,10 +429,16 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 args,
                 type_arguments,
                 resolution,
+                span,
                 ..
-            } => {
-                self.lower_direct_call(callee, receiver.as_ref(), args, type_arguments, resolution)
-            }
+            } => self.lower_direct_call(
+                callee,
+                receiver.as_ref(),
+                args,
+                type_arguments,
+                resolution,
+                span,
+            ),
             checked::HirExpr::Effect {
                 effect: checked::ParamEffect::Read,
                 value,
@@ -665,6 +671,7 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
         args: &[checked::HirCallArg],
         type_arguments: &[ResolvedType],
         resolution: &checked::CallResolution,
+        span: &rsscript_syntax::Span,
     ) -> Result<ValueId, MirLoweringError> {
         if matches!(resolution, checked::CallResolution::EnumVariant) {
             if receiver.is_some() {
@@ -700,7 +707,12 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
         // identity in both forms: route it through `BuiltinId` rather than
         // creating a fictitious Provider import for a VM-owned operation.
         if signature.is_builtin || is_catalog_builtin(signature) {
-            return self.lower_builtin_call(callee, signature, receiver, args);
+            // One shape reaches every core intrinsic: the receiver-call
+            // spelling is re-seated as parameter zero here, so no intrinsic
+            // below has to recognize two ways of being written.
+            let normalized = receiver.map(|receiver| receiver_argument(receiver, args, span));
+            let args = normalized.as_deref().unwrap_or(args);
+            return self.lower_builtin_call(callee, signature, args);
         }
         let target = if let Some(dispatch) = signature.namespace.as_deref().and_then(|namespace| {
             self.targets
@@ -932,7 +944,6 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
         &mut self,
         callee: &rsscript_syntax::ast::Callee,
         signature: &checked::FunctionSig,
-        receiver: Option<&checked::HirCallReceiver>,
         args: &[checked::HirCallArg],
     ) -> Result<ValueId, MirLoweringError> {
         // JSON decode is the current builtin whose concrete type argument
@@ -942,9 +953,6 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
         let destination = self.value();
         match signature.name.as_str() {
             "Ok" | "Err" => {
-                if receiver.is_some() {
-                    return self.unsupported("Result constructor receiver call");
-                }
                 if args.len() != 1 {
                     return self.unsupported("Result constructor with non-unary arity");
                 }
@@ -956,9 +964,6 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 });
             }
             "Some" => {
-                if receiver.is_some() {
-                    return self.unsupported("Option Some receiver call");
-                }
                 if args.len() != 1 {
                     return self.unsupported("Option Some constructor with non-unary arity");
                 }
@@ -969,9 +974,6 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 });
             }
             "None" => {
-                if receiver.is_some() {
-                    return self.unsupported("Option None receiver call");
-                }
                 if !args.is_empty() {
                     return self.unsupported("Option None constructor with non-zero arity");
                 }
@@ -981,7 +983,7 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 });
             }
             "concat" if signature.namespace.as_deref() == Some("String") => {
-                if receiver.is_some() || args.len() != 2 {
+                if args.len() != 2 {
                     return self.unsupported("String.concat with invalid checked call shape");
                 }
                 let mut ordered = args.iter().collect::<Vec<_>>();
@@ -995,7 +997,7 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 });
             }
             "get" if signature.namespace.as_deref() == Some("List") => {
-                if receiver.is_some() || args.len() != 2 {
+                if args.len() != 2 {
                     return self.unsupported("List.get with invalid checked call shape");
                 }
                 let mut ordered = args.iter().collect::<Vec<_>>();
@@ -1009,14 +1011,14 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 });
             }
             "len" if signature.namespace.as_deref() == Some("List") => {
-                if receiver.is_some() || args.len() != 1 {
+                if args.len() != 1 {
                     return self.unsupported("List.len with invalid checked call shape");
                 }
                 let list = self.lower_expression(&args[0].value)?;
                 self.emit(MirInstruction::ListLen { destination, list });
             }
             "append" if signature.namespace.as_deref() == Some("List") => {
-                if receiver.is_some() || args.len() != 2 {
+                if args.len() != 2 {
                     return self.unsupported("List.append with invalid checked call shape");
                 }
                 let mut ordered = args.iter().collect::<Vec<_>>();
@@ -1034,21 +1036,21 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 }
             }
             "clear" if signature.namespace.as_deref() == Some("List") => {
-                if receiver.is_some() || args.len() != 1 {
+                if args.len() != 1 {
                     return self.unsupported("List.clear with invalid checked call shape");
                 }
                 let list = self.lower_mutable_builtin_place(&args[0].value)?;
                 self.emit(MirInstruction::ListClear { destination, list });
             }
             "pop" if signature.namespace.as_deref() == Some("List") => {
-                if receiver.is_some() || args.len() != 1 {
+                if args.len() != 1 {
                     return self.unsupported("List.pop with invalid checked call shape");
                 }
                 let list = self.lower_mutable_builtin_place(&args[0].value)?;
                 self.emit(MirInstruction::ListPop { destination, list });
             }
             "push" if signature.namespace.as_deref() == Some("List") => {
-                if receiver.is_some() || args.len() != 2 {
+                if args.len() != 2 {
                     return self.unsupported("List.push with invalid checked call shape");
                 }
                 let mut ordered = args.iter().collect::<Vec<_>>();
@@ -1066,7 +1068,7 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 }
             }
             "remove_at" if signature.namespace.as_deref() == Some("List") => {
-                if receiver.is_some() || args.len() != 2 {
+                if args.len() != 2 {
                     return self.unsupported("List.remove_at with invalid checked call shape");
                 }
                 let mut ordered = args.iter().collect::<Vec<_>>();
@@ -1080,7 +1082,7 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 });
             }
             "set" if signature.namespace.as_deref() == Some("List") => {
-                if receiver.is_some() || args.len() != 3 {
+                if args.len() != 3 {
                     return self.unsupported("List.set with invalid checked call shape");
                 }
                 let mut ordered = args.iter().collect::<Vec<_>>();
@@ -1100,14 +1102,14 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 }
             }
             "clear" if signature.namespace.as_deref() == Some("Set") => {
-                if receiver.is_some() || args.len() != 1 {
+                if args.len() != 1 {
                     return self.unsupported("Set.clear with invalid checked call shape");
                 }
                 let set = self.lower_mutable_builtin_place(&args[0].value)?;
                 self.emit(MirInstruction::SetClear { destination, set });
             }
             "insert" if signature.namespace.as_deref() == Some("Set") => {
-                if receiver.is_some() || args.len() != 2 {
+                if args.len() != 2 {
                     return self.unsupported("Set.insert with invalid checked call shape");
                 }
                 let mut ordered = args.iter().collect::<Vec<_>>();
@@ -1125,7 +1127,7 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 }
             }
             "remove" if signature.namespace.as_deref() == Some("Set") => {
-                if receiver.is_some() || args.len() != 2 {
+                if args.len() != 2 {
                     return self.unsupported("Set.remove with invalid checked call shape");
                 }
                 let mut ordered = args.iter().collect::<Vec<_>>();
@@ -1139,28 +1141,28 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 });
             }
             "clear" if signature.namespace.as_deref() == Some("Deque") => {
-                if receiver.is_some() || args.len() != 1 {
+                if args.len() != 1 {
                     return self.unsupported("Deque.clear with invalid checked call shape");
                 }
                 let deque = self.lower_mutable_builtin_place(&args[0].value)?;
                 self.emit(MirInstruction::DequeClear { destination, deque });
             }
             "pop_back" if signature.namespace.as_deref() == Some("Deque") => {
-                if receiver.is_some() || args.len() != 1 {
+                if args.len() != 1 {
                     return self.unsupported("Deque.pop_back with invalid checked call shape");
                 }
                 let deque = self.lower_mutable_builtin_place(&args[0].value)?;
                 self.emit(MirInstruction::DequePopBack { destination, deque });
             }
             "pop_front" if signature.namespace.as_deref() == Some("Deque") => {
-                if receiver.is_some() || args.len() != 1 {
+                if args.len() != 1 {
                     return self.unsupported("Deque.pop_front with invalid checked call shape");
                 }
                 let deque = self.lower_mutable_builtin_place(&args[0].value)?;
                 self.emit(MirInstruction::DequePopFront { destination, deque });
             }
             "push_back" if signature.namespace.as_deref() == Some("Deque") => {
-                if receiver.is_some() || args.len() != 2 {
+                if args.len() != 2 {
                     return self.unsupported("Deque.push_back with invalid checked call shape");
                 }
                 let mut ordered = args.iter().collect::<Vec<_>>();
@@ -1178,7 +1180,7 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 }
             }
             "push_front" if signature.namespace.as_deref() == Some("Deque") => {
-                if receiver.is_some() || args.len() != 2 {
+                if args.len() != 2 {
                     return self.unsupported("Deque.push_front with invalid checked call shape");
                 }
                 let mut ordered = args.iter().collect::<Vec<_>>();
@@ -1196,14 +1198,14 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 }
             }
             "clear" if signature.namespace.as_deref() == Some("SortedMap") => {
-                if receiver.is_some() || args.len() != 1 {
+                if args.len() != 1 {
                     return self.unsupported("SortedMap.clear with invalid checked call shape");
                 }
                 let map = self.lower_mutable_builtin_place(&args[0].value)?;
                 self.emit(MirInstruction::SortedMapClear { destination, map });
             }
             "insert" if signature.namespace.as_deref() == Some("SortedMap") => {
-                if receiver.is_some() || args.len() != 3 {
+                if args.len() != 3 {
                     return self.unsupported("SortedMap.insert with invalid checked call shape");
                 }
                 let mut ordered = args.iter().collect::<Vec<_>>();
@@ -1223,7 +1225,7 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 }
             }
             "remove" if signature.namespace.as_deref() == Some("SortedMap") => {
-                if receiver.is_some() || args.len() != 2 {
+                if args.len() != 2 {
                     return self.unsupported("SortedMap.remove with invalid checked call shape");
                 }
                 let mut ordered = args.iter().collect::<Vec<_>>();
@@ -1237,14 +1239,14 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 });
             }
             "clear" if signature.namespace.as_deref() == Some("SortedSet") => {
-                if receiver.is_some() || args.len() != 1 {
+                if args.len() != 1 {
                     return self.unsupported("SortedSet.clear with invalid checked call shape");
                 }
                 let set = self.lower_mutable_builtin_place(&args[0].value)?;
                 self.emit(MirInstruction::SortedSetClear { destination, set });
             }
             "insert" if signature.namespace.as_deref() == Some("SortedSet") => {
-                if receiver.is_some() || args.len() != 2 {
+                if args.len() != 2 {
                     return self.unsupported("SortedSet.insert with invalid checked call shape");
                 }
                 let mut ordered = args.iter().collect::<Vec<_>>();
@@ -1262,7 +1264,7 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 }
             }
             "remove" if signature.namespace.as_deref() == Some("SortedSet") => {
-                if receiver.is_some() || args.len() != 2 {
+                if args.len() != 2 {
                     return self.unsupported("SortedSet.remove with invalid checked call shape");
                 }
                 let mut ordered = args.iter().collect::<Vec<_>>();
@@ -1276,7 +1278,7 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 });
             }
             "clear" if signature.namespace.as_deref() == Some("Buffer") => {
-                if receiver.is_some() || args.len() != 1 {
+                if args.len() != 1 {
                     return self.unsupported("Buffer.clear with invalid checked call shape");
                 }
                 let buffer = self.lower_mutable_builtin_place(&args[0].value)?;
@@ -1286,7 +1288,7 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 });
             }
             "push" if signature.namespace.as_deref() == Some("StringBuilder") => {
-                if receiver.is_some() || args.len() != 2 {
+                if args.len() != 2 {
                     return self.unsupported("StringBuilder.push with invalid checked call shape");
                 }
                 let mut ordered = args.iter().collect::<Vec<_>>();
@@ -1300,7 +1302,7 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 });
             }
             "finish" if signature.namespace.as_deref() == Some("StringBuilder") => {
-                if receiver.is_some() || args.len() != 1 {
+                if args.len() != 1 {
                     return self
                         .unsupported("StringBuilder.finish with invalid checked call shape");
                 }
@@ -1320,7 +1322,7 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 });
             }
             "get" if signature.namespace.as_deref() == Some("Map") => {
-                if receiver.is_some() || args.len() != 2 {
+                if args.len() != 2 {
                     return self.unsupported("Map.get with invalid checked call shape");
                 }
                 let mut ordered = args.iter().collect::<Vec<_>>();
@@ -1334,14 +1336,14 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 });
             }
             "clear" if signature.namespace.as_deref() == Some("Map") => {
-                if receiver.is_some() || args.len() != 1 {
+                if args.len() != 1 {
                     return self.unsupported("Map.clear with invalid checked call shape");
                 }
                 let map = self.lower_mutable_builtin_place(&args[0].value)?;
                 self.emit(MirInstruction::MapClear { destination, map });
             }
             "insert" if signature.namespace.as_deref() == Some("Map") => {
-                if receiver.is_some() || args.len() != 3 {
+                if args.len() != 3 {
                     return self.unsupported("Map.insert with invalid checked call shape");
                 }
                 let mut ordered = args.iter().collect::<Vec<_>>();
@@ -1361,7 +1363,7 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 }
             }
             "insert_old" if signature.namespace.as_deref() == Some("Map") => {
-                if receiver.is_some() || args.len() != 3 {
+                if args.len() != 3 {
                     return self.unsupported("Map.insert_old with invalid checked call shape");
                 }
                 let mut ordered = args.iter().collect::<Vec<_>>();
@@ -1381,7 +1383,7 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 }
             }
             "remove" if signature.namespace.as_deref() == Some("Map") => {
-                if receiver.is_some() || args.len() != 2 {
+                if args.len() != 2 {
                     return self.unsupported("Map.remove with invalid checked call shape");
                 }
                 let mut ordered = args.iter().collect::<Vec<_>>();
@@ -1408,17 +1410,10 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 };
                 let mut ordered = args.iter().collect::<Vec<_>>();
                 ordered.sort_by_key(|argument| argument.evaluation_index);
-                let mut arguments =
-                    Vec::with_capacity(ordered.len() + usize::from(receiver.is_some()));
-                if let Some(receiver) = receiver {
-                    arguments.push(self.lower_direct_receiver_argument(receiver)?);
-                }
-                arguments.extend(
-                    ordered
-                        .into_iter()
-                        .map(|argument| self.lower_direct_call_argument(&argument.value))
-                        .collect::<Result<Vec<_>, _>>()?,
-                );
+                let arguments = ordered
+                    .into_iter()
+                    .map(|argument| self.lower_direct_call_argument(&argument.value))
+                    .collect::<Result<Vec<_>, _>>()?;
                 self.emit(MirInstruction::Call {
                     destination,
                     target: MirCallTarget::Builtin {

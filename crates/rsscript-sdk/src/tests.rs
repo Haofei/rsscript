@@ -2417,3 +2417,53 @@ fn out_of_range_index_assignment_raises_the_list_bounds_error() {
         error.message
     );
 }
+
+/// The receiver-call spelling of a core intrinsic lowers like the namespaced
+/// one.
+///
+/// `mut items.push(1)` and `List.push(list: mut items, value: 1)` are the same
+/// resolved call — the checker binds a receiver to parameter zero — so lowering
+/// normalizes the receiver into that argument once and every intrinsic reads a
+/// single call shape. The receiver's `mut` effect has to survive that move, or
+/// the push would be applied to a copy: the assertions below are of the
+/// collections' contents after the mutation, not merely of the call building.
+#[test]
+fn receiver_call_core_intrinsics_lower_and_execute() {
+    const SOURCE: &str = r#"
+fn main() -> Int {
+    let mut items = List<Int>.new()
+    mut items.push(1)
+    mut items.push(value: 2)
+    mut items.append(values: [3, 4])
+    let popped = mut items.pop()
+
+    let mut counts = Map<String, Int>.new()
+    mut counts.insert(key: "a", value: 7)
+
+    let mut seen = Set<Int>.new()
+    mut seen.insert(5)
+
+    let last = match popped {
+        Some(value) => { value }
+        None => { 0 }
+    }
+    return items.len() * 100 + last * 10 + counts.len() + seen.len()
+}
+"#;
+
+    let built = Compiler
+        .compile("receiver-call.rss", SOURCE)
+        .expect("receiver-call core intrinsics compile");
+    let admitted = admitted(built);
+    let report = Runtime::default()
+        .link(&admitted)
+        .expect("link receiver-call program")
+        .execute(ExecutionRequest::default());
+
+    assert_eq!(report.termination_reason(), TerminationReason::Completed);
+    assert_eq!(
+        report.value(),
+        Some("342"),
+        "the receiver keeps its `mut` effect: `items` is [1, 2, 3] after the pop"
+    );
+}

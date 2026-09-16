@@ -833,6 +833,42 @@ enum MatchBindings {
     },
 }
 
+/// Re-seat a receiver-call receiver as the call's parameter-zero argument.
+///
+/// `List.push(list: mut items, value: 1)` and `mut items.push(1)` are the same
+/// resolved call. `CallBinding::bind`'s `receiver_offset` already reserves
+/// parameter zero and evaluation index zero for a receiver, so the two
+/// spellings differ only in *where* the first operand is carried, and the
+/// explicit arguments of a receiver call are already bound to parameters one
+/// and up. Normalizing once, here, is what lets every core intrinsic read a
+/// single call shape.
+///
+/// The receiver is wrapped in the `Effect` node an argument in that position
+/// would have carried, so its checked `mut` (or `take`) effect still reaches
+/// mutable-place lowering rather than being flattened into a value.
+fn receiver_argument(
+    receiver: &checked::HirCallReceiver,
+    args: &[checked::HirCallArg],
+    span: &rsscript_syntax::Span,
+) -> Vec<checked::HirCallArg> {
+    let mut normalized = Vec::with_capacity(args.len() + 1);
+    normalized.push(checked::HirCallArg {
+        name: None,
+        value: checked::HirExpr::Effect {
+            effect: receiver.effect,
+            value: receiver.value.clone(),
+            events: Vec::new(),
+            type_name: receiver.type_name.clone(),
+            span: span.clone(),
+        },
+        parameter_index: Some(0),
+        evaluation_index: 0,
+        span: span.clone(),
+    });
+    normalized.extend(args.iter().cloned());
+    normalized
+}
+
 /// Parse the synthetic tuple struct name `__TupleN` to its arity `N`.
 ///
 /// Tuple literals, tuple types, and tuple patterns all desugar to this one

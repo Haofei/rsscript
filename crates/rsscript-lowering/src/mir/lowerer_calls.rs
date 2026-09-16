@@ -434,6 +434,7 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
             args,
             type_arguments,
             resolution,
+            span,
             ..
         } = value
         {
@@ -447,6 +448,7 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                     args,
                     type_arguments,
                     resolution,
+                    span,
                 );
             }
         }
