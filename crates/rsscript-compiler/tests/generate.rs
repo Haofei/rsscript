@@ -528,3 +528,93 @@ fn a_typed_local_still_completes_as_a_receiver_not_a_namespace() {
         response.names
     );
 }
+
+/// A generation session resolves the standard package interfaces, exactly as
+/// `rss check` does.
+///
+/// `Channel`, `Sender`, `Receiver` and `Output` are declared by the standard
+/// package interfaces, not by the core catalog. Until the session assembled the
+/// same prelude the checker assembles, completion could not offer any of them —
+/// so a model writing against the continuation stream was steered away from the
+/// concurrency surface `rss check` accepts, which is the worst thing a
+/// completion source can do.
+#[test]
+fn standard_package_namespaces_are_offered_to_a_generation_session() {
+    let mut session =
+        GenerationSession::with_source("main.rss", "fn main() -> Unit {\n    let pair = Channel.");
+    let response = session.query(options(500));
+
+    let bounded = response
+        .names
+        .iter()
+        .find(|candidate| candidate.text == "bounded")
+        .unwrap_or_else(|| panic!("Channel.bounded is offered: {:#?}", response.names));
+    assert_eq!(bounded.kind, CompletionKind::Function);
+    assert!(
+        bounded
+            .signature
+            .as_deref()
+            .is_some_and(|signature| signature.starts_with("Channel.bounded(")),
+        "{bounded:#?}"
+    );
+    assert!(
+        response
+            .names
+            .iter()
+            .filter(|candidate| candidate.kind == CompletionKind::Function)
+            .all(|candidate| candidate
+                .signature
+                .as_deref()
+                .is_some_and(|signature| signature.starts_with("Channel."))),
+        "{:#?}",
+        response.names
+    );
+}
+
+/// The other standard-package namespaces the checker resolves.
+#[test]
+fn standard_package_types_are_resolvable_in_a_generation_session() {
+    for (source, expected) in [
+        ("fn main() -> Unit {\n    Output.", "write"),
+        (
+            "fn main(sender: mut Sender<Int>) -> Unit {\n    Sender.",
+            "send",
+        ),
+        (
+            "fn main(receiver: mut Receiver<Int>) -> Unit {\n    Receiver.",
+            "recv",
+        ),
+    ] {
+        let mut session = GenerationSession::with_source("main.rss", source);
+        let response = session.query(options(500));
+        assert!(
+            response
+                .names
+                .iter()
+                .any(|candidate| candidate.text == expected),
+            "{expected} is offered for `{source}`: {:#?}",
+            response.names
+        );
+    }
+}
+
+/// `--no-core` still means "the caller's interfaces and nothing else".
+///
+/// The standard-package prelude rides with core: dropping core drops it too, so
+/// a session checking a single file against explicit interfaces is not silently
+/// given a language surface its caller did not ask for.
+#[test]
+fn the_no_core_policy_drops_the_standard_package_prelude() {
+    let mut session =
+        GenerationSession::with_source("main.rss", "fn main() -> Unit {\n    let pair = Channel.");
+    assert!(session.set_core_interface_policy(GenerationCoreInterfacePolicy::WithoutCore));
+    let response = session.query(options(500));
+    assert!(
+        !response
+            .names
+            .iter()
+            .any(|candidate| candidate.text == "bounded"),
+        "{:#?}",
+        response.names
+    );
+}

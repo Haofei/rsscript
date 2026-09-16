@@ -546,14 +546,27 @@ fn generate_facts(
     core_policy: GenerationCoreInterfacePolicy,
 ) -> GenerationFacts {
     let prefix = parse_source_prefix(file, source);
-    let interfaces = interfaces
-        .iter()
-        .map(|(path, source)| (path.as_str(), source.as_str()))
-        .collect::<Vec<_>>();
+    // The same prelude assembly `rss check` uses (`cli/inputs.rs`): core plus
+    // the language's standard package interfaces, then the session's own
+    // interfaces in their given order. `Channel`, `Sender`, `Receiver` and
+    // `Output` are declared by that standard prelude rather than by the core
+    // catalog, so without it completion could not offer names the checker
+    // resolves — steering a generator away from a surface its own check
+    // accepts. `--no-core` keeps its meaning: the prelude rides with core, so
+    // dropping core drops it too.
+    let mut assembled = match core_policy {
+        GenerationCoreInterfacePolicy::WithCore => crate::standard_package_interfaces().to_vec(),
+        GenerationCoreInterfacePolicy::WithoutCore => Vec::new(),
+    };
+    assembled.extend(
+        interfaces
+            .iter()
+            .map(|(path, source)| (path.as_str(), source.as_str())),
+    );
     let semantic = semantic_completion_with_interface_sources(
         file,
         source,
-        &interfaces,
+        &assembled,
         &prefix,
         semantic_core_policy(core_policy),
     );
