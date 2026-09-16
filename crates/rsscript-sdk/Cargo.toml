@@ -107,5 +107,10 @@ name = "fixture_build_corpus"
 path = "tests/fixture_build_corpus.rs"
 required-features = ["execution"]
 
+[[test]]
+name = "example_build_corpus"
+path = "tests/example_build_corpus.rs"
+required-features = ["execution"]
+
 [lints]
 workspace = true

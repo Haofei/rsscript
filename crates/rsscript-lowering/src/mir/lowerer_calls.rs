@@ -728,6 +728,15 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                     self.variant_struct_pattern_positions(name, fields, *has_rest, span)?;
                 self.lower_variant_pattern_edge(value, name, &positions, arm_block, next)
             }
+            rsscript_syntax::ast::MatchPattern::Struct {
+                name,
+                fields,
+                has_rest,
+                span,
+            } if self.targets.structs.contains_key(name) => {
+                let positions = self.struct_pattern_positions(name, fields, *has_rest, span)?;
+                self.lower_struct_pattern_edge(value, &positions, arm_block, next)
+            }
             _ => self.unsupported(unsupported),
         }
     }
@@ -770,17 +779,54 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
         let Some(layout) = self.targets.variants.get(name) else {
             return self.unsupported("unresolved checked HIR variant match pattern");
         };
-        if !has_rest && fields.len() != layout.fields.len() {
-            return self.unsupported("checked HIR variant match field arity");
+        self.field_pattern_positions(
+            &layout.fields,
+            fields,
+            has_rest,
+            span,
+            VARIANT_FIELD_PATTERN,
+        )
+    }
+
+    /// The declared-field sub-patterns of a *struct* pattern `Point { x, y }`,
+    /// in declared order.
+    ///
+    /// A struct type has a single shape, so this resolves the same named-field
+    /// spelling a variant pattern uses, against the product type's own layout.
+    fn struct_pattern_positions(
+        &self,
+        name: &str,
+        fields: &[rsscript_syntax::ast::MatchFieldPattern],
+        has_rest: bool,
+        span: &rsscript_syntax::Span,
+    ) -> Result<VariantPatternPositions, MirLoweringError> {
+        let Some(layout) = self.targets.structs.get(name) else {
+            return self.unsupported("unresolved checked HIR struct match pattern");
+        };
+        self.field_pattern_positions(layout, fields, has_rest, span, STRUCT_FIELD_PATTERN)
+    }
+
+    /// Resolve a named-field pattern against a declared field order.
+    ///
+    /// Shared by the variant and struct spellings: both write
+    /// `Name { field: pattern, .. }` and differ only in where the layout comes
+    /// from and in what an error is called.
+    fn field_pattern_positions(
+        &self,
+        layout: &[String],
+        fields: &[rsscript_syntax::ast::MatchFieldPattern],
+        has_rest: bool,
+        span: &rsscript_syntax::Span,
+        messages: FieldPatternMessages,
+    ) -> Result<VariantPatternPositions, MirLoweringError> {
+        if !has_rest && fields.len() != layout.len() {
+            return self.unsupported(messages.arity);
         }
-        if fields
-            .iter()
-            .any(|field| !layout.fields.contains(&field.name))
-        {
-            return self.unsupported("unknown checked HIR variant match field");
+        if fields.iter().any(|field| !layout.contains(&field.name)) {
+            return self.unsupported(messages.unknown_field);
         }
-        let mut positions = Vec::with_capacity(layout.fields.len());
-        for declared in &layout.fields {
+        let mut positions = Vec::with_capacity(layout.len());
+        for declared in layout {
             let Some(field) = fields.iter().find(|field| field.name == *declared) else {
                 // An omitted field under `..` names nothing and tests nothing.
                 positions.push((
@@ -790,7 +836,7 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 continue;
             };
             if field.effect.is_some() {
-                return self.unsupported("checked HIR variant match field effect");
+                return self.unsupported(messages.effect);
             }
             let pattern = if field.ignored {
                 rsscript_syntax::ast::MatchPattern::Wildcard(field.span.clone())
@@ -802,7 +848,7 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
             } else if let Some(pattern) = &field.pattern {
                 (**pattern).clone()
             } else {
-                return self.unsupported("checked HIR variant match field without a pattern");
+                return self.unsupported(messages.without_pattern);
             };
             positions.push((declared.clone(), pattern));
         }
@@ -830,7 +876,7 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
             .filter(|(_, pattern)| pattern_is_refutable(pattern))
             .cloned()
             .collect::<Vec<_>>();
-        let Some(last) = refutable.len().checked_sub(1) else {
+        if refutable.is_empty() {
             self.terminate(MirTerminator::MatchVariant {
                 value,
                 expected: name.to_owned(),
@@ -838,29 +884,81 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 else_target: next,
             });
             return Ok(());
-        };
-        let mut target = self.new_block();
+        }
+        let tested = self.new_block();
         self.terminate(MirTerminator::MatchVariant {
             value,
             expected: name.to_owned(),
-            match_target: target,
+            match_target: tested,
             else_target: next,
         });
-        self.current = target;
+        self.current = tested;
+        self.lower_field_pattern_tests(
+            value,
+            refutable,
+            arm_block,
+            next,
+            "nested checked HIR variant match pattern",
+        )
+    }
+
+    /// Emit a struct pattern's field tests as a short-circuiting branch ladder
+    /// from the current block to `arm_block`, with every failure going to
+    /// `next`.
+    ///
+    /// A struct type has one shape, so there is no tag to test and no case that
+    /// can make a projection meaningless: the pattern is refutable only through
+    /// the sub-patterns its fields carry, and `Point { x, y }` — all bindings —
+    /// is an unconditional jump.
+    fn lower_struct_pattern_edge(
+        &mut self,
+        value: ValueId,
+        positions: &VariantPatternPositions,
+        arm_block: BlockId,
+        next: BlockId,
+    ) -> Result<(), MirLoweringError> {
+        let refutable = positions
+            .fields
+            .iter()
+            .filter(|(_, pattern)| pattern_is_refutable(pattern))
+            .cloned()
+            .collect::<Vec<_>>();
+        if refutable.is_empty() {
+            self.terminate(MirTerminator::Jump(arm_block));
+            return Ok(());
+        }
+        self.lower_field_pattern_tests(
+            value,
+            refutable,
+            arm_block,
+            next,
+            "nested checked HIR struct match pattern",
+        )
+    }
+
+    /// Chain the refutable field tests of an aggregate whose shape is already
+    /// established, projecting each field in the block that tests it.
+    ///
+    /// The caller guarantees `refutable` is non-empty and that the current
+    /// block is reached only when the projections below are meaningful — for a
+    /// sum variant, after its tag test.
+    fn lower_field_pattern_tests(
+        &mut self,
+        value: ValueId,
+        refutable: Vec<(String, rsscript_syntax::ast::MatchPattern)>,
+        arm_block: BlockId,
+        next: BlockId,
+        unsupported: &'static str,
+    ) -> Result<(), MirLoweringError> {
+        let last = refutable.len() - 1;
         for (index, (field, pattern)) in refutable.into_iter().enumerate() {
             let projected = self.field(value, &field);
-            target = if index == last {
+            let target = if index == last {
                 arm_block
             } else {
                 self.new_block()
             };
-            self.lower_pattern_edge(
-                projected,
-                &pattern,
-                target,
-                next,
-                "nested checked HIR variant match pattern",
-            )?;
+            self.lower_pattern_edge(projected, &pattern, target, next, unsupported)?;
             if index != last {
                 self.current = target;
             }
@@ -1009,6 +1107,15 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
             } if self.targets.variants.contains_key(name) => {
                 let positions =
                     self.variant_struct_pattern_positions(name, fields, *has_rest, span)?;
+                self.bind_variant_pattern(value, &positions)
+            }
+            rsscript_syntax::ast::MatchPattern::Struct {
+                name,
+                fields,
+                has_rest,
+                span,
+            } if self.targets.structs.contains_key(name) => {
+                let positions = self.struct_pattern_positions(name, fields, *has_rest, span)?;
                 self.bind_variant_pattern(value, &positions)
             }
             _ => self.unsupported("non-literal checked HIR match pattern"),

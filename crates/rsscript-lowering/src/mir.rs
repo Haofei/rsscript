@@ -93,6 +93,19 @@ pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<VerifiedMir, MirLo
             )
         })
         .collect::<BTreeMap<_, _>>();
+    let structs = hir
+        .types()
+        .filter(|info| info.kind == checked::HirTypeKind::Struct)
+        .map(|info| {
+            (
+                info.name.clone(),
+                info.fields_ordered
+                    .iter()
+                    .map(|field| field.name.clone())
+                    .collect(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     // Construct closed-world dispatch tables before body lowering. The table
     // carries only canonical concrete receiver `TypeId`s and resolved function
     // identities; source protocol/method spellings never reach MIR.
@@ -199,6 +212,7 @@ pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<VerifiedMir, MirLo
             .map(|wrapper| (wrapper.key.clone(), wrapper.id))
             .collect(),
         variants,
+        structs,
         dynamic_protocol_methods,
     };
     // Synthetic closure bodies are appended after the fixed user/async-wrapper
@@ -649,6 +663,11 @@ struct CallTargets {
     async_external_wrappers: BTreeMap<String, FunctionId>,
     async_builtin_wrappers: BTreeMap<String, FunctionId>,
     variants: BTreeMap<String, VariantLayout>,
+    /// Declared field order of every product type a pattern can destructure.
+    /// A struct has one shape, so unlike a sum variant there is no tag to test
+    /// — the layout is needed only to resolve `Point { x, y }` to the fields it
+    /// projects, and to refuse a name that is not a product type at all.
+    structs: BTreeMap<String, Vec<String>>,
     dynamic_protocol_methods: DynamicProtocolMethods,
 }
 
@@ -815,16 +834,40 @@ struct VariantLayout {
     fields: Vec<String>,
 }
 
-/// A sum-variant pattern's declared fields paired with the sub-pattern each
-/// one carries, in declared order.
+/// An aggregate pattern's declared fields paired with the sub-pattern each one
+/// carries, in declared order.
 ///
-/// Both variant spellings — positional `Rectangle(w, h)` and named
-/// `Rectangle { width, height }` — are resolved to this form before anything is
-/// emitted, so the tag test, the nested tests, and the bindings are written
-/// once rather than once per spelling.
+/// Every named-field spelling resolves to this form before anything is emitted
+/// — positional `Rectangle(w, h)`, named `Rectangle { width, height }`, and the
+/// struct pattern `Point { x, y }` — so the tag test, the nested tests, and the
+/// bindings are written once rather than once per spelling.
 struct VariantPatternPositions {
     fields: Vec<(String, rsscript_syntax::ast::MatchPattern)>,
 }
+
+/// What a named-field pattern's refusals are called, so the variant and struct
+/// spellings can share one resolver and still report which one was written.
+#[derive(Clone, Copy)]
+struct FieldPatternMessages {
+    arity: &'static str,
+    unknown_field: &'static str,
+    effect: &'static str,
+    without_pattern: &'static str,
+}
+
+const VARIANT_FIELD_PATTERN: FieldPatternMessages = FieldPatternMessages {
+    arity: "checked HIR variant match field arity",
+    unknown_field: "unknown checked HIR variant match field",
+    effect: "checked HIR variant match field effect",
+    without_pattern: "checked HIR variant match field without a pattern",
+};
+
+const STRUCT_FIELD_PATTERN: FieldPatternMessages = FieldPatternMessages {
+    arity: "checked HIR struct match field arity",
+    unknown_field: "unknown checked HIR struct match field",
+    effect: "checked HIR struct match field effect",
+    without_pattern: "checked HIR struct match field without a pattern",
+};
 
 /// Whether a pattern can fail to match the value it is applied to.
 ///

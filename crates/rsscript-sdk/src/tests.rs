@@ -3001,3 +3001,72 @@ fn main() -> fresh String {
         "each declared field is bound, and a nested case adds its own test"
     );
 }
+
+/// Struct patterns destructure a product type in `match`.
+///
+/// A struct has one shape, so unlike a sum variant there is no tag to test:
+/// the pattern is refutable only through the sub-patterns its fields carry,
+/// and an all-binding `Point { x, y }` is an unconditional edge. That was the
+/// hole — `examples/scripts/core/interpreter_pure_parity.rss` checked clean and
+/// then died in lowering with `non-literal checked HIR match pattern`, because
+/// the named-field form was resolved only against the sum-variant table.
+#[test]
+fn struct_match_patterns_lower_and_execute() {
+    const SOURCE: &str = r#"
+struct Inner {
+    tag: Int
+    label: String
+}
+
+struct Outer {
+    inner: Inner
+    count: Int
+}
+
+fn classify(value: read Outer) -> fresh String {
+    match read value {
+        Outer { inner: Inner { tag: 1, label }, count } => {
+            return String.concat(left: read label, right: String.from_int(value: read count))
+        }
+        Outer { inner, count: 7 } => {
+            return String.concat(left: "seven:", right: String.from_int(value: inner.tag))
+        }
+        Outer { count, .. } => {
+            return String.concat(left: "rest:", right: String.from_int(value: read count))
+        }
+    }
+}
+
+fn total(point: read Inner) -> Int {
+    match read point {
+        Inner { tag, label: _ } => { return read tag * 2 }
+    }
+}
+
+fn main() -> fresh String {
+    let parts = [
+        classify(value: read Outer(inner: Inner(tag: 1, label: "one"), count: 5)),
+        classify(value: read Outer(inner: Inner(tag: 3, label: "three"), count: 7)),
+        classify(value: read Outer(inner: Inner(tag: 9, label: "nine"), count: 2)),
+        String.from_int(value: total(point: read Inner(tag: 21, label: "x"))),
+    ]
+    return String.join(parts: read parts, separator: "|")
+}
+"#;
+
+    let built = Compiler
+        .compile("struct-patterns.rss", SOURCE)
+        .expect("struct patterns compile");
+    let admitted = admitted(built);
+    let report = Runtime::default()
+        .link(&admitted)
+        .expect("link struct pattern program")
+        .execute(ExecutionRequest::default());
+
+    assert_eq!(report.termination_reason(), TerminationReason::Completed);
+    assert_eq!(
+        report.value(),
+        Some("one5|seven:3|rest:2|42"),
+        "a nested literal field tests before the arm is taken, and `..` names nothing"
+    );
+}

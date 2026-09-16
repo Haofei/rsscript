@@ -29,8 +29,8 @@ track migrations without confusing crate versions with wire versions.
   creation-order task wake-up after a park (previously hash-dependent).
 - Every program the checker accepts now builds, verifies, and runs: callback
   parameters, closures with implicit captures, bare `None`, tuple returns and
-  patterns, list and multi-field variant patterns, index assignment, and the
-  receiver-call spelling of mutating core methods all lower. Writing to a
+  patterns, list, struct, and multi-field variant patterns, index assignment,
+  and the receiver-call spelling of mutating core methods all lower. Writing to a
   captured local, which was silently lost at run time, is now RS0805.
 - `docs/spec/RSScript_Semantics_v0.7.md` is the source-backed reference for
   every rule, with a verified example and a diagnostic index.
@@ -113,6 +113,10 @@ track migrations without confusing crate versions with wire versions.
   symbol table with machine-applicable renames; RS0202 emits a correct effect
   fix. `rss generate continuations` returns each parameter's effect and label
   facts and sees the standard package interfaces.
+- Every checked-in example program — `examples/scripts/**/*.rss` and each
+  embedding example's `script/*.rss` against its own `interfaces/*.rssi` — is
+  built and Artifact-verified by `example_build_corpus`, so a published example
+  cannot check clean and then fail to build.
 - The generated language card carries canonical surface forms and a full core
   signature index. The eval corpus grew to 30 tasks with real model samples and
   a measured failure-mode report.
