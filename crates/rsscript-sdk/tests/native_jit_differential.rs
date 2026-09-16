@@ -108,6 +108,12 @@ const CASES: &[(&str, &str)] = &[
         "receiver-call-loop.rss",
         "fn hot(limit: Int) -> Int { let mut values = List<Int>.new(); let mut i = 0; let mut total = 0; while i < limit { mut values.push(i); total = total + values.len(); i = i + 1 }; return total } fn main() -> Int { return hot(limit: 2000) }",
     ),
+    // A list pattern's length test and element projections are `ListLen`,
+    // `ListGet` and integer compares, all of which are in the native subset.
+    (
+        "list-pattern-loop.rss",
+        "fn classify(xs: read List<Int>) -> Int { match read xs { [] => { return 0 } [0, _] => { return 1 } [a, b] => { return a + b } _ => { return 9 } } } fn main() -> Int { let pair: List<Int> = [3, 4]; let zero: List<Int> = [0, 4]; let long: List<Int> = [1, 2, 3]; let mut i = 0; let mut total = 0; while i < 5000 { total = total + classify(xs: read pair) + classify(xs: read zero) + classify(xs: read long); i = i + 1 }; return total }",
+    ),
     (
         "native-map-match.rss",
         include_str!("../../../benchmarks/vm-jit/kernels/native_map_get_match_loop.rss"),

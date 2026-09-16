@@ -2467,3 +2467,83 @@ fn main() -> Int {
         "the receiver keeps its `mut` effect: `items` is [1, 2, 3] after the pop"
     );
 }
+
+/// List patterns in `match` reach the typed MIR control-flow subset.
+///
+/// A slice pattern is refutable in its length first, so lowering reads the
+/// scrutinee's length, branches on it, and only then projects elements —
+/// `ListGet` out of range is a runtime error, not a non-match. The program
+/// exercises every form the subset accepts: the empty pattern, a fixed length,
+/// a literal element, `_`, a head/rest, a tail, and a middle rest, in both the
+/// statement and the expression form of `match`.
+#[test]
+fn list_match_patterns_lower_and_execute() {
+    const SOURCE: &str = r#"
+fn shape(xs: read List<Int>) -> fresh String {
+    match read xs {
+        [] => { return "empty" }
+        [0] => { return "zero" }
+        [only] => { return String.concat(left: "one:", right: String.from_int(value: only)) }
+        [1, second] => { return String.concat(left: "one-then:", right: String.from_int(value: second)) }
+        [a, _] => { return String.concat(left: "pair:", right: String.from_int(value: a)) }
+        [first, ..rest] => {
+            return String.concat(
+                left: String.from_int(value: first),
+                right: String.concat(left: "+", right: String.from_int(value: List.len(list: rest)))
+            )
+        }
+    }
+}
+
+fn ends(xs: read List<Int>) -> fresh String {
+    return match read xs {
+        [..init, last] => {
+            String.concat(left: String.from_int(value: last), right: String.concat(left: "/", right: String.from_int(value: List.len(list: init))))
+        }
+        _ => { "none" }
+    }
+}
+
+fn middle(xs: read List<Int>) -> fresh String {
+    match read xs {
+        [a, ..mid, 9] => { return String.concat(left: String.from_int(value: a + List.len(list: mid)), right: "!") }
+        [a, ..mid, z] => { return String.from_int(value: a + z + List.len(list: mid)) }
+        _ => { return "?" }
+    }
+}
+
+fn main() -> fresh String {
+    let empty: List<Int> = []
+    let parts = [
+        shape(xs: read empty),
+        shape(xs: read [0]),
+        shape(xs: read [7]),
+        shape(xs: read [1, 4]),
+        shape(xs: read [3, 4]),
+        shape(xs: read [5, 6, 7, 8]),
+        ends(xs: read empty),
+        ends(xs: read [2, 3, 4]),
+        middle(xs: read [1, 2, 3, 9]),
+        middle(xs: read [1, 2, 3, 4]),
+        middle(xs: read [1]),
+    ]
+    return String.join(parts: read parts, separator: "|")
+}
+"#;
+
+    let built = Compiler
+        .compile("list-patterns.rss", SOURCE)
+        .expect("list patterns in `match` compile");
+    let admitted = admitted(built);
+    let report = Runtime::default()
+        .link(&admitted)
+        .expect("link list pattern program")
+        .execute(ExecutionRequest::default());
+
+    assert_eq!(report.termination_reason(), TerminationReason::Completed);
+    assert_eq!(
+        report.value(),
+        Some("empty|zero|one:7|one-then:4|pair:3|5+3|none|4/2|3!|7|?"),
+        "each arm is selected by its own length and element tests"
+    );
+}

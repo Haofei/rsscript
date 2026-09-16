@@ -2816,15 +2816,26 @@ pattern outside it is a build error rather than a check error:
 | variant — `Ok`/`Err`, `Some`/`None`, declared sum variants | yes, with flat positional bindings or `_` per declared field |
 | tuple (`__TupleN` struct pattern) | yes: each element may bind, be `_`, be a literal, or be a nested tuple pattern of the same |
 | every other struct pattern | no |
-| list | no |
+| list | yes: each element may bind, be `_`, or be a literal; the rest may be ignored or bound |
 | guard on any arm | no |
 
 A tuple has one shape, so there is no tag to test: only a literal element is
 refutable, and the refutable elements become a short-circuiting branch ladder
 (`lowerer_calls.rs::lower_tuple_pattern_edge`). Nested tuple patterns recurse
-through both the test and the binding half. This subset is shared by the
-statement and the expression form of `match`, which cannot drift apart because
-both go through one `lower_pattern_edge`.
+through both the test and the binding half.
+
+A list pattern is refutable in its length before it is refutable in any
+element: a fixed-length pattern requires an exact length and a pattern with a
+`..` rest requires at least as many elements as its prefix and suffix name.
+That test comes first and every element test runs after it
+(`lowerer_calls.rs::lower_list_pattern_edge`), because reading an element is
+`ListGet`, whose out-of-range contract is a runtime error rather than a
+non-match. A bound `..name` is the `List.slice` of everything the prefix and
+suffix did not name, so it is a `fresh List<T>` under the same slicing contract
+as an explicit `List.slice` call.
+
+This subset is shared by the statement and the expression form of `match`,
+which cannot drift apart because both go through one `lower_pattern_edge`.
 
 **Accepted** — guards
 

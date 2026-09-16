@@ -30,11 +30,6 @@ use rsscript_semantics::{FrontendInputSnapshot, standard_package_interfaces};
 /// hidden. Removing an entry is the acceptance test for closing its gap.
 const CANNOT_BUILD_YET: &[(&str, &str)] = &[
     (
-        "list_patterns.rss",
-        "`non-literal checked HIR match pattern`: list patterns have no MIR \
-         match form.",
-    ),
-    (
         "positional-multifield-nested.rss",
         "`nested checked HIR variant match binding`: a variant pattern that \
          binds through another pattern is not lowered.",

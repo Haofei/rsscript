@@ -715,6 +715,26 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                     Ok(Some(MatchBindings::Variant(layout, bindings.clone())))
                 }
             }
+            rsscript_syntax::ast::MatchPattern::List {
+                prefix,
+                rest,
+                suffix,
+                ..
+            } => {
+                self.lower_list_pattern_edge(
+                    value,
+                    prefix,
+                    rest.as_ref(),
+                    suffix,
+                    arm_block,
+                    next,
+                )?;
+                Ok(Some(MatchBindings::List {
+                    prefix: prefix.clone(),
+                    rest: rest.clone(),
+                    suffix: suffix.clone(),
+                }))
+            }
             rsscript_syntax::ast::MatchPattern::Struct {
                 name,
                 fields,
@@ -890,6 +910,257 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
         destination
     }
 
+    /// Emit a list pattern's length and element tests as a short-circuiting
+    /// branch ladder from the current block to `arm_block`, with every failure
+    /// going to `next`.
+    ///
+    /// A slice pattern is refutable in its length first: `[]`, `[only]` and
+    /// `[a, b]` require an exact length, while a pattern with a `..` rest
+    /// requires at least as many elements as its prefix and suffix name. No
+    /// element may be read before that test has passed — an element read is
+    /// `ListGet`, whose out-of-range contract is a runtime error, not a
+    /// non-match — so the length branch comes first and each element test runs
+    /// in its own block after it.
+    pub(super) fn lower_list_pattern_edge(
+        &mut self,
+        value: ValueId,
+        prefix: &[rsscript_syntax::ast::MatchPattern],
+        rest: Option<&Option<String>>,
+        suffix: &[rsscript_syntax::ast::MatchPattern],
+        arm_block: BlockId,
+        next: BlockId,
+    ) -> Result<(), MirLoweringError> {
+        let mut tests = Vec::new();
+        for (index, element) in prefix.iter().enumerate() {
+            if let Some(literal) = self.list_pattern_element_test(element)? {
+                tests.push((ListPatternSlot::Prefix(index), literal));
+            }
+        }
+        for (index, element) in suffix.iter().enumerate() {
+            if let Some(literal) = self.list_pattern_element_test(element)? {
+                tests.push((ListPatternSlot::Suffix(index), literal));
+            }
+        }
+
+        let length = self.list_length(value);
+        let required = self.literal(MirLiteral::Int((prefix.len() + suffix.len()) as i64))?;
+        let condition = self.value();
+        self.emit(MirInstruction::Binary {
+            destination: condition,
+            op: if rest.is_some() {
+                MirBinaryOp::GreaterEqual
+            } else {
+                MirBinaryOp::Equal
+            },
+            left: length,
+            right: required,
+        });
+        let Some(last) = tests.len().checked_sub(1) else {
+            self.terminate(MirTerminator::Branch {
+                condition,
+                then_target: arm_block,
+                else_target: next,
+            });
+            return Ok(());
+        };
+        let mut then_target = self.new_block();
+        self.terminate(MirTerminator::Branch {
+            condition,
+            then_target,
+            else_target: next,
+        });
+        self.current = then_target;
+
+        for (index, (slot, literal)) in tests.into_iter().enumerate() {
+            let element = self.list_pattern_element(value, Some(length), slot, suffix.len())?;
+            let expected = self.literal(literal)?;
+            let condition = self.value();
+            self.emit(MirInstruction::Binary {
+                destination: condition,
+                op: MirBinaryOp::Equal,
+                left: element,
+                right: expected,
+            });
+            then_target = if index == last {
+                arm_block
+            } else {
+                self.new_block()
+            };
+            self.terminate(MirTerminator::Branch {
+                condition,
+                then_target,
+                else_target: next,
+            });
+            if index != last {
+                self.current = then_target;
+            }
+        }
+        Ok(())
+    }
+
+    /// The literal an element position tests, if it tests one.
+    ///
+    /// The lowerable element forms are the ones a list element can be matched
+    /// on without a projection of its own: a binding, `_`, or a literal.
+    fn list_pattern_element_test(
+        &self,
+        element: &rsscript_syntax::ast::MatchPattern,
+    ) -> Result<Option<MirLiteral>, MirLoweringError> {
+        match element {
+            rsscript_syntax::ast::MatchPattern::Binding { .. }
+            | rsscript_syntax::ast::MatchPattern::Wildcard(_) => Ok(None),
+            rsscript_syntax::ast::MatchPattern::Literal { value, .. } => {
+                Ok(Some(match_literal(value, &self.function_name)?))
+            }
+            _ => self.unsupported("nested checked HIR list match pattern"),
+        }
+    }
+
+    /// Bind a list pattern's named elements and rest inside the arm's block.
+    pub(super) fn lower_list_pattern_bindings(
+        &mut self,
+        value: ValueId,
+        prefix: &[rsscript_syntax::ast::MatchPattern],
+        rest: Option<&Option<String>>,
+        suffix: &[rsscript_syntax::ast::MatchPattern],
+    ) -> Result<(), MirLoweringError> {
+        let binds_from_the_end = !suffix.is_empty() || matches!(rest, Some(Some(_)));
+        let length = binds_from_the_end.then(|| self.list_length(value));
+        for (index, element) in prefix.iter().enumerate() {
+            self.bind_list_pattern_element(
+                value,
+                length,
+                ListPatternSlot::Prefix(index),
+                suffix.len(),
+                element,
+            )?;
+        }
+        for (index, element) in suffix.iter().enumerate() {
+            self.bind_list_pattern_element(
+                value,
+                length,
+                ListPatternSlot::Suffix(index),
+                suffix.len(),
+                element,
+            )?;
+        }
+        let (Some(Some(name)), Some(length)) = (rest, length) else {
+            return Ok(());
+        };
+        // The rest binding is a `fresh List<T>` of everything the prefix and
+        // suffix did not name, which is exactly `List.slice`. Reusing the
+        // catalog intrinsic keeps one runtime contract for list slicing
+        // instead of giving `match` a private one.
+        let start = self.literal(MirLiteral::Int(prefix.len() as i64))?;
+        let named = self.literal(MirLiteral::Int((prefix.len() + suffix.len()) as i64))?;
+        let len = self.value();
+        self.emit(MirInstruction::Binary {
+            destination: len,
+            op: MirBinaryOp::Subtract,
+            left: length,
+            right: named,
+        });
+        let slice = self.list_slice(value, start, len)?;
+        let place = self.place(name);
+        self.emit(MirInstruction::WritePlace {
+            place,
+            value: slice,
+        });
+        Ok(())
+    }
+
+    fn bind_list_pattern_element(
+        &mut self,
+        value: ValueId,
+        length: Option<ValueId>,
+        slot: ListPatternSlot,
+        suffix_len: usize,
+        element: &rsscript_syntax::ast::MatchPattern,
+    ) -> Result<(), MirLoweringError> {
+        let rsscript_syntax::ast::MatchPattern::Binding { name, .. } = element else {
+            return Ok(());
+        };
+        let element = self.list_pattern_element(value, length, slot, suffix_len)?;
+        let place = self.place(name);
+        self.emit(MirInstruction::WritePlace {
+            place,
+            value: element,
+        });
+        Ok(())
+    }
+
+    /// Read the element a list pattern slot names. A suffix slot is measured
+    /// from the scrutinee's length, so it is only projectable where the length
+    /// has already been read.
+    fn list_pattern_element(
+        &mut self,
+        value: ValueId,
+        length: Option<ValueId>,
+        slot: ListPatternSlot,
+        suffix_len: usize,
+    ) -> Result<ValueId, MirLoweringError> {
+        let index = match slot {
+            ListPatternSlot::Prefix(index) => self.literal(MirLiteral::Int(index as i64))?,
+            ListPatternSlot::Suffix(index) => {
+                let Some(length) = length else {
+                    return self.unsupported("checked HIR list match suffix without a length");
+                };
+                let distance = self.literal(MirLiteral::Int((suffix_len - index) as i64))?;
+                let destination = self.value();
+                self.emit(MirInstruction::Binary {
+                    destination,
+                    op: MirBinaryOp::Subtract,
+                    left: length,
+                    right: distance,
+                });
+                destination
+            }
+        };
+        let destination = self.value();
+        self.emit(MirInstruction::ListGet {
+            destination,
+            list: value,
+            index,
+        });
+        Ok(destination)
+    }
+
+    fn list_length(&mut self, value: ValueId) -> ValueId {
+        let destination = self.value();
+        self.emit(MirInstruction::ListLen {
+            destination,
+            list: value,
+        });
+        destination
+    }
+
+    /// Emit the catalog `List.slice` intrinsic call.
+    fn list_slice(
+        &mut self,
+        list: ValueId,
+        start: ValueId,
+        len: ValueId,
+    ) -> Result<ValueId, MirLoweringError> {
+        let Some(builtin) = rsscript_mir::builtin_id("List", "slice") else {
+            return self.unsupported("List.slice catalog builtin identity");
+        };
+        let destination = self.value();
+        self.emit(MirInstruction::Call {
+            destination,
+            target: MirCallTarget::Builtin {
+                id: builtin,
+                parameter_modes: vec![MirParameterMode::Read; 3].into_boxed_slice(),
+                type_arguments: Box::new([]),
+            },
+            arguments: vec![
+                MirCallArgument::Value(list),
+                MirCallArgument::Value(start),
+                MirCallArgument::Value(len),
+            ],
+        });
+        Ok(destination)
+    }
+
     /// Resolve the checked semantic layout before emitting a match edge. The
     /// direct MIR subset deliberately accepts only a flat positional binding
     /// or wildcard for each declared field: nested patterns require their own
@@ -966,6 +1237,11 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
     ) -> Result<(), MirLoweringError> {
         match bindings {
             MatchBindings::Tuple(fields) => self.lower_tuple_pattern_bindings(value, &fields),
+            MatchBindings::List {
+                prefix,
+                rest,
+                suffix,
+            } => self.lower_list_pattern_bindings(value, &prefix, rest.as_ref(), &suffix),
             MatchBindings::Variant(layout, bindings) => {
                 self.lower_variant_pattern_bindings(value, &layout, &bindings)
             }

@@ -823,6 +823,13 @@ enum MatchBindings {
     /// the parser gives them.
     Tuple(Vec<rsscript_syntax::ast::MatchFieldPattern>),
     Variant(VariantLayout, Vec<rsscript_syntax::ast::MatchPattern>),
+    /// A `List<T>` slice pattern's element and rest bindings. The arm's own
+    /// block projects them, so the pattern parts travel with the arm.
+    List {
+        prefix: Vec<rsscript_syntax::ast::MatchPattern>,
+        rest: Option<Option<String>>,
+        suffix: Vec<rsscript_syntax::ast::MatchPattern>,
+    },
     Result {
         ok: bool,
         binding: rsscript_syntax::ast::MatchPattern,
@@ -867,6 +874,18 @@ fn receiver_argument(
     });
     normalized.extend(args.iter().cloned());
     normalized
+}
+
+/// Which end of a `List<T>` slice pattern an element is counted from.
+///
+/// A prefix element sits at a constant index. A suffix element sits at a
+/// constant distance from the end, so its index is only known once the
+/// scrutinee's length has been read — which is also why a suffix element may
+/// never be projected before the length test has passed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ListPatternSlot {
+    Prefix(usize),
+    Suffix(usize),
 }
 
 /// Parse the synthetic tuple struct name `__TupleN` to its arity `N`.
