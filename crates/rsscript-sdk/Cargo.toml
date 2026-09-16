@@ -102,5 +102,10 @@ required-features = ["native-jit"]
 name = "fixture_corpus"
 path = "tests/fixture_corpus.rs"
 
+[[test]]
+name = "fixture_build_corpus"
+path = "tests/fixture_build_corpus.rs"
+required-features = ["execution"]
+
 [lints]
 workspace = true
