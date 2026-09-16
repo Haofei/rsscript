@@ -1922,6 +1922,285 @@ fn main() -> Int {
     }
 }
 
+/// Protocol programs build, verify, and run.
+///
+/// A `protocol` declaration is a contract, not code, but its bodyless methods
+/// used to be lowered as real functions: the emitted function had no body, so
+/// its fall-through returned `Unit` against a declared non-`Unit` result and
+/// *every* program containing a `protocol` failed Artifact verification with
+/// "typed function 0 instruction 2 return register 1 has Known(Unit)". The
+/// checker accepted all of these, so the failure only ever appeared at run
+/// time — which is why this covers build, verification, and execution.
+#[test]
+fn protocol_programs_verify_and_run() {
+    // A protocol method called through the protocol on a concrete value. The
+    // call resolves to the one implementation.
+    const STATIC_CALL: &str = r#"
+protocol Sized {
+    fn area(self: read Self) -> Int
+}
+
+struct Square {
+    side: Int
+}
+
+fn Square.area(self: read Square) -> Int {
+    return self.side * self.side
+}
+
+impl Sized for Square {
+    area = Square.area
+}
+
+fn main() -> Int {
+    let square = Square(side: 3)
+    return Sized.area(self: read square)
+}
+"#;
+
+    // `Dyn<P>` dispatch across two implementations: the receiver's concrete
+    // type is only known at run time, and each value must reach its own impl.
+    const DYN_DISPATCH: &str = r#"
+protocol Sized {
+    fn area(self: read Self) -> Int
+}
+
+struct Square {
+    side: Int
+}
+
+struct Rect {
+    width: Int
+    height: Int
+}
+
+fn Square.area(self: read Square) -> Int {
+    return self.side * self.side
+}
+
+fn Rect.area(self: read Rect) -> Int {
+    return self.width * self.height
+}
+
+impl Sized for Square {
+    area = Square.area
+}
+
+impl Sized for Rect {
+    area = Rect.area
+}
+
+fn measure_dyn(shape: read Dyn<Sized>) -> Int {
+    return Sized.area(self: shape)
+}
+
+fn main() -> Int {
+    local square = Square(side: 3)
+    local rect = Rect(width: 2, height: 5)
+    let boxed_square = Dyn.from<Sized, Square>(value: take square)
+    let boxed_rect = Dyn.from<Sized, Rect>(value: take rect)
+    return measure_dyn(shape: read boxed_square) + measure_dyn(shape: read boxed_rect)
+}
+"#;
+
+    // The same call inside a `<T: P>` bound, where the receiver register holds
+    // the type parameter rather than any implementation's concrete type.
+    const GENERIC_BOUND: &str = r#"
+protocol Sized {
+    fn area(self: read Self) -> Int
+}
+
+struct Square {
+    side: Int
+}
+
+fn Square.area(self: read Square) -> Int {
+    return self.side * self.side
+}
+
+impl Sized for Square {
+    area = Square.area
+}
+
+fn measure<T: Sized>(shape: read T) -> Int {
+    return Sized.area(self: shape)
+}
+
+fn main() -> Int {
+    let square = Square(side: 4)
+    return measure<Square>(shape: read square)
+}
+"#;
+
+    // A protocol declared inside a module. Module isolation mangles the
+    // module's own declarations, so this also covers the dispatch table being
+    // keyed by names that survived mangling on both sides.
+    const IN_MODULE: &str = r#"
+module app
+
+protocol Sized {
+    fn area(self: read Self) -> Int
+}
+
+pub struct Square {
+    side: Int
+}
+
+pub fn Square.area(self: read Square) -> Int {
+    return self.side * self.side
+}
+
+impl Sized for Square {
+    area = Square.area
+}
+
+fn measure<T: Sized>(shape: read T) -> Int {
+    return Sized.area(self: shape)
+}
+
+fn measure_dyn(shape: read Dyn<Sized>) -> Int {
+    return Sized.area(self: shape)
+}
+
+fn main() -> Int {
+    local square = Square(side: 3)
+    let boxed = Dyn.from<Sized, Square>(value: take square)
+    let direct = Square(side: 2)
+    return measure_dyn(shape: read boxed) + measure<Square>(shape: read direct)
+}
+"#;
+
+    for (file, source, expected) in [
+        ("protocol-static-call.rss", STATIC_CALL, "9"),
+        ("protocol-dyn-dispatch.rss", DYN_DISPATCH, "19"),
+        ("protocol-generic-bound.rss", GENERIC_BOUND, "16"),
+        ("protocol-in-module.rss", IN_MODULE, "13"),
+    ] {
+        let built = Compiler
+            .compile(file, source)
+            .unwrap_or_else(|error| panic!("{file} compiles: {error}"));
+        let admitted = ArtifactVerifier
+            .verify(built)
+            .unwrap_or_else(|error| panic!("{file} verifies: {error}"))
+            .admit_trusted_input();
+        let report = Runtime::default()
+            .link(&admitted)
+            .unwrap_or_else(|error| panic!("{file} links: {error}"))
+            .execute(ExecutionRequest::default());
+
+        assert_eq!(
+            report.termination_reason(),
+            TerminationReason::Completed,
+            "{file} runs to completion"
+        );
+        assert_eq!(report.value(), Some(expected), "{file} result");
+    }
+}
+
+/// The protocol's own method is not in the executable.
+///
+/// This pins the root cause rather than its symptom: `Sized.area` is a
+/// declaration with no body, so there is nothing to emit and no function
+/// identity to call. Only the implementations are functions, and the protocol
+/// call site reaches them through dispatch.
+#[test]
+fn a_bodyless_protocol_method_is_not_emitted_as_a_function() {
+    let built = Compiler
+        .compile(
+            "protocol-functions.rss",
+            "protocol Sized {\n    fn area(self: read Self) -> Int\n}\n\n\
+             struct Square {\n    side: Int\n}\n\n\
+             fn Square.area(self: read Square) -> Int {\n    return self.side * self.side\n}\n\n\
+             impl Sized for Square {\n    area = Square.area\n}\n\n\
+             fn main() -> Int {\n    let square = Square(side: 3)\n\
+             \x20   return Sized.area(self: read square)\n}\n",
+        )
+        .expect("protocol program compiles");
+    let artifact = artifact::BytecodeArtifact::from_bytes(built.artifact_bytes())
+        .expect("the built artifact decodes");
+    let unit: serde_json::Value = rsscript_bytecode::decode_executable_payload(&artifact.payload)
+        .expect("the executable payload decodes");
+    let names = unit["functions"]
+        .as_array()
+        .expect("the executable has functions")
+        .iter()
+        .map(|function| function["name"].as_str().unwrap_or_default().to_owned())
+        .collect::<Vec<_>>();
+
+    assert!(
+        !names.iter().any(|name| name == "Sized.area"),
+        "the protocol's abstract method must not be an executable function: {names:?}"
+    );
+    assert!(
+        names.iter().any(|name| name == "Square.area"),
+        "the implementation must be: {names:?}"
+    );
+}
+
+/// A dynamic call site publishes what it proves and nothing more.
+///
+/// Every implementation of a protocol method shares one signature, so the
+/// result and the non-receiver parameters are real facts and stay `Known`. The
+/// receiver is not: it is chosen at run time from the value's own layout, and
+/// the register at the call site holds a `Dyn<P>` or a bounded type parameter.
+/// Publishing the first implementation's receiver type there was the false
+/// fact that made every `Dyn<P>` program fail Artifact verification with
+/// "typed call parameter disagrees with its argument register".
+#[test]
+fn a_dynamic_call_site_reports_no_receiver_type_it_cannot_prove() {
+    let built = Compiler
+        .compile(
+            "dyn-facts.rss",
+            "protocol Sized {\n    fn area(self: read Self) -> Int\n}\n\n\
+             struct Square {\n    side: Int\n}\n\n\
+             fn Square.area(self: read Square) -> Int {\n    return self.side * self.side\n}\n\n\
+             impl Sized for Square {\n    area = Square.area\n}\n\n\
+             fn measure(shape: read Dyn<Sized>) -> Int {\n\
+             \x20   return Sized.area(self: shape)\n}\n\n\
+             fn main() -> Int {\n    local square = Square(side: 3)\n\
+             \x20   let boxed = Dyn.from<Sized, Square>(value: take square)\n\
+             \x20   return measure(shape: read boxed)\n}\n",
+        )
+        .expect("dynamic dispatch program compiles");
+    let artifact = artifact::BytecodeArtifact::from_bytes(built.artifact_bytes())
+        .expect("the built artifact decodes");
+    let bytes = artifact
+        .typed_executable_facts
+        .clone()
+        .expect("the build carries typed executable facts");
+    let bound = rsscript_bytecode::TypedExecutableFactsVerifierV1::new(
+        rsscript_bytecode::BytecodeLimits::default().into(),
+    )
+    .verify(&bytes, &artifact)
+    .expect("the typed facts verify against their executable");
+
+    let call = bound
+        .facts()
+        .functions
+        .iter()
+        .flat_map(|function| &function.call_sites)
+        .find(|call| call.target == rsscript_bytecode::TypedCallTargetV1::Dynamic)
+        .expect("the dynamic call site is published");
+
+    assert_eq!(
+        call.parameters,
+        vec![rsscript_bytecode::TypedFactTypeV1::Unknown],
+        "the receiver of a dynamic call is not statically known"
+    );
+    assert_eq!(
+        call.parameter_effects,
+        vec![rsscript_bytecode::TypedDataEffectV1::Read]
+    );
+    assert_eq!(
+        call.result,
+        rsscript_bytecode::TypedFactTypeV1::Known(provider::WireType::Int {
+            bits: 64,
+            signed: true
+        }),
+        "every implementation returns the same type, so the result is proved"
+    );
+}
+
 /// A declared callback contract is a proved fact, and the typed facts say so.
 ///
 /// An unannotated `|x| { ... }` proves nothing about its parameter, so its call

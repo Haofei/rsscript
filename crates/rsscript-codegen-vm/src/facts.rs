@@ -583,7 +583,21 @@ fn typed_call_site(
                     MirCallTarget::Dynamic { .. } => TypedCallTargetV1::Dynamic,
                 },
                 parameters: if proven.is_some() {
-                    parameters.into_iter().map(copy_type).collect()
+                    let mut parameters = parameters.into_iter().map(copy_type).collect::<Vec<_>>();
+                    // A dynamic call's receiver type is decided at run time by
+                    // the value's own layout, so the statically provable fact
+                    // is every implementation's shared signature *except* the
+                    // receiver: at the call site the argument is a `Dyn<P>` or
+                    // a protocol-bounded type parameter, never one impl's
+                    // concrete type. Recording the first implementation's
+                    // receiver here claimed a fact the register could not
+                    // satisfy and the Artifact verifier rejected the program.
+                    if matches!(target, MirCallTarget::Dynamic { .. })
+                        && let Some(receiver) = parameters.first_mut()
+                    {
+                        *receiver = TypedFactTypeV1::Unknown;
+                    }
+                    parameters
                 } else {
                     vec![TypedFactTypeV1::Unknown; arguments.len()]
                 },

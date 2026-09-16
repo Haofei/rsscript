@@ -31,3 +31,9 @@ fn write_line<W: Writer>(writer: mut W, message: String) -> Unit
 {
     Writer.write(self: mut writer, message)
 }
+
+fn main() -> Unit {
+    let mut writer = BufferWriter(buffer: [])
+    write_line<BufferWriter>(writer: mut writer, message: "hello")
+    Writer.flush(self: mut writer)
+}

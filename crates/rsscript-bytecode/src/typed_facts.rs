@@ -771,8 +771,22 @@ fn verify_executable_call_contract(
             .cloned()
             .map(TypedFactTypeV1::Known)
             .collect::<Vec<_>>();
-        let exact = call.parameters == parameters
-            && call.result == TypedFactTypeV1::Known(signature.result.clone());
+        let exact = if matches!(call.target, TypedCallTargetV1::Dynamic) {
+            // Every dispatch target shares this signature, so the result and
+            // the non-receiver parameters are proven exactly. The receiver is
+            // selected from the value's runtime layout, so the call site may
+            // leave it unknown rather than claim one implementation's type.
+            call.parameters.len() == parameters.len()
+                && call.parameters.iter().zip(&parameters).enumerate().all(
+                    |(index, (actual, expected))| {
+                        actual == expected || (index == 0 && *actual == TypedFactTypeV1::Unknown)
+                    },
+                )
+                && call.result == TypedFactTypeV1::Known(signature.result.clone())
+        } else {
+            call.parameters == parameters
+                && call.result == TypedFactTypeV1::Known(signature.result.clone())
+        };
         let instantiated = lowering_substitutions
             && matches!(call.target, TypedCallTargetV1::KnownFunction(_))
             && !call.type_arguments.is_empty()

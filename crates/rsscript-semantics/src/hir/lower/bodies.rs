@@ -271,15 +271,24 @@ pub(super) fn collect_function_body_facts(
         }
     }
     let mut lowering_value_types = value_types.clone();
-    facts.blocks.insert(
-        function.name.clone(),
-        lower_hir_block(
-            hir,
-            &function.name,
-            &function.body,
-            &mut lowering_value_types,
-        ),
-    );
+    // A declaration without a body — a protocol method, an interface-declared
+    // external — is a contract, not code. Recording an empty block for it made
+    // it indistinguishable from `fn f() -> Int {}` for every consumer of
+    // `HirFunctionBody::block`, and MIR lowering duly emitted the protocol's
+    // abstract method as a real function whose fall-through returned `Unit`
+    // against a declared non-`Unit` result, which the Artifact verifier
+    // rejected. `None` is what "no body" already means here.
+    if function.has_body {
+        facts.blocks.insert(
+            function.name.clone(),
+            lower_hir_block(
+                hir,
+                &function.name,
+                &function.body,
+                &mut lowering_value_types,
+            ),
+        );
+    }
     collect_body_facts_in_block(hir, &function.name, &function.body, &mut value_types, facts);
 }
 

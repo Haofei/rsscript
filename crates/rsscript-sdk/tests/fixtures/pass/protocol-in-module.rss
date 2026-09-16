@@ -43,3 +43,7 @@ fn boxed(side: Int) -> Int {
     let dynamic = Dyn.from<Sized, Square>(value: take square)
     return measure_dyn(shape: read dynamic)
 }
+
+fn main() -> Int {
+    return twice(side: 3) + boxed(side: 4)
+}

@@ -47,3 +47,7 @@ fn boxed(width: Int) -> Int {
     let dynamic = Dyn.from<Sized, Rect>(value: take rect)
     return measure_dyn(shape: read dynamic)
 }
+
+fn main() -> Int {
+    return local_rect(width: 3) + imported_square(side: 4) + boxed(width: 5)
+}

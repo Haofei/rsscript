@@ -20,3 +20,12 @@ fn print_item<F: Formatter>(item: F) -> Unit {
     let msg = Formatter.format(self: item)
     Output.write(message: msg)
 }
+
+// A `main` keeps this fixture in `fixture_build_corpus`: a protocol
+// declaration used to build a bodyless function for `Formatter.format` and
+// fail Artifact verification, which only a build could catch.
+fn main() -> Unit {
+    let point = Point(x: 1, y: 2)
+    Output.write(message: Formatter.format(self: point))
+    print_item<Point>(item: point)
+}
