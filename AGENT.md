@@ -92,22 +92,18 @@ Do not invent or automatically insert a host dependency.
 
 ## Validation
 
-Before submitting repository changes, run:
+Before submitting repository changes, run the local gate in
+[docs/development/DEVELOPMENT.md](docs/development/DEVELOPMENT.md). The two
+rules that gate matters most for generated code are:
 
-```rust
-fn main() -> Int {
-    return 0
-}
-```
+- a program `rss check` accepts must build, verify, and run
+  (`fixture_build_corpus` builds every pass fixture with a `main`);
+- every diagnostic and generation change is measured with the eval corpus
+  (`cargo run -p rsscript-xtask -- agent-eval …`) before and after.
 
-```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
-```
-
-Also verify the removed source syntax and compiler policy types do not reappear,
-and that `crates/rsscript-compiler/src/interfaces.rs` contains no default host includes.
+`crates/rsscript-compiler/src/interfaces.rs` must contain no default host
+includes; host services reach a program only through explicit `.rssi`
+interfaces and bindings.
 
 <!-- BEGIN GENERATED LANGUAGE CARD -->
 

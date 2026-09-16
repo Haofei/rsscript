@@ -1,6 +1,4 @@
 /target/
-/experiments/target/
-/crates/rsscript/tests/generated/target/
 benchmarks/**/target/
 benchmarks/**/Cargo.lock
 .DS_Store

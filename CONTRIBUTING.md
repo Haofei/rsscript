@@ -1,8 +1,9 @@
 # Contributing
 
-RSScript is in an architecture-convergence phase. Changes to syntax, public
-intrinsics, Provider ABI, bytecode, execution reports, or the runner protocol
-require an ADR and compatibility fixtures.
+Changes to syntax, public intrinsics, the Provider ABI, bytecode, execution
+reports, or the runner protocol require an ADR (`docs/architecture/adr/`) and
+compatibility fixtures. A program the checker accepts must build, verify, and
+run; `fixture_build_corpus` enforces it.
 
 Run the supported Core gate before submitting changes:
 
@@ -15,9 +16,8 @@ cargo test --locked -p rsscript-sdk --features execution
 cargo test --locked -p rsscript-cli --features execution
 ```
 
-Experimental packages use their own workspace and do not define Core release
-health:
-
+The full local gate, including the fixture corpora and the eval scorer, is in
+[docs/development/DEVELOPMENT.md](docs/development/DEVELOPMENT.md).
 
 Provider implementations must use `WireValue`, instance-owned authority, and
 the Provider conformance harness. Security-sensitive changes should include
