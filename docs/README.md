@@ -17,8 +17,7 @@ When documents disagree, use this order:
 1. [Language specification](spec/RSScript_v0.7_Spec.md) for the invariants and
    [RSScript Semantics v0.7](spec/RSScript_Semantics_v0.7.md) for every rule as
    implemented, with its diagnostic code and file citation
-2. [Execution specification](spec/RSScript_Execution_Spec_v0.1.md) and the
-   [native JIT contract](spec/native-jit-contract.md)
+2. The [native JIT contract](spec/native-jit-contract.md)
 3. Current code, tests, `rss --help`, and the root [README](../README.md)
 4. The references and roadmap below
 
@@ -26,14 +25,11 @@ When documents disagree, use this order:
 
 | Document | Purpose |
 | --- | --- |
-| [product.md](product.md) | Product users, Core workflow, and invariants |
-| [threat-model.md](threat-model.md) | Trust, isolation, provider, and untrusted-input boundaries |
-| [feature-matrix.md](feature-matrix.md) | Maturity of every surface, language conformance, and the support boundary |
+| [product.md](product.md) | Users, Core workflow, invariants, maturity of every surface, language conformance, and the support boundary |
+| [threat-model.md](threat-model.md) | Trust and isolation boundaries, untrusted input, and the reference isolated runner |
 | [roadmap.md](roadmap.md) | Prioritized future work and explicit freezes |
-| [releasing.md](releasing.md) | Multi-platform binaries, dry-run, provenance, and SDK distribution |
 | [provider-sdk.md](provider-sdk.md) | Writing a Provider: contract layers, lifecycle, replay, conformance, packages, and bindings |
-| [runner.md](runner.md) | The reference isolated runner: protocol, re-verification, profiles, and process limits |
-| [compatibility.md](compatibility.md) | Versioned contracts and their compatibility rules |
+| [compatibility.md](compatibility.md) | Versioned contracts, compatibility rules, releases, and SDK distribution |
 | [architecture/ARCHITECTURE.md](architecture/ARCHITECTURE.md) | Code map: what each crate owns, its entry points, the invariants, and where to add things |
 | [architecture/workspace-tiers.toml](architecture/workspace-tiers.toml) | Machine-checked package maturity and CI ownership |
 | [architecture/contracts.toml](architecture/contracts.toml) | Machine-checked public contract identifiers and owning constants |
@@ -50,9 +46,8 @@ When documents disagree, use this order:
 
 | Specification | Scope |
 | --- | --- |
-| [RSScript Spec Revision 7](spec/RSScript_v0.7_Spec.md) | Normative text for the `0.1.x` language-semantics line |
+| [RSScript Spec Revision 7](spec/RSScript_v0.7_Spec.md) | Normative invariants for the `0.1.x` language line, including the execution and structured-concurrency rules |
 | [RSScript Semantics v0.7](spec/RSScript_Semantics_v0.7.md) | Source-backed reference for the language semantics as implemented, with a diagnostic index |
-| [Execution v0.1](spec/RSScript_Execution_Spec_v0.1.md) | Interpreter, JIT parity, limits, and host ABI |
 
 The specifications are intentionally detailed and some tests read them by path.
 Do not rename them without updating those tests.

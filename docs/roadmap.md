@@ -77,7 +77,8 @@ native path. Within those invariants, JIT work is active feature work:
    optimization; measured regressions are removed, but the engine itself is
    not a removal candidate.
 4. Promote the engine to Core once accounting parity, supported-platform CI,
-   and the threat model align, following [feature-matrix.md](feature-matrix.md).
+   and the threat model align, following the maturity rules in
+   [product.md](product.md#maturity).
 
 ## Frozen scope
 
@@ -92,4 +93,4 @@ is also permitted; new semantics are not.
 Rust AOT, REIR, and self-hosting are archived on the
 `archive/experiments-2026-09` branch and receive no changes. The Cranelift JIT is
 Experimental in maturity but is an active product surface; its promotion
-follows the criteria in [feature-matrix.md](feature-matrix.md).
+follows the criteria in [product.md](product.md#maturity).

@@ -105,7 +105,7 @@ A `product` entry:
 `jit-tier0` and `jit-cranelift-engine` move to `status = "product"`. Both keep
 `maturity = "experimental"`: the engine is an active product surface whose
 maturity tier is still Experimental, and promotion continues to follow
-[`../../feature-matrix.md`](../../feature-matrix.md). The seven
+[`../../product.md`](../../product.md#maturity). The seven
 experiments-workspace surfaces resolved by ADR 0231 keep their dates and removal
 rules unchanged. Rollback is a TOML edit plus a new `decision_by`.
 

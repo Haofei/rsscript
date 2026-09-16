@@ -3655,7 +3655,7 @@ A **resource constructor counts as a call**, so `return Handle(fd: id)` inside a
 `.rss` body is `RS0702` like any other producer that reaches no `with`. This is
 deliberate, not an oversight in the producer classifier:
 
-* A resource slot is host-owned. `docs/spec/RSScript_Execution_Spec_v0.1.md`:
+* A resource slot is host-owned. `docs/spec/RSScript_v0.7_Spec.md` §11:
   "Resource slots are opaque and provider-owned at the external boundary;
   cleanup occurs on normal return, error, cancellation, and deadline exit." A
   value a `.rss` body builds out of ordinary fields has no provider behind it
@@ -3708,7 +3708,7 @@ a `Result`, not a resource.
 
 `with` blocks nest, and the inner scope closes first. Cleanup order is
 lexical/LIFO: the innermost `with` scope is released first, then outward.
-Per `docs/spec/RSScript_Execution_Spec_v0.1.md`, normal return, `?`
+Per `docs/spec/RSScript_v0.7_Spec.md` §11, normal return, `?`
 propagation, provider error, deadline, and cancellation all converge on the same
 resource-slot cleanup path, and a provider-owned resource is released according
 to its declared cleanup contract.
@@ -4355,7 +4355,7 @@ async fn worker() -> Unit {
 
 ### 9.9 What the scheduler guarantees, and what it does not
 
-Guaranteed (`docs/spec/RSScript_Execution_Spec_v0.1.md`,
+Guaranteed (`docs/spec/RSScript_v0.7_Spec.md` §11,
 `crates/rsscript-vm/src/reg_vm/scheduler.rs`, `crates/rsscript-core-types`):
 
 * **Structured lifetime.** A task group drains every child — named or `_` —
@@ -4922,7 +4922,7 @@ Primary sources for this document:
 | fixtures | `crates/rsscript-sdk/tests/fixtures/{pass,fail}/`, `crates/rsscript-sdk/tests/corpus/`, `examples/scripts/`, `evals/fixtures/` |
 
 See also: [`RSScript_v0.7_Spec.md`](RSScript_v0.7_Spec.md) (normative),
-[`RSScript_Execution_Spec_v0.1.md`](RSScript_Execution_Spec_v0.1.md),
+[`RSScript_v0.7_Spec.md` §11](RSScript_v0.7_Spec.md),
 [`../generated/diagnostic-catalog.md`](../generated/diagnostic-catalog.md),
 [`../generated/core-interfaces.md`](../generated/core-interfaces.md),
 [`../generated/grammar.md`](../generated/grammar.md).
