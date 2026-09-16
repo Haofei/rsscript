@@ -88,6 +88,7 @@ pub(super) fn check_explicit_closure_captures_expr(
             captures,
             body,
             explicit,
+            span,
             ..
         } => {
             if *explicit {
@@ -99,6 +100,7 @@ pub(super) fn check_explicit_closure_captures_expr(
                     binding_names,
                 );
             }
+            check_closure_capture_assignments(analyzer, params, body, span, binding_names);
             check_explicit_closure_captures_block(analyzer, body, binding_names);
         }
         HirExpr::Binary { left, right, .. } => {
@@ -210,7 +212,48 @@ pub(super) fn check_one_explicit_closure_capture_contract(
     }
 }
 
-pub(super) fn explicit_closure_actual_captures(
+/// Refuse a closure whose body assigns to a local it captured.
+///
+/// The capture reaches the closure's lowered function as a by-value argument
+/// and is never written back, so `total = total + n` inside the closure updates
+/// nothing the caller — or the closure's own next call — can see. Both
+/// spellings are refused: the explicit `captures(mut total)` clause makes the
+/// intent reviewable but does not make the write happen.
+///
+/// Passing a capture on to a `mut` parameter is a different thing and stays
+/// allowed: the callee receives the closure's own copy for the duration of that
+/// call, which is what the source says.
+pub(super) fn check_closure_capture_assignments(
+    analyzer: &mut Analyzer<'_>,
+    params: &[String],
+    body: &HirBlock,
+    span: &Span,
+    binding_names: &HashSet<String>,
+) {
+    let mut closure_local_bindings = HashSet::new();
+    collect_hir_block_bindings(body, &mut closure_local_bindings);
+    let mut assigned = HashSet::new();
+    collect_closure_assigned_bases_block(body, &mut assigned);
+    let mut mutated = assigned
+        .into_iter()
+        .filter(|name| {
+            binding_names.contains(name)
+                && !closure_local_bindings.contains(name)
+                && !params.contains(name)
+        })
+        .collect::<Vec<_>>();
+    mutated.sort();
+    for name in mutated {
+        analyzer
+            .diagnostics
+            .push(rsscript_semantics::closure_capture_mutation_diagnostic(
+                &name,
+                span.clone(),
+            ));
+    }
+}
+
+pub(crate) fn explicit_closure_actual_captures(
     body: &HirBlock,
     params: &HashSet<String>,
     binding_names: &HashSet<String>,
@@ -239,19 +282,82 @@ pub(super) fn explicit_closure_actual_captures(
     bound.extend(closure_local_bindings.iter().cloned());
     let mut accesses = Vec::new();
     collect_closure_effect_accesses_block(body, &bound, &mut accesses);
-    for access in accesses {
-        if binding_names.contains(&access.path.base)
-            && !closure_local_bindings.contains(&access.path.base)
-        {
-            let current = actual
-                .get(&access.path.base)
-                .copied()
-                .unwrap_or(ParamEffect::Read);
-            let next = strongest_capture_effect(current, access.effect);
-            actual.insert(access.path.base, next);
+    let mut effects = accesses
+        .into_iter()
+        .map(|access| (access.path.base, access.effect))
+        .collect::<Vec<_>>();
+    // Writing to a captured place is a `mut` use of it, exactly as passing it
+    // to a `mut` parameter is. Only call arguments carry an effect keyword, so
+    // assignment targets are collected separately; without them a closure body
+    // that assigns to a captured local reported the local as merely `read`,
+    // which is neither what the source says nor what the syntax-level capture
+    // rule reports for the same body.
+    let mut assigned = HashSet::new();
+    collect_closure_assigned_bases_block(body, &mut assigned);
+    effects.extend(assigned.into_iter().map(|base| (base, ParamEffect::Mut)));
+    for (base, effect) in effects {
+        if binding_names.contains(&base) && !closure_local_bindings.contains(&base) {
+            let current = actual.get(&base).copied().unwrap_or(ParamEffect::Read);
+            let next = strongest_capture_effect(current, effect);
+            actual.insert(base, next);
         }
     }
     actual
+}
+
+/// Base names of every assignment target in `block`, including the targets of
+/// assignments inside nested control flow. Nested closures introduce their own
+/// scope and are not descended into: their own capture set is computed for
+/// them, and the enclosing closure sees the name through the ordinary use scan.
+fn collect_closure_assigned_bases_block(block: &HirBlock, bases: &mut HashSet<String>) {
+    for statement in &block.statements {
+        match statement {
+            HirStmt::Assign { target, .. } => {
+                if let Some(base) = hir_place_base(target) {
+                    bases.insert(base);
+                }
+            }
+            HirStmt::With { body, .. } | HirStmt::Loop { body, .. } | HirStmt::For { body, .. } => {
+                collect_closure_assigned_bases_block(body, bases);
+            }
+            HirStmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_closure_assigned_bases_block(then_body, bases);
+                if let Some(else_body) = else_body {
+                    collect_closure_assigned_bases_block(else_body, bases);
+                }
+            }
+            HirStmt::Match { arms, .. } => {
+                for arm in arms {
+                    collect_closure_assigned_bases_block(&arm.body, bases);
+                }
+            }
+            HirStmt::Select { arms, .. } => {
+                for arm in arms {
+                    collect_closure_assigned_bases_block(&arm.body, bases);
+                }
+            }
+            HirStmt::Let { .. }
+            | HirStmt::Return { .. }
+            | HirStmt::Expr(_)
+            | HirStmt::Break(_)
+            | HirStmt::Continue(_)
+            | HirStmt::Unknown(_) => {}
+        }
+    }
+}
+
+/// The local a place expression is rooted at: `total`, `p.x`, and `xs[i].y`
+/// all name `total`, `p`, and `xs`.
+fn hir_place_base(expr: &HirExpr) -> Option<String> {
+    match expr {
+        HirExpr::Ident { name, .. } => Some(name.clone()),
+        HirExpr::Field { base, .. } | HirExpr::Index { base, .. } => hir_place_base(base),
+        _ => None,
+    }
 }
 
 /// Names bound by statements directly within `block` (and its nested control-
@@ -259,7 +365,7 @@ pub(super) fn explicit_closure_actual_captures(
 /// pattern bindings. Used to exclude a closure's own body-local bindings from
 /// its capture set. Nested closure expressions introduce their own scope and
 /// are intentionally not descended into here.
-fn collect_hir_block_bindings(block: &HirBlock, names: &mut HashSet<String>) {
+pub(crate) fn collect_hir_block_bindings(block: &HirBlock, names: &mut HashSet<String>) {
     for statement in &block.statements {
         match statement {
             HirStmt::Let { name, .. } => {

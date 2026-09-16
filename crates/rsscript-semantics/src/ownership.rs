@@ -472,6 +472,29 @@ pub fn explicit_closure_unused_capture_diagnostic(name: &str, span: Span) -> Dia
     .with_cause("Remove the capture entry or use the value inside the closure body.")
 }
 
+/// Diagnose a closure body that writes to a local it captured.
+///
+/// A capture reaches the closure's synthetic function as a by-value argument
+/// and is never written back, so the enclosing function keeps its old value and
+/// the closure does not even carry the write to its own next call. Both the
+/// implicit `|x| { ... }` and explicit `captures(mut n)` spellings lower the
+/// same way, so both are refused here rather than silently producing a
+/// different answer than the source reads as.
+pub fn closure_capture_mutation_diagnostic(name: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        code::CLOSURE_CAPTURE_CONTRACT,
+        format!("closure body writes to captured local `{name}`"),
+        span,
+        "closure capture is mutated",
+    )
+    .with_cause(
+        "A captured local is passed into the closure by value, so a write inside the body is visible neither to the enclosing function nor to the closure's next call.",
+    )
+    .with_cause(
+        "Return the new value from the closure and assign it in the enclosing function, or move the mutation out of the closure.",
+    )
+}
+
 /// Diagnose a mismatch between a declared closure capture effect and its use.
 pub fn explicit_closure_capture_contract_diagnostic(
     name: &str,

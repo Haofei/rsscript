@@ -1,0 +1,11 @@
+fn scaled(factor: Int) -> Int {
+    let offset = 3
+    local f = |x| { return x * factor + offset }
+    return f(4)
+}
+
+fn main() -> Int {
+    let base = 10
+    local add = |x| { return x + base }
+    return add(5) + scaled(factor: 10)
+}

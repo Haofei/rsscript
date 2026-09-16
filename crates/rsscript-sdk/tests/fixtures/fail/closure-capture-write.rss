@@ -1,0 +1,8 @@
+// expect: RS0805
+
+fn run() -> Int {
+    let mut total = 0
+    local bump = |n| { total = total + n }
+    bump(5)
+    return total
+}

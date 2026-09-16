@@ -1,6 +1,9 @@
 //! Syntax-to-HIR body, statement, expression, and call lowering.
 
 use super::*;
+use crate::checks::body::closure_captures::{
+    collect_hir_block_bindings, explicit_closure_actual_captures,
+};
 use crate::hir::infer::infer_arg_expr_type;
 
 pub(super) fn build_function_bodies(facts: &BodyFacts) -> HashMap<String, HirFunctionBody> {
@@ -33,6 +36,9 @@ pub(super) fn build_function_bodies(facts: &BodyFacts) -> HashMap<String, HirFun
             .returns
             .push(return_fact.clone());
     }
+    for body in bodies.values_mut() {
+        fill_implicit_closure_captures(body);
+    }
     bodies
 }
 
@@ -46,6 +52,183 @@ pub(super) fn body_entry<'a>(
             function_name: function_name.to_string(),
             ..HirFunctionBody::default()
         })
+}
+
+/// Record, on every implicitly-capturing closure, the environment it closes
+/// over.
+///
+/// An explicit `fn(x) captures(read base) { ... }` states its environment in
+/// source and carries it into HIR; a `|x| { ... }` states nothing, so its
+/// `captures` list stayed empty and a backend had no way to know that `base`
+/// had to be passed in — the local simply went missing when the closure body
+/// was lowered on its own. The capture set and each capture's effect are
+/// already decided by the checker's explicit-capture contract rule
+/// (`explicit_closure_actual_captures`: `read` unless the body mutates or
+/// consumes the local), so this records that same answer on the HIR rather
+/// than defining a second rule that could disagree with the diagnostics.
+fn fill_implicit_closure_captures(body: &mut HirFunctionBody) {
+    let in_scope = body
+        .bindings
+        .iter()
+        .map(|binding| binding.name.clone())
+        .collect::<HashSet<String>>();
+    if let Some(block) = body.block.as_mut() {
+        fill_implicit_captures_block(block, &in_scope);
+    }
+}
+
+fn fill_implicit_captures_block(block: &mut HirBlock, in_scope: &HashSet<String>) {
+    for statement in &mut block.statements {
+        fill_implicit_captures_stmt(statement, in_scope);
+    }
+}
+
+fn fill_implicit_captures_stmt(statement: &mut HirStmt, in_scope: &HashSet<String>) {
+    match statement {
+        HirStmt::Let { value, .. } | HirStmt::Return { value, .. } => {
+            if let Some(value) = value {
+                fill_implicit_captures_expr(value, in_scope);
+            }
+        }
+        HirStmt::Expr(value) => fill_implicit_captures_expr(value, in_scope),
+        HirStmt::Assign { target, value, .. } => {
+            fill_implicit_captures_expr(target, in_scope);
+            fill_implicit_captures_expr(value, in_scope);
+        }
+        HirStmt::With { resource, body, .. } => {
+            fill_implicit_captures_expr(resource, in_scope);
+            fill_implicit_captures_block(body, in_scope);
+        }
+        HirStmt::If {
+            condition,
+            then_body,
+            else_body,
+            ..
+        } => {
+            fill_implicit_captures_expr(condition, in_scope);
+            fill_implicit_captures_block(then_body, in_scope);
+            if let Some(else_body) = else_body {
+                fill_implicit_captures_block(else_body, in_scope);
+            }
+        }
+        HirStmt::Loop {
+            condition, body, ..
+        } => {
+            if let Some(condition) = condition {
+                fill_implicit_captures_expr(condition, in_scope);
+            }
+            fill_implicit_captures_block(body, in_scope);
+        }
+        HirStmt::For { iterable, body, .. } => {
+            fill_implicit_captures_expr(iterable, in_scope);
+            fill_implicit_captures_block(body, in_scope);
+        }
+        HirStmt::Match { value, arms, .. } => {
+            fill_implicit_captures_expr(value, in_scope);
+            for arm in arms {
+                if let Some(guard) = &mut arm.guard {
+                    fill_implicit_captures_expr(guard, in_scope);
+                }
+                fill_implicit_captures_block(&mut arm.body, in_scope);
+            }
+        }
+        HirStmt::Select { arms, .. } => {
+            for arm in arms {
+                fill_implicit_captures_expr(&mut arm.operation, in_scope);
+                fill_implicit_captures_block(&mut arm.body, in_scope);
+            }
+        }
+        HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => {}
+    }
+}
+
+fn fill_implicit_captures_expr(expr: &mut HirExpr, in_scope: &HashSet<String>) {
+    match expr {
+        HirExpr::Closure {
+            params,
+            captures,
+            explicit,
+            body,
+            span,
+            ..
+        } => {
+            let param_names = params.iter().cloned().collect::<HashSet<String>>();
+            if !*explicit {
+                let actual = explicit_closure_actual_captures(body, &param_names, in_scope);
+                // Sorted: MIR turns each capture into a positional closure
+                // argument, so the order has to be a fact about the program
+                // rather than a hash-map walk.
+                let mut names = actual.keys().cloned().collect::<Vec<_>>();
+                names.sort();
+                *captures = names
+                    .into_iter()
+                    .map(|name| HirClosureCapture {
+                        effect: actual[&name],
+                        name,
+                        span: span.clone(),
+                    })
+                    .collect();
+            }
+            // A nested closure closes over the enclosing closure's parameters
+            // and body-locals as well as the function's own bindings.
+            let mut inner_scope = in_scope.clone();
+            inner_scope.extend(param_names);
+            collect_hir_block_bindings(body, &mut inner_scope);
+            fill_implicit_captures_block(body, &inner_scope);
+        }
+        HirExpr::Binary { left, right, .. } => {
+            fill_implicit_captures_expr(left, in_scope);
+            fill_implicit_captures_expr(right, in_scope);
+        }
+        HirExpr::Field { base, .. } => fill_implicit_captures_expr(base, in_scope),
+        HirExpr::Index { base, index, .. } => {
+            fill_implicit_captures_expr(base, in_scope);
+            fill_implicit_captures_expr(index, in_scope);
+        }
+        HirExpr::Call { receiver, args, .. } => {
+            if let Some(receiver) = receiver {
+                fill_implicit_captures_expr(&mut receiver.value, in_scope);
+            }
+            for arg in args {
+                fill_implicit_captures_expr(&mut arg.value, in_scope);
+            }
+        }
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. }
+        | HirExpr::Try { value, .. } => fill_implicit_captures_expr(value, in_scope),
+        HirExpr::Match { value, arms, .. } => {
+            fill_implicit_captures_expr(value, in_scope);
+            for arm in arms {
+                if let Some(guard) = &mut arm.guard {
+                    fill_implicit_captures_expr(guard, in_scope);
+                }
+                fill_implicit_captures_block(&mut arm.body, in_scope);
+            }
+        }
+        HirExpr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                fill_implicit_captures_expr(&mut entry.key, in_scope);
+                fill_implicit_captures_expr(&mut entry.value, in_scope);
+            }
+        }
+        HirExpr::ObjectLiteral { fields, .. } => {
+            for field in fields {
+                fill_implicit_captures_expr(&mut field.value, in_scope);
+            }
+        }
+        HirExpr::ArrayLiteral { items, .. } => {
+            for item in items {
+                fill_implicit_captures_expr(item, in_scope);
+            }
+        }
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Char { .. }
+        | HirExpr::Unknown(_) => {}
+    }
 }
 
 #[derive(Default)]

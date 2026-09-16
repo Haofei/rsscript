@@ -1852,3 +1852,193 @@ fn main() -> Int {
         "`None()` must stay RS0015, got {codes:?}"
     );
 }
+
+/// A closure that captures a local without saying so builds, verifies, and
+/// runs.
+///
+/// `local f = |x| { return x + base }` carried no capture list into HIR, so the
+/// closure's own lowered function had no place for `base` and the program died
+/// with "unknown checked HIR local" — while the explicit
+/// `fn(x) captures(read base)` spelling of the same program worked. The capture
+/// set now comes from the checker's own capture rule, so the two spellings
+/// agree by construction.
+#[test]
+fn implicitly_capturing_closures_verify_and_run() {
+    // One capture, read by the body.
+    const CAPTURES_A_LOCAL: &str = r#"
+fn main() -> Int {
+    let base = 40
+    local add = |x| { return x + base }
+    return add(2)
+}
+"#;
+
+    // The implicit spelling of the existing explicit-capture fixture: the same
+    // program, the same answer.
+    const THE_EXPLICIT_SPELLING_AGREES: &str = r#"
+fn implicit() -> Int {
+    let base = 40
+    local add = |x| { return x + base }
+    return add(2)
+}
+
+fn explicit() -> Int {
+    let base = 40
+    local add = fn(x) captures(read base) { return x + base }
+    return add(2)
+}
+
+fn main() -> Int {
+    return implicit() - explicit() + 42
+}
+"#;
+
+    // Two captures, one of them the enclosing function's parameter.
+    const CAPTURES_A_PARAMETER_AND_A_LOCAL: &str = r#"
+fn scaled(factor: Int) -> Int {
+    let offset = 3
+    local f = |x| { return x * factor + offset }
+    return f(4)
+}
+
+fn main() -> Int {
+    return scaled(factor: 10)
+}
+"#;
+
+    // A captured local read on every iteration, so the capture is passed on
+    // each call rather than once.
+    const CAPTURE_READ_IN_A_LOOP: &str = r#"
+fn main() -> Int {
+    let base = 7
+    local f = |x| { return x + base }
+    let mut i = 0
+    let mut total = 0
+    while i < 3 {
+        total = total + f(i)
+        i = i + 1
+    }
+    return total
+}
+"#;
+
+    // A captured record, reached through a field. The capture is the whole
+    // local, not the projection.
+    const CAPTURES_A_STRUCT: &str = r#"
+struct Point {
+    x: Int
+    y: Int
+}
+
+fn main() -> Int {
+    let p = Point(x: 1, y: 2)
+    local f = |n| { return n + p.x + p.y }
+    return f(10)
+}
+"#;
+
+    for (file, source, expected) in [
+        ("closure-captures-a-local.rss", CAPTURES_A_LOCAL, "42"),
+        (
+            "closure-spellings-agree.rss",
+            THE_EXPLICIT_SPELLING_AGREES,
+            "42",
+        ),
+        (
+            "closure-captures-two.rss",
+            CAPTURES_A_PARAMETER_AND_A_LOCAL,
+            "43",
+        ),
+        (
+            "closure-capture-in-a-loop.rss",
+            CAPTURE_READ_IN_A_LOOP,
+            "24",
+        ),
+        ("closure-captures-a-struct.rss", CAPTURES_A_STRUCT, "13"),
+    ] {
+        let built = Compiler
+            .compile(file, source)
+            .unwrap_or_else(|error| panic!("{file} compiles: {error}"));
+        let admitted = ArtifactVerifier
+            .verify(built)
+            .unwrap_or_else(|error| panic!("{file} verifies: {error}"))
+            .admit_trusted_input();
+        let report = Runtime::default()
+            .link(&admitted)
+            .unwrap_or_else(|error| panic!("{file} links: {error}"))
+            .execute(ExecutionRequest::default());
+
+        assert_eq!(
+            report.termination_reason(),
+            TerminationReason::Completed,
+            "{file} runs to completion"
+        );
+        assert_eq!(report.value(), Some(expected), "{file} result");
+    }
+}
+
+/// A closure that writes to a local it captured is a checker error, in both
+/// spellings.
+///
+/// A capture reaches the closure's lowered function by value and is never
+/// written back: the enclosing function keeps its old value, and the closure
+/// does not even carry the write to its own next call. Before implicit captures
+/// were inferred, the implicit spelling failed to lower and said so; it would
+/// now lower and quietly return the wrong answer, which is why the checker
+/// refuses it. The explicit spelling lowers the same way and had been returning
+/// the wrong answer all along, so it is refused too.
+#[test]
+fn a_closure_that_writes_to_its_capture_is_rejected() {
+    const IMPLICIT: &str = r#"
+fn main() -> Int {
+    let mut total = 0
+    local bump = |n| { total = total + n }
+    bump(5)
+    return total
+}
+"#;
+
+    const EXPLICIT: &str = r#"
+fn main() -> Int {
+    let mut total = 0
+    local bump = fn(n) captures(mut total) {
+        total = total + n
+    }
+    bump(5)
+    return total
+}
+"#;
+
+    for (file, source) in [
+        ("implicit-capture-write.rss", IMPLICIT),
+        ("explicit-capture-write.rss", EXPLICIT),
+    ] {
+        let diagnostics = Compiler.check(file, source);
+        let codes = diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            codes.contains(&"RS0805"),
+            "{file} must report RS0805, got {codes:?}"
+        );
+        assert!(
+            diagnostics.iter().any(|diagnostic| diagnostic
+                .summary
+                .contains("writes to captured local `total`")),
+            "{file} must name the mutated capture"
+        );
+    }
+
+    // Reading a capture is still fine: the rule is about the write, not about
+    // capturing a `mut` local.
+    assert!(
+        Compiler
+            .check(
+                "capture-read-of-a-mut-local.rss",
+                "fn main() -> Int {\n    let mut base = 1\n    base = base + 1\n    local f = |n| { return n + base }\n    return f(40)\n}\n",
+            )
+            .is_empty(),
+        "reading a capture is not a write"
+    );
+}

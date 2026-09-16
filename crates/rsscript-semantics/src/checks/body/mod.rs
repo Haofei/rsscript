@@ -20,7 +20,7 @@ pub(crate) use rsscript_semantics::Flow;
 use rsscript_semantics::is_copy_type_name;
 
 mod binding;
-mod closure_captures;
+pub(crate) mod closure_captures;
 mod effects;
 mod fresh;
 mod place;
