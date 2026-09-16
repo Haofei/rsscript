@@ -130,6 +130,16 @@ const CASES: &[ScorecardCase] = &[
         size: "200000",
         source: include_str!("../../../benchmarks/vm-jit/kernels/osr_scalar_loop.rss"),
     },
+    // Static loop-local closure sinking: the allocation is dissolved and the
+    // statically-known callee spliced, with no profile and no identity guard. This
+    // is the workload the retention decision for that pass is measured on.
+    ScorecardCase {
+        name: "closure-sinking",
+        pass: "inlining/closure-sinking",
+        workload: "closure",
+        size: "300000",
+        source: include_str!("../../../benchmarks/vm-jit/kernels/native_closure_sinking.rss"),
+    },
     ScorecardCase {
         name: "list-read-loop",
         pass: "runtime-helper/list",

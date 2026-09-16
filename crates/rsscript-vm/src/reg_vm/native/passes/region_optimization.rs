@@ -34,10 +34,64 @@ pub(in crate::reg_vm) fn native_capturing_callee_inlinable(
 
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn native_readable_or_sinkable_closure_operand_candidate(
-    _func: &RegFunction,
-    _closure: usize,
+    func: &RegFunction,
+    closure: usize,
 ) -> bool {
-    false
+    // The closure-value set: every `MakeClosure` destination in this function plus
+    // every register that is a pure copy of one. `loop_local_sinkable_closures`
+    // builds the same set per candidate allocation and then proves the rest —
+    // single definition, loop locality, an inlinable callee at the right arity.
+    // This is only the *candidate* filter that decides whether the loop is worth
+    // offering to `RegVm::try_osr` at all, so it proves the one property that
+    // cannot be recovered later: the closure value never escapes as a value, and
+    // therefore has a chance of being sunk rather than allocated.
+    let mut value_regs = vec![false; func.regs];
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for instr in &func.code {
+            let (dst, member) = match instr {
+                RegInstr::MakeClosure { dst, .. } => (*dst, true),
+                // A copy of a member is a member. The fixpoint matters because a
+                // copy can precede its source's definition in index order (a
+                // loop-carried closure register).
+                RegInstr::Move { dst, src } => {
+                    (*dst, value_regs.get(*src).copied().unwrap_or(false))
+                }
+                _ => continue,
+            };
+            if member
+                && let Some(slot) = value_regs.get_mut(dst)
+                && !*slot
+            {
+                *slot = true;
+                changed = true;
+            }
+        }
+    }
+    let is_member = |reg: usize| value_regs.get(reg).copied().unwrap_or(false);
+    if !is_member(closure) {
+        return false;
+    }
+    // Every read of a closure-value register must be a copy into another member or
+    // the `closure` operand of a `CallClosure`. A read anywhere else (an argument,
+    // a store, a return) is the closure value escaping, which no sinking pass can
+    // dissolve.
+    func.code.iter().all(|instr| match instr {
+        // A `Move` that reads a member writes one: the fixpoint above put its
+        // destination in the set, so the value has not left it.
+        RegInstr::Move { .. } => true,
+        RegInstr::CallClosure {
+            closure: operand,
+            args,
+            mut_args,
+            ..
+        } if is_member(*operand) => args.iter().all(|arg| !is_member(*arg)) && mut_args.is_empty(),
+        _ => match instr_read_regs(instr) {
+            RegFootprint::Some(reads) => reads.iter().all(|reg| !is_member(*reg)),
+            RegFootprint::All => false,
+        },
+    })
 }
 
 #[cfg(feature = "native-jit")]

@@ -311,6 +311,35 @@ pub(in crate::reg_vm) fn native_inline_leaf_calls_with_accounting(
     native_inline_leaf_calls_inner(unit, func, profile, call_count, j3, loop_region, &|_| false)
 }
 
+/// Every explicit branch target of one register instruction.
+///
+/// Used by the inline pass's deleted-instruction accounting to prove that the
+/// item a deleted instruction's step moves onto cannot be reached without the
+/// deleted instruction having run. Fallthrough is deliberately *not* a target
+/// here: it is the edge the attribution relies on.
+#[cfg(feature = "native-jit")]
+fn native_reg_branch_targets(instr: &RegInstr) -> Vec<usize> {
+    match instr {
+        RegInstr::Jump { target }
+        | RegInstr::JumpIfBool { target, .. }
+        | RegInstr::JumpIfIntCompare { target, .. } => vec![*target],
+        RegInstr::MatchOption {
+            some_ip, none_ip, ..
+        }
+        | RegInstr::MatchMapGet {
+            some_ip, none_ip, ..
+        }
+        | RegInstr::MatchSortedMapGet {
+            some_ip, none_ip, ..
+        } => vec![*some_ip, *none_ip],
+        RegInstr::MatchResult { ok_ip, err_ip, .. } => vec![*ok_ip, *err_ip],
+        RegInstr::MatchVariant {
+            match_ip, else_ip, ..
+        } => vec![*match_ip, *else_ip],
+        _ => Vec::new(),
+    }
+}
+
 /// Exact interpreter source-step accounting for one inline-pass result.
 ///
 /// The inliner splices a callee body into the caller's instruction stream, where
@@ -851,6 +880,59 @@ fn native_inline_leaf_calls_inner(
             // splice the body. This is the sibling of the profile-guided inlining monomorphic path with the
             // guard removed and the captures sourced from the alloc site instead of a
             // heap closure handle.
+            RegInstr::CallClosure {
+                dst,
+                closure,
+                args,
+                mut_args,
+            } if in_region(i) && sinkable.sink_calls.contains_key(closure) => {
+                let target = *sinkable.sink_calls.get(closure)?;
+                let callee = unit.functions.get(target)?;
+                let captures = sinkable.capture_regs.get(closure)?;
+                if captures.len() != callee.captures || !mut_args.is_empty() {
+                    return None;
+                }
+                let base = next_reg;
+                next_reg += callee.regs;
+                // A closure callee lays its capture registers out BELOW its params,
+                // so materialize each capture from the sunk `MakeClosure`'s still-live
+                // capture register and bind the call args above them.
+                for (index, capture) in captures.iter().enumerate() {
+                    new_code.push(RegInstr::Move {
+                        dst: base + index,
+                        src: *capture,
+                    });
+                    ip_map.push(i);
+                }
+                for (param, arg) in args.iter().enumerate() {
+                    new_code.push(RegInstr::Move {
+                        dst: base + callee.captures + param,
+                        src: *arg,
+                    });
+                    ip_map.push(i);
+                }
+                let join_slot = joins.len();
+                joins.push(0);
+                splice_callee(
+                    &mut SpliceContext {
+                        unit,
+                        j3,
+                        new_code: &mut new_code,
+                        ip_map: &mut ip_map,
+                        charged: &mut charged,
+                        fixups: &mut fixups,
+                        splices: &mut splices,
+                        joins: &mut joins,
+                        next_reg: &mut next_reg,
+                    },
+                    callee,
+                    *dst,
+                    base,
+                    join_slot,
+                    i,
+                )?;
+                joins[join_slot] = new_code.len();
+            }
             RegInstr::CallKnown {
                 dst,
                 function,
@@ -1258,6 +1340,50 @@ fn native_inline_leaf_calls_inner(
         source_cost[transformed] = source_cost[transformed].checked_add(1)?;
         charged_mask[transformed] = true;
     }
+    // A source instruction this rewrite DELETED outright — the closure-sinking
+    // pass removes a sunk `MakeClosure` and its dead copy `Move`s — still gets
+    // ticked by the interpreter, so its step has to land on a surviving item or
+    // the region has to decline. It lands on the next emitted item, which is the
+    // next surviving source instruction's first item, and that is exact only when
+    // that instruction executes exactly when the deleted one did:
+    //
+    // - the deleted instruction is not a terminator (a sunk def never is), so
+    //   control always falls through from it to its successor, and
+    // - nothing branches *into* the successor, so the successor cannot execute
+    //   without the deleted instruction having executed first.
+    //
+    // Anything else fails closed, including a deleted instruction that dispatches
+    // an intrinsic: the intrinsic meter bills at most one dispatch per item, so a
+    // deleted dispatch has nowhere exact to go.
+    if !sinkable.dead_defs.is_empty() {
+        let mut branch_target = vec![false; func.code.len()];
+        for instr in &func.code {
+            for target in native_reg_branch_targets(instr) {
+                if let Some(slot) = branch_target.get_mut(target) {
+                    *slot = true;
+                }
+            }
+        }
+        for (i, instr) in func.code.iter().enumerate() {
+            if seen_original.contains(&i) {
+                continue;
+            }
+            if dispatches_an_intrinsic(instr) {
+                return None;
+            }
+            let successor_source = i.checked_add(1)?;
+            if successor_source >= func.code.len()
+                || branch_target.get(successor_source).copied().unwrap_or(true)
+            {
+                return None;
+            }
+            let successor = *index_map.get(i)?;
+            if successor >= new_code.len() {
+                return None;
+            }
+            source_cost[successor] = source_cost[successor].checked_add(1)?;
+        }
+    }
     // An inlined region is the contiguous run of transformed items produced for one
     // original call instruction. `index_map` is monotonic, so each original ip owns
     // `[index_map[i], index_map[i + 1])`.
@@ -1332,3 +1458,145 @@ pub(in crate::reg_vm) const NATIVE_NOAMORTIZE_GIVEUP: u32 = 64;
 /// their life. The explicit eager plan uses threshold 0.
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) const OSR_BACKEDGE_THRESHOLD: u32 = 1000;
+
+#[cfg(all(test, feature = "native-jit"))]
+mod sunk_instruction_accounting_tests {
+    use super::*;
+
+    fn function(name: &str, params: usize, regs: usize, code: Vec<RegInstr>) -> Rc<RegFunction> {
+        Rc::new(RegFunction {
+            ordinal: 0,
+            name: name.to_owned(),
+            params,
+            captures: 0,
+            regs,
+            local_regs: HashMap::new(),
+            code,
+        })
+    }
+
+    fn unit(functions: Vec<Rc<RegFunction>>) -> RegUnit {
+        RegUnit {
+            functions,
+            function_ids: HashMap::new(),
+            resource_drop_functions: HashMap::new(),
+            types: HashMap::new(),
+            variant_layouts: HashMap::new(),
+            native_signatures: HashMap::new(),
+            closure_identity_observable: false,
+        }
+    }
+
+    /// `|x| { return x * 2 }`, captureless and native-inlinable at arity one.
+    fn doubling_closure_body() -> Rc<RegFunction> {
+        function(
+            "doubler",
+            1,
+            3,
+            vec![
+                RegInstr::LoadInt { dst: 1, value: 2 },
+                RegInstr::MulInt {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                RegInstr::Return { src: 2 },
+            ],
+        )
+    }
+
+    /// A sunk `MakeClosure` and its dead copy `Move` own no item of their own, so
+    /// their interpreter steps move onto the next emitted item. Without that the
+    /// rewritten stream owns two fewer steps than the interpreter spends.
+    #[test]
+    fn a_sunk_closure_definition_moves_its_step_onto_the_next_emitted_item() {
+        let caller = function(
+            "hot",
+            1,
+            4,
+            vec![
+                RegInstr::MakeClosure {
+                    dst: 1,
+                    function: 1,
+                    captures: Vec::new(),
+                },
+                RegInstr::Move { dst: 2, src: 1 },
+                RegInstr::CallClosure {
+                    dst: 3,
+                    closure: 2,
+                    args: vec![0],
+                    mut_args: Vec::new(),
+                },
+                RegInstr::Return { src: 3 },
+            ],
+        );
+        let unit = unit(vec![Rc::clone(&caller), doubling_closure_body()]);
+
+        let (code, _n_regs, ip_map, accounting) =
+            native_inline_leaf_calls_inner(&unit, &caller, None, 0, false, None, &|_| false)
+                .expect("the sinking rewrite must keep exact accounting");
+
+        assert!(
+            !code
+                .iter()
+                .any(|instr| matches!(instr, RegInstr::MakeClosure { .. })),
+            "the sunk `MakeClosure` and its copy `Move` must be deleted"
+        );
+        assert!(
+            !ip_map.contains(&0) && !ip_map.contains(&1),
+            "neither deleted instruction owns an item of its own"
+        );
+        assert_eq!(
+            (ip_map[0], accounting.source_cost[0]),
+            (2, 3),
+            "the two deleted steps join the call's own on the first item emitted for it"
+        );
+        // Four caller instructions plus the three the interpreter ticks inside the
+        // closure frame `RegVm::call_closure_one` opens for it.
+        assert_eq!(
+            accounting.source_cost.iter().sum::<u32>(),
+            7,
+            "the rewritten stream must own one step per interpreter tick"
+        );
+    }
+
+    /// The attribution is only exact when the item it moves a deleted step onto
+    /// cannot run without the deleted instruction having run. A successor that is
+    /// also a branch target could, so the whole pass declines.
+    #[test]
+    fn a_sunk_definition_whose_successor_is_a_branch_target_declines() {
+        let caller = function(
+            "hot",
+            1,
+            4,
+            vec![
+                RegInstr::MakeClosure {
+                    dst: 1,
+                    function: 1,
+                    captures: Vec::new(),
+                },
+                RegInstr::CallClosure {
+                    dst: 3,
+                    closure: 1,
+                    args: vec![0],
+                    mut_args: Vec::new(),
+                },
+                RegInstr::JumpIfIntCompare {
+                    lhs: 3,
+                    rhs: 0,
+                    op: RegIntCompare::Less,
+                    expected: true,
+                    target: 1,
+                },
+                RegInstr::Return { src: 3 },
+            ],
+        );
+        let unit = unit(vec![Rc::clone(&caller), doubling_closure_body()]);
+
+        assert!(
+            native_inline_leaf_calls_inner(&unit, &caller, None, 0, false, None, &|_| false)
+                .is_none(),
+            "a deleted instruction whose step has nowhere exact to go must decline"
+        );
+    }
+}

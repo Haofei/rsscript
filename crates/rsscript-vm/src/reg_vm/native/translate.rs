@@ -15,8 +15,8 @@ use type_infer::*;
 
 use jit_post::*;
 pub(in crate::reg_vm) use jit_post::{
-    NativeInstructionOrigin, charge_native_key_hash_work, native_compose_origins,
-    native_osr_seed_origins, native_source_cost_is_static,
+    NativeInstructionOrigin, charge_native_key_hash_work, dispatches_an_intrinsic,
+    native_compose_origins, native_osr_seed_origins, native_source_cost_is_static,
 };
 pub(in crate::reg_vm) use loop_regions::*;
 

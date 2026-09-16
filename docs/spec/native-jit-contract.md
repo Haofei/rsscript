@@ -311,40 +311,49 @@ accounting segment rather than by one instruction.
    its exits. The `CallNative` flush/reload in
    `crates/rsscript-jit-cranelift/src/codegen.rs` is the worked example, and the
    intrinsic meter's flush/reload on the same edge is a second one.
-3. **Closure sinking drops the deleted instruction's step.**
-   `native_inline_leaf_calls_inner` emits nothing for `sinkable.dead_defs`, so a
-   sunk `MakeClosure` and its dead copy `Move`s own no source cost even though
-   the interpreter ticks them. Needed: attribute each empty span's cost to the
-   next emitted item, or decline when a span is empty. This is the same
-   re-attribution problem gap 1 hits across the OSR pass chain, and the two are
-   best solved together: a deleting rewrite either moves the deleted item's cost
-   onto a surviving item or fails closed.
+3. **Closed: a sunk closure's steps are attributed, and the loop now runs
+   natively.** `native_inline_leaf_calls_inner` deletes a sunk `MakeClosure` and
+   its dead copy `Move`s and emits nothing for them, so they owned no source step
+   while the interpreter ticked them. Each deleted instruction's step now moves
+   onto the next emitted item, which is exact only because the pass first proves
+   that item cannot run without the deleted one having run: a sunk definition is
+   never a terminator, so control always falls through from it, and its successor
+   must not be a branch target. A deleted instruction that dispatches an intrinsic,
+   a successor that is a branch target, and a deleted span with no surviving item
+   after it all fail the pass closed.
+   `sunk_instruction_accounting_tests` (`passes/inlining.rs`) pins both halves at
+   the pass level.
 
-   The gap is real but **dormant, and now measured**. The verification defect
-   that used to hide it is fixed: both candidate shapes
-   (`benchmarks/vm-jit/kernels/native_closure_sinking.rss` and the inline
-   `local f = |x| { ... }; f(i)` loop) verify and run, and the kernel is in the
-   differential corpus. They still do not reach generated code, for a reason
-   inside this contract rather than outside it: nothing consumes the sinking
-   analysis's `sink_calls`. `loop_local_sinkable_closures` marks the
-   `MakeClosure` and its copy `Move`s dead and the rewrite deletes them, but no
-   arm inlines a sunk `CallClosure` — the closure-dispatch arms are gated on
-   `monomorphic_closure_inline_target` / `polymorphic_closure_inline_targets`,
-   both of which return `None`. The `CallClosure` that made the closure sinkable
-   therefore survives the pass and fails `native_subset_instruction`, so
-   whole-function translation declines; and `osr_loop_candidate` refuses a
-   closure-bearing loop outright, because
-   `native_readable_or_sinkable_closure_operand_candidate` is `false`. No region
-   is generated, so no deleted instruction's step is lost.
+   With the attribution in place the two gates that made the shape unreachable are
+   open. `native_inline_leaf_calls_inner` gained the sunk-`CallClosure` inline arm
+   its own comment already described — the callee is known statically from the
+   `MakeClosure`, so there is no profile, no identity guard and no dispatch
+   sequence, only the capture `Move`s, the argument binds and the spliced body —
+   and `native_readable_or_sinkable_closure_operand_candidate` now proves the one
+   property the later passes cannot recover: the closure value flows only into
+   copy `Move`s and `CallClosure` closure operands, so it never escapes as a value.
+   This is **not** the removed profile-guided closure PIC:
+   `monomorphic_closure_inline_target` and `polymorphic_closure_inline_targets`
+   remain `None`, and nothing here speculates or guards.
 
-   Measured, at every step budget in `STEP_PARITY_BUDGETS` and with eager OSR
-   both off and on: native and interpreter `steps_consumed` agree exactly (2,
-   101, 1001, 10001, … 72016 for the 3000-iteration shape) and
-   `native_calls + osr_entries + continuation_entries` is `0`.
-   `a_closure_bearing_loop_accounts_steps_exactly_by_declining_generated_code`
-   pins that zero, so restoring the sunk-`CallClosure` inline arm fails this
-   test before it can silently under-report, and the attribution above must be
-   built as part of that change.
+   Measured on `benchmarks/vm-jit/kernels/native_closure_sinking.rss`
+   (300000 iterations, release, median of five interleaved pairs):
+
+   | build | interpreter | native |
+   | --- | --- | --- |
+   | before | 71.8 ms | 103.3 ms |
+   | sunk-`CallClosure` inline arm only | 73.5 ms | 105.9 ms |
+   | arm + OSR closure-operand candidate | 72.1 ms | **1.6 ms** |
+
+   The middle row is why the decision needed the measurement rather than the
+   change: with only the inline arm the kernel still generated no region at all —
+   `hot` is called once, so whole-function entry never crosses the tier-up
+   threshold, and the OSR candidate filter still refused the closure-bearing loop —
+   so the native engine kept paying its 44% failed-attempt overhead for nothing.
+   Both gates together turn the loop into an allocation-free scalar OSR region
+   worth 45x. `steps_consumed` is 7200035 on both engines in all three rows and
+   `intrinsic_calls` is 5, so the win costs no accounting parity.
+
 4. **A region containing a call still needs a per-region allocation proof.** See
    "Allocation bytes" above: whole-function entry admits an armed
    `allocation_budget` or `live_memory_limit` only for a body that cannot grow
@@ -417,7 +426,11 @@ whose tier-0 run would swallow a native-eligible callee on the interpreter loop
 (gap 4) emits no different code and measured 1.83 ms against 1.79 ms over four
 interleaved paired runs, within noise on the same gate: the gate's own `main`
 was never tier-0 eligible, because its `Output.write` barrier is not a tier-0
-instruction. Composing the OSR pass chain's cost vector likewise emits no
+instruction. Enabling closure sinking end to end likewise leaves the gate's
+own code untouched — its loop allocates no closure — and measured a native median
+of 1.76 ms against 2.00 ms over four interleaved paired runs; the shape it does
+change, `native_closure_sinking.rss`, is in the gap-3 table above.
+Composing the OSR pass chain's cost vector likewise emits no
 different code for the gate — whose loop is call-free and takes the direct OSR
 entry — and measured a native median of 1.72 ms against 1.79 ms over four
 interleaved paired runs. The first shape of that change did cost a measurable
@@ -442,6 +455,13 @@ two replay `STEP_PARITY_CASES`, whose `callee-owns-the-loop`,
 `nested-compiled-callee`, and `deopt-inside-compiled-callee` shapes hold a loop
 the leaf inliner refuses to dissolve and therefore reach generated code only over
 a compiled native-to-native edge.
+
+`a_closure_bearing_loop_accounts_steps_exactly_in_generated_code` replays a loop
+that allocates and calls a `local` closure across the whole `STEP_PARITY_BUDGETS`
+list with eager OSR off and on, pinning the interpreter's `steps_consumed` and
+`intrinsic_calls` *and* that the loop reaches generated code — the sunk
+`MakeClosure` and its dead `Move`s are deleted inside that region, so the counts
+are a statement about the attribution rather than about a decline.
 
 `an_unbounded_native_run_reports_the_interpreter_step_count` covers the
 no-control case with the production tiering defaults, where a hot loop reaches
@@ -705,9 +725,15 @@ twenty controlled samples, and a repeatable 15% end-to-end gain. The scorecard
 prints both scalar-unroll and SIMD candidate counts so a missing implementation
 or missing workload is visible rather than reported as a speedup.
 
-Closure speculation was removed after its controlled scorecard workloads
-(`profile-closure-pic`, `profile-branch-cold`) failed to clear the retention
-threshold; it is no longer a runnable surface.
+Profile-guided closure speculation was removed after its controlled scorecard
+workloads (`profile-closure-pic`, `profile-branch-cold`) failed to clear the
+retention threshold; it is no longer a runnable surface, and
+`monomorphic_closure_inline_target` / `polymorphic_closure_inline_targets` remain
+`None`. Static closure *sinking* is a different mechanism and is retained: a
+`MakeClosure` whose value provably flows only into copy `Move`s and `CallClosure`
+closure operands names its callee at compile time, so its allocation is dissolved
+and its body spliced with no profile, no identity guard and no dispatch — see gap
+3 above for the retention measurement.
 
 Nested and loop-carried struct scalar replacement was likewise removed: the
 canonical `native-struct-sr` workload ran net-negative against the interpreter,
@@ -762,8 +788,9 @@ IR fuzzing, and the workload scorecard. ASan does not instrument generated machi
 code; guard pages and canary/boundary fixtures cover direct native memory accesses.
 
 The stable retention set is baseline scalar/flat-data execution, native leaf-call
-chains, transactional helpers, precise deopt, and the Option/Result/Variant scalar
-replacement paths that enter on the canonical scorecard. Speculation, non-tail
+chains, transactional helpers, precise deopt, static loop-local closure sinking,
+and the Option/Result/Variant scalar replacement paths that enter on the canonical
+scorecard. Speculation, non-tail
 native recursion, and struct scalar replacement were removed after failing the
 retention rule; the alias-gated read-only LICM subset is retained in production. A local scorecard
 run is diagnostic only; timings become a compatibility or release signal only

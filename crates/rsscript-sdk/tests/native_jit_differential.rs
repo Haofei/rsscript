@@ -1340,31 +1340,30 @@ fn an_osr_loop_containing_an_inlined_call_reports_the_interpreter_intrinsic_call
     }
 }
 
-/// A loop that allocates and calls a `local` closure keeps exact step accounting
-/// because it never reaches generated code.
+/// A loop that allocates and calls a `local` closure runs natively and keeps
+/// exact step accounting.
 ///
-/// This shape is the one the native-jit contract's closure-sinking gap names:
-/// `native_inline_leaf_calls_inner` deletes a sunk `MakeClosure` and its dead
-/// copy `Move`s and emits nothing for them, so those source steps are charged to
-/// nobody. The contract recorded that gap as unreachable because the shape failed
-/// Artifact verification; it now verifies and runs, and it is still unreachable —
-/// for a different and now-measurable reason. Nothing consumes the sinking
-/// analysis's `sink_calls`: no rewrite arm inlines a sunk `CallClosure`, so the
-/// `CallClosure` that made the closure sinkable survives the pass and fails
-/// `native_subset_instruction`, and `osr_loop_candidate` refuses a closure-bearing
-/// loop outright (`native_readable_or_sinkable_closure_operand_candidate` is
-/// `false`). No region is generated, so no deleted instruction's step is lost.
+/// This shape is the one the native-jit contract's closure-sinking gap named.
+/// `loop_local_sinkable_closures` marks the loop-local `MakeClosure` and its copy
+/// `Move`s dead and `native_inline_leaf_calls_inner` deletes them, so those
+/// instructions own no item of their own while the interpreter still ticks them.
+/// The pass now moves each deleted instruction's step onto the next emitted item
+/// and declines when that item could run without the deleted one having run
+/// (`sunk_instruction_accounting_tests` in
+/// `crates/rsscript-vm/src/reg_vm/native/passes/inlining.rs` pins both halves),
+/// which is what let the sunk `CallClosure` inline arm and the OSR closure-operand
+/// candidate be turned on.
 ///
-/// The zero pinned below is therefore the evidence that the accounting gap is
-/// dormant. If a future change lets this shape reach generated code, this
-/// assertion fails first — and the step attribution for the sunk `MakeClosure`
-/// and its dead `Move`s must be fixed before it is relaxed.
+/// The assertion is therefore the opposite of what it used to be: the loop must
+/// reach generated code, so the step counts below are a statement about a
+/// natively executed closure loop rather than about a declined one.
 #[test]
-fn a_closure_bearing_loop_accounts_steps_exactly_by_declining_generated_code() {
+fn a_closure_bearing_loop_accounts_steps_exactly_in_generated_code() {
     const SOURCE: &str = "fn hot(limit: Int) -> Int { let mut i = 0; let mut total = 0; while i < limit { local f = |x| { return x * 2 + 1 }; total = total + f(i); i = i + 1 }; return total } fn main() -> Int { return hot(limit: 3000) }";
 
-    for &budget in STEP_PARITY_BUDGETS {
-        for eager_osr in [false, true] {
+    for eager_osr in [false, true] {
+        let mut regions = 0_u64;
+        for &budget in STEP_PARITY_BUDGETS {
             let limits = RunLimits::unbounded_for_trusted_host().with_step_budget(budget);
             let (interpreter, native) = accounting_pair(
                 "closure-in-loop.rss",
@@ -1387,11 +1386,15 @@ fn a_closure_bearing_loop_accounts_steps_exactly_by_declining_generated_code() {
                 "closure loop at step budget {budget} (eager_osr={eager_osr}) must report the interpreter's step count"
             );
             assert_eq!(
-                native_region_entries(&native),
-                0,
-                "a closure-bearing loop must not reach generated code while a sunk `MakeClosure` owns no source step (budget {budget}, eager_osr={eager_osr})"
+                native.usage.intrinsic_calls, interpreter.usage.intrinsic_calls,
+                "closure loop at step budget {budget} (eager_osr={eager_osr}) must report the interpreter's intrinsic count"
             );
+            regions = regions.saturating_add(native_region_entries(&native));
         }
+        assert!(
+            regions > 0,
+            "a closure-bearing loop must reach generated code with the sunk `MakeClosure` accounted (eager_osr={eager_osr})"
+        );
     }
 }
 
