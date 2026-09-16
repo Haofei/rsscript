@@ -17,7 +17,10 @@ the host runs the resulting Artifact under limits it chose.
   scopes; handle and weak-reference rules.
 - **Structured concurrency.** `async`, `await`, `task_group`, channels,
   cancellation, and bounded execution. Dynamic protocol dispatch is written as
-  `Dyn<P>`.
+  `Dyn<P>` — see
+  [`examples/scripts/core/protocol_dispatch.rss`](examples/scripts/core/protocol_dispatch.rss),
+  which calls one protocol statically, through a `<T: P>` bound, and through a
+  `Dyn<P>` boundary value.
 - **Provider-neutral artifacts.** Host services are ordinary declarations in a
   `.rssi` interface, bound to a runtime provider at load time. The compiled
   program is identical whichever provider the host installs.

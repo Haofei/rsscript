@@ -1,0 +1,61 @@
+// Three ways to call one protocol.
+//
+//   * `Render.render(self: label)` on a concrete value: the `impl` fixes the
+//     target at the call site.
+//   * `render_static<T: Render>`: static dispatch, resolved per instantiation
+//     of the type parameter.
+//   * `render_dynamic(value: read Dyn<Render>)`: dynamic dispatch through an
+//     explicit boundary value built with `Dyn.from<Render, Label>`.
+//
+// `rss fmt` prints declarations before `impl` blocks and drops comments, so
+// the code below is the canonical spelling with this note added back.
+
+protocol Render {
+    fn render(self: read Self) -> fresh String
+}
+
+struct Label {
+    text: String
+}
+
+struct Counter {
+    count: Int
+}
+
+fn Label.render(self: read Label) -> fresh String {
+    return String.concat(left: "label:", right: self.text)
+}
+
+fn Counter.render(self: read Counter) -> fresh String {
+    return String.concat(left: "counter:", right: self.count.to_string())
+}
+
+fn render_static<T: Render>(value: read T) -> fresh String {
+    return Render.render(self: value)
+}
+
+fn render_dynamic(value: read Dyn<Render>) -> fresh String {
+    return Render.render(self: value)
+}
+
+fn main() -> Unit {
+    let label = Label(text: "hi")
+    let counter = Counter(count: 7)
+    Assert.equal(left: Render.render(self: label), right: "label:hi")
+    Assert.equal(left: render_static<Label>(value: label), right: "label:hi")
+    Assert.equal(left: render_static<Counter>(value: counter), right: "counter:7")
+    local boxed = Label(text: "dyn")
+    let rendered = Dyn.from<Render, Label>(value: take boxed)
+    Assert.equal(left: render_dynamic(value: rendered), right: "label:dyn")
+    Output.write(message: "protocol dispatch passed")
+    return Unit
+}
+
+// A `Dyn<Render>` can be built from any type with a visible `impl`.
+impl Render for Label {
+    render = Label.render
+}
+
+impl Render for Counter {
+    render = Counter.render
+}
