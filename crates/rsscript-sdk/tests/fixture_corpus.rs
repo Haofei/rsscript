@@ -13,7 +13,7 @@
 //! (`crates/rsscript-cli/src/cli/check.rs`): the standard package interfaces
 //! plus any `// interface:` siblings, and no `--lint` pass.
 
-#[path = "fixture_support.rs"]
+#[path = "support/fixture_support.rs"]
 mod fixture_support;
 
 use std::collections::BTreeSet;

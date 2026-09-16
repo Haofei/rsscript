@@ -14,7 +14,7 @@
 //! Everything else must build and verify, or be named in `CANNOT_BUILD_YET`
 //! with the reason.
 
-#[path = "fixture_support.rs"]
+#[path = "support/fixture_support.rs"]
 mod fixture_support;
 
 use std::fs;
