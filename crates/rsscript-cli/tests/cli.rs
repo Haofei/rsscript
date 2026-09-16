@@ -515,17 +515,20 @@ fn artifact_bundle_verify_run_and_semantic_diff_form_one_cli_workflow() {
     assert_ne!(diff["old"]["module_digest"], diff["new"]["module_digest"]);
 }
 
-/// `rss build` is documented as emitting verified bytecode, so it must run the
-/// Artifact verifier itself rather than leaning on `rss run` re-verifying later.
+/// A build that fails at all writes nothing.
+///
+/// This is the end-to-end half of the promise: the ordering inside the
+/// verify-then-write step is unit-tested in `cli::artifact` with a Bundle the
+/// Artifact verifier refuses, which is the only honest way to reach that
+/// refusal — `rss check` and `rss build` run the same compiler, so a source
+/// program the checker accepts and the verifier rejects would be a compiler
+/// bug rather than a fixture. What a source program can still prove is that a
+/// refused build reports the checker's diagnostic and leaves no file behind.
 ///
 /// The refused program is a `let ... else` whose else block does not diverge.
-/// The checker accepts it today (a separate gap), MIR lowering accepts it, and
-/// the emitted function reads the pattern binding on an edge that never wrote
-/// it — exactly the class of input this gate exists for. A build that the
-/// verifier rejects must leave no file behind at all.
 #[cfg(feature = "execution")]
 #[test]
-fn build_refuses_a_bundle_the_artifact_verifier_rejects() {
+fn a_refused_build_reports_the_checker_and_writes_nothing() {
     let bin = env!("CARGO_BIN_EXE_rss");
     let temp = tempfile::tempdir().expect("temp dir");
     let source = temp.path().join("main.rss");
@@ -536,17 +539,6 @@ fn build_refuses_a_bundle_the_artifact_verifier_rejects() {
     )
     .expect("write fixture");
 
-    let checked = Command::new(bin)
-        .args(["check"])
-        .arg(&source)
-        .output()
-        .expect("rss check should run");
-    assert!(
-        checked.status.success(),
-        "the checker still accepts this program: {}",
-        String::from_utf8_lossy(&checked.stdout)
-    );
-
     let built = Command::new(bin)
         .args(["build", "--out", bundle.to_str().unwrap()])
         .arg(&source)
@@ -555,8 +547,8 @@ fn build_refuses_a_bundle_the_artifact_verifier_rejects() {
     assert_eq!(built.status.code(), Some(1), "{built:?}");
     let stderr = String::from_utf8_lossy(&built.stderr);
     assert!(
-        stderr.contains("`Move` reads uninitialized register"),
-        "build must fail with the verifier's own diagnostic: {stderr}"
+        stderr.contains("error[RS0020]"),
+        "build must report the checker's own diagnostic: {stderr}"
     );
     assert!(
         !bundle.exists(),

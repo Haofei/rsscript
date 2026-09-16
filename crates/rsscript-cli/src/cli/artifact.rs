@@ -7,7 +7,7 @@ use rsscript_sdk::{
     analysis::SemanticDiffV2,
     artifact::{
         ARTIFACT_BUNDLE_MAGIC, ArtifactBundle, ArtifactVerifier, BYTECODE_MAGIC, BuiltArtifact,
-        BytecodeArtifact, BytecodeVerifier,
+        BytecodeArtifact, BytecodeVerifier, VerifiedArtifact,
     },
     compile::{CompileError, Compiler},
     project::ProjectCompiler,
@@ -79,35 +79,14 @@ pub(crate) fn run_build(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    // `rss build` promises verified bytecode, so the Artifact verifier runs
-    // here rather than only in `rss run`/`rss inspect`. It runs before any
-    // filesystem effect: a bundle the verifier rejects leaves no file behind,
-    // not even a truncated one, because nothing has been created yet.
-    let verified = match ArtifactVerifier.verify(build) {
+    let output = output.map_or_else(|| default_artifact_path(input), PathBuf::from);
+    let verified = match verify_then_write(build.into_bundle(), &output) {
         Ok(verified) => verified,
         Err(error) => {
-            eprintln!("verification failed: {error}");
-            return ExitCode::from(1);
+            eprintln!("{error}");
+            return ExitCode::from(error.exit_code());
         }
     };
-    let bytes = match verified.bundle().to_bytes() {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            eprintln!("{error:?}");
-            return ExitCode::from(1);
-        }
-    };
-    let output = output.map_or_else(|| default_artifact_path(input), PathBuf::from);
-    if let Some(parent) = output.parent()
-        && let Err(error) = fs::create_dir_all(parent)
-    {
-        eprintln!("cannot create {}: {error}", parent.display());
-        return ExitCode::from(2);
-    }
-    if let Err(error) = fs::write(&output, bytes) {
-        eprintln!("cannot write {}: {error}", output.display());
-        return ExitCode::from(2);
-    }
     println!("{}", output.display());
     if analysis_output.is_some() {
         let analysis_output = analysis_output
@@ -129,6 +108,67 @@ pub(crate) fn run_build(args: &[String]) -> ExitCode {
         println!("analysis: {}", analysis_output.display());
     }
     ExitCode::SUCCESS
+}
+
+/// Why a built Artifact did not become a file on disk.
+///
+/// The two halves are kept apart because they mean different things to a
+/// caller: `Rejected` is the Artifact verifier refusing the bytes, `Write` is
+/// the filesystem refusing the write. `rss build` reports them with the exit
+/// codes it has always used (1 and 2).
+#[derive(Debug)]
+pub(crate) enum ArtifactWriteError {
+    Rejected(String),
+    Write(String),
+}
+
+impl ArtifactWriteError {
+    fn exit_code(&self) -> u8 {
+        match self {
+            Self::Rejected(_) => 1,
+            Self::Write(_) => 2,
+        }
+    }
+}
+
+impl std::fmt::Display for ArtifactWriteError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Rejected(message) | Self::Write(message) => formatter.write_str(message),
+        }
+    }
+}
+
+/// Verify a built Artifact Bundle and, only if it verifies, write it out.
+///
+/// `rss build` promises verified bytecode, so the Artifact verifier runs here
+/// rather than only in `rss run`/`rss inspect`. It runs before any filesystem
+/// effect: a Bundle the verifier rejects leaves no file behind, not even a
+/// truncated one or an empty parent directory, because nothing has been
+/// created yet. That ordering is the whole point of this function, which is
+/// why it is one function and is tested directly with a Bundle the verifier
+/// refuses — a *source program* the checker accepts and the verifier rejects
+/// would be a compiler bug, so this guarantee cannot be tested through one.
+pub(crate) fn verify_then_write(
+    bundle: ArtifactBundle,
+    output: &Path,
+) -> Result<VerifiedArtifact, ArtifactWriteError> {
+    let verified = ArtifactVerifier
+        .verify_bundle(bundle)
+        .map_err(|error| ArtifactWriteError::Rejected(format!("verification failed: {error}")))?;
+    let bytes = verified
+        .bundle()
+        .to_bytes()
+        .map_err(|error| ArtifactWriteError::Rejected(format!("{error:?}")))?;
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            ArtifactWriteError::Write(format!("cannot create {}: {error}", parent.display()))
+        })?;
+    }
+    fs::write(output, bytes).map_err(|error| {
+        ArtifactWriteError::Write(format!("cannot write {}: {error}", output.display()))
+    })?;
+    Ok(verified)
 }
 
 /// Compile one build input the same way `rss check` checks it.
@@ -650,5 +690,71 @@ mod tests {
             (DiffFormat::Json, "old", "new")
         );
         assert!(parse_diff_args(&args(&["old"])).is_err());
+    }
+
+    /// `rss build` writes nothing when the Artifact verifier refuses the
+    /// Bundle, and it refuses it before the output path exists at all.
+    ///
+    /// The rejected Bundle is built here rather than compiled from source on
+    /// purpose. `rss check` and `rss build` run the same compiler, so a source
+    /// program the checker accepts and the verifier rejects is a compiler bug
+    /// by definition; a test that needed one would be a test that decays the
+    /// moment the bug is fixed. What this gate actually protects is the
+    /// ordering inside [`verify_then_write`], so the test hands it an Artifact
+    /// whose executable payload no longer matches the digest its header
+    /// commits to — exactly what a corrupted or tampered build would look
+    /// like.
+    #[test]
+    fn a_bundle_the_verifier_rejects_is_never_written() {
+        let built = Compiler
+            .compile("main.rss", "fn main() -> Int {\n    return 1\n}\n")
+            .expect("the fixture program compiles");
+        let mut artifact =
+            BytecodeArtifact::from_bytes(built.artifact_bytes()).expect("built bytecode decodes");
+        let last = artifact.payload.len() - 1;
+        artifact.payload[last] ^= 0xff;
+        let bundle = ArtifactBundle::new(
+            artifact.to_bytes().expect("corrupted bytecode re-encodes"),
+            built.analysis_envelope().clone(),
+        )
+        .expect("a Bundle still forms around the corrupted executable");
+
+        let temp = tempfile::tempdir().expect("temp dir");
+        let directory = temp.path().join("out");
+        let output = directory.join("main.rssbundle");
+        let error =
+            verify_then_write(bundle, &output).expect_err("the verifier must refuse this Bundle");
+        assert!(
+            matches!(error, ArtifactWriteError::Rejected(_)),
+            "{error:?} must be a verification refusal, not a write failure"
+        );
+        assert_eq!(error.exit_code(), 1);
+        assert!(
+            error.to_string().starts_with("verification failed: ")
+                && error.to_string().contains("executable hash mismatch"),
+            "the refusal must carry the verifier's own message: {error}"
+        );
+        assert!(
+            !output.exists(),
+            "a refused build must not leave a bundle behind"
+        );
+        assert!(
+            !directory.exists(),
+            "a refused build must not create the output directory either"
+        );
+    }
+
+    /// The write half of the same function: a Bundle the verifier accepts is
+    /// written, and the output directory is created for it.
+    #[test]
+    fn a_verified_bundle_is_written_to_its_output_path() {
+        let built = Compiler
+            .compile("main.rss", "fn main() -> Int {\n    return 1\n}\n")
+            .expect("the fixture program compiles");
+        let temp = tempfile::tempdir().expect("temp dir");
+        let output = temp.path().join("out").join("main.rssbundle");
+        verify_then_write(built.into_bundle(), &output).expect("a verified Bundle is written");
+        let written = fs::read(&output).expect("the bundle exists");
+        assert!(written.starts_with(ARTIFACT_BUNDLE_MAGIC));
     }
 }
