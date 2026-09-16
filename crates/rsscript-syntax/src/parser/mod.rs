@@ -1294,6 +1294,29 @@ fn run() -> Unit {
     }
 
     #[test]
+    fn let_else_keeps_every_statement_of_its_else_block() {
+        let source = "fn unwrap(value: Option<String>) -> String {\n    let Some(inner) = value else {\n        return \"default\"\n    }\n    return inner\n}\n";
+        let program = parse_source("test.rss", source);
+        let Item::Function(function) = &program.items[0] else {
+            panic!("expected function");
+        };
+        let Stmt::LetElse(let_else) = &function.body.statements[0] else {
+            panic!("expected let-else, got {:?}", function.body.statements[0]);
+        };
+        assert_eq!(
+            let_else.else_body.statements.len(),
+            1,
+            "the else block's first statement must survive: {:?}",
+            let_else.else_body.statements
+        );
+        assert!(
+            matches!(&let_else.else_body.statements[0], Stmt::Return(_)),
+            "the diverging `return` must be parsed as a return, got {:?}",
+            let_else.else_body.statements[0]
+        );
+    }
+
+    #[test]
     fn canonicalizes_omitted_function_type_effects_as_read() {
         let program = parse_source("test.rss", "fn apply(f: Fn(Int) -> Int) -> Unit {}");
         let Item::Function(function) = &program.items[0] else {

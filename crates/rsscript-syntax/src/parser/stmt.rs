@@ -262,7 +262,13 @@ fn try_parse_let_else(tokens: &[Token], start: usize, limit: usize) -> Option<(S
     // Parse else block
     let open = (else_pos + 1..limit).find(|idx| tokens[*idx].symbol("{"))?;
     let close = find_matching(tokens, open, "{", "}")?;
-    let else_body = parse_block(tokens, open + 1, close);
+    // `parse_block` takes the index of the opening brace and starts collecting
+    // after it. Passing `open + 1` here dropped the first statement of the
+    // else block, which is normally the `return`/`break` that makes the branch
+    // diverge: `let Some(x) = v else { return d }` parsed as a block whose only
+    // statement was the expression `d`, so the binding looked live on the
+    // fall-through edge and the emitted function failed Artifact verification.
+    let else_body = parse_block(tokens, open, close);
     let pattern = MatchPattern::Variant {
         name: variant_name.to_string(),
         bindings: if binding_name.is_empty() {

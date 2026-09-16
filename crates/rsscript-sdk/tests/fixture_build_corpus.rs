@@ -40,13 +40,6 @@ const CANNOT_BUILD_YET: &[(&str, &str)] = &[
          spelling of a mutating core list method is not lowered.",
     ),
     (
-        "let-else-basic.rss",
-        "Artifact verification: ``Move` reads uninitialized register`. A \
-         `let ... else` pattern binding is not proved initialized on the \
-         fall-through edge, so the emitted function is rejected by the \
-         bytecode verifier although lowering accepted it.",
-    ),
-    (
         "list_patterns.rss",
         "`non-literal checked HIR match pattern`: list patterns have no MIR \
          match form.",
