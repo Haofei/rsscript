@@ -1,0 +1,10 @@
+fn main() -> Int {
+    local f = |x| { return x * 2 + 1 }
+    let mut total = 0
+    let mut i = 0
+    while i < 10 {
+        total = total + f(i)
+        i = i + 1
+    }
+    return total
+}

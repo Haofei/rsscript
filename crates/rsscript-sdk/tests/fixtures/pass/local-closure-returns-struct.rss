@@ -1,0 +1,10 @@
+struct Point {
+    x: Int
+    y: Int
+}
+
+fn main() -> Int {
+    local make = |x| { return Point(x: x, y: x + 1) }
+    let p = make(20)
+    return p.x + p.y
+}

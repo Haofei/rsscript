@@ -1,0 +1,7 @@
+fn main() -> Int {
+    let base = 40
+    local add = fn(x) captures(read base) {
+        return x + base
+    }
+    return add(2)
+}

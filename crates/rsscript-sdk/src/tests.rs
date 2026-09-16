@@ -1532,3 +1532,152 @@ fn main() -> Unit {
         "expected RS0034 at the construction, got {codes:?}"
     );
 }
+
+/// Closure programs build, verify, and run.
+///
+/// An unannotated closure parameter has no proved type — the checker leaves it
+/// unresolved — so the typed executable facts report it `Unknown`. Publishing
+/// the unresolved marker as a `Known` nominal type named `?` instead made every
+/// one of these shapes fail Artifact verification with "typed call parameter
+/// disagrees with its argument register" before execution, so this covers the
+/// whole build → verify → run path rather than the checker alone.
+#[test]
+fn closure_programs_verify_and_run() {
+    // A closure bound with `local` and called in a loop: the shape of
+    // `benchmarks/vm-jit/kernels/native_closure_sinking.rss`.
+    const CALLED_IN_A_LOOP: &str = r#"
+fn main() -> Int {
+    local f = |x| { return x * 2 + 1 }
+    let mut total = 0
+    let mut i = 0
+    while i < 10 {
+        total = total + f(i)
+        i = i + 1
+    }
+    return total
+}
+"#;
+
+    // The same call site reached through a helper, so the closure's own
+    // synthetic function is entered from a second frame.
+    const CALLED_FROM_A_HELPER: &str = r#"
+fn hot(limit: Int) -> Int {
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        local f = |x| { return x * 2 + 1 }
+        total = total + f(i)
+        i = i + 1
+    }
+    return total
+}
+
+fn main() -> Int {
+    return hot(limit: 10)
+}
+"#;
+
+    // An explicit-capture closure over a local. Its captured register carries a
+    // proved type while its parameter does not, so the two must be reported
+    // independently.
+    const CAPTURES_A_LOCAL: &str = r#"
+fn main() -> Int {
+    let base = 40
+    local add = fn(x) captures(read base) { return x + base }
+    return add(2)
+}
+"#;
+
+    // The closure's result is a record: the call site's result fact stays
+    // `Unknown` (MIR v1 retains no closure return type) while the constructor's
+    // own facts remain proved, and the field reads still verify.
+    const RETURNS_A_STRUCT: &str = r#"
+struct Point {
+    x: Int
+    y: Int
+}
+
+fn main() -> Int {
+    local make = |x| { return Point(x: x, y: x + 1) }
+    let p = make(20)
+    return p.x + p.y
+}
+"#;
+
+    for (file, source, expected) in [
+        ("closure-called-in-a-loop.rss", CALLED_IN_A_LOOP, "100"),
+        (
+            "closure-called-from-a-helper.rss",
+            CALLED_FROM_A_HELPER,
+            "100",
+        ),
+        ("closure-captures-a-local.rss", CAPTURES_A_LOCAL, "42"),
+        ("closure-returns-a-struct.rss", RETURNS_A_STRUCT, "41"),
+    ] {
+        let built = Compiler
+            .compile(file, source)
+            .unwrap_or_else(|error| panic!("{file} compiles: {error}"));
+        let admitted = ArtifactVerifier
+            .verify(built)
+            .unwrap_or_else(|error| panic!("{file} verifies: {error}"))
+            .admit_trusted_input();
+        let report = Runtime::default()
+            .link(&admitted)
+            .unwrap_or_else(|error| panic!("{file} links: {error}"))
+            .execute(ExecutionRequest::default());
+
+        assert_eq!(
+            report.termination_reason(),
+            TerminationReason::Completed,
+            "{file} runs to completion"
+        );
+        assert_eq!(report.value(), Some(expected), "{file} result");
+    }
+}
+
+/// A closure call site publishes what it proves and nothing more.
+///
+/// Arity and parameter effects are real facts and stay `Known`; the unannotated
+/// parameter type is not, and is reported `Unknown`. Pinning the *absence* here
+/// stops the false `Known(Named "?")` from coming back as a "more precise"
+/// fact, which a native tier would read as a record layout that does not exist.
+#[test]
+fn a_closure_call_site_reports_no_parameter_type_it_cannot_prove() {
+    let built = Compiler
+        .compile(
+            "closure-facts.rss",
+            "fn main() -> Int { local f = |x| { return x * 2 }; return f(21) }",
+        )
+        .expect("closure program compiles");
+    let artifact = artifact::BytecodeArtifact::from_bytes(built.artifact_bytes())
+        .expect("the built artifact decodes");
+    let bytes = artifact
+        .typed_executable_facts
+        .clone()
+        .expect("the build carries typed executable facts");
+    let bound = rsscript_bytecode::TypedExecutableFactsVerifierV1::new(
+        rsscript_bytecode::BytecodeLimits::default().into(),
+    )
+    .verify(&bytes, &artifact)
+    .expect("the typed facts verify against their executable");
+
+    let call = bound
+        .facts()
+        .functions
+        .iter()
+        .flat_map(|function| &function.call_sites)
+        .find(|call| call.target == rsscript_bytecode::TypedCallTargetV1::Closure)
+        .expect("the closure call site is published");
+
+    // Arity and the parameter's data effect are proved; its type is not.
+    assert_eq!(call.parameters.len(), 1);
+    assert_eq!(
+        call.parameter_effects,
+        vec![rsscript_bytecode::TypedDataEffectV1::Read]
+    );
+    assert_eq!(
+        call.parameters,
+        vec![rsscript_bytecode::TypedFactTypeV1::Unknown],
+        "an unannotated closure parameter must be reported as unproved"
+    );
+}

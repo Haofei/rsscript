@@ -125,6 +125,14 @@ const CASES: &[(&str, &str)] = &[
         "native-osr.rss",
         include_str!("../../../benchmarks/vm-jit/kernels/osr_scalar_loop.rss"),
     ),
+    // A `local` closure allocated and called inside the hot loop. Until the
+    // typed facts stopped publishing the checker's unresolved marker as a
+    // proved parameter type, this kernel failed Artifact verification before it
+    // could run on either engine, so it could not be in this corpus at all.
+    (
+        "native-closure-sinking.rss",
+        include_str!("../../../benchmarks/vm-jit/kernels/native_closure_sinking.rss"),
+    ),
 ];
 
 #[test]
@@ -1169,6 +1177,61 @@ fn native_step_accounting_matches_the_interpreter_for_osr_entered_loops() {
                 native.usage.steps_consumed, interpreter.usage.steps_consumed,
                 "{} under eager OSR at step budget {budget} must report the interpreter's steps",
                 case.name
+            );
+        }
+    }
+}
+
+/// A loop that allocates and calls a `local` closure keeps exact step accounting
+/// because it never reaches generated code.
+///
+/// This shape is the one the native-jit contract's closure-sinking gap names:
+/// `native_inline_leaf_calls_inner` deletes a sunk `MakeClosure` and its dead
+/// copy `Move`s and emits nothing for them, so those source steps are charged to
+/// nobody. The contract recorded that gap as unreachable because the shape failed
+/// Artifact verification; it now verifies and runs, and it is still unreachable —
+/// for a different and now-measurable reason. Nothing consumes the sinking
+/// analysis's `sink_calls`: no rewrite arm inlines a sunk `CallClosure`, so the
+/// `CallClosure` that made the closure sinkable survives the pass and fails
+/// `native_subset_instruction`, and `osr_loop_candidate` refuses a closure-bearing
+/// loop outright (`native_readable_or_sinkable_closure_operand_candidate` is
+/// `false`). No region is generated, so no deleted instruction's step is lost.
+///
+/// The zero pinned below is therefore the evidence that the accounting gap is
+/// dormant. If a future change lets this shape reach generated code, this
+/// assertion fails first — and the step attribution for the sunk `MakeClosure`
+/// and its dead `Move`s must be fixed before it is relaxed.
+#[test]
+fn a_closure_bearing_loop_accounts_steps_exactly_by_declining_generated_code() {
+    const SOURCE: &str = "fn hot(limit: Int) -> Int { let mut i = 0; let mut total = 0; while i < limit { local f = |x| { return x * 2 + 1 }; total = total + f(i); i = i + 1 }; return total } fn main() -> Int { return hot(limit: 3000) }";
+
+    for &budget in STEP_PARITY_BUDGETS {
+        for eager_osr in [false, true] {
+            let limits = RunLimits::unbounded_for_trusted_host().with_step_budget(budget);
+            let (interpreter, native) = accounting_pair(
+                "closure-in-loop.rss",
+                SOURCE,
+                limits,
+                NativeJitOptions {
+                    cost_model: NativeCostModel::Off,
+                    collect_telemetry: true,
+                    eager_osr,
+                    ..NativeJitOptions::default()
+                },
+            );
+            assert_eq!(
+                native.outcome(),
+                interpreter.outcome(),
+                "closure loop at step budget {budget} (eager_osr={eager_osr}) must terminate for the same reason as the interpreter"
+            );
+            assert_eq!(
+                native.usage.steps_consumed, interpreter.usage.steps_consumed,
+                "closure loop at step budget {budget} (eager_osr={eager_osr}) must report the interpreter's step count"
+            );
+            assert_eq!(
+                native_region_entries(&native),
+                0,
+                "a closure-bearing loop must not reach generated code while a sunk `MakeClosure` owns no source step (budget {budget}, eager_osr={eager_osr})"
             );
         }
     }

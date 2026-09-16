@@ -313,12 +313,31 @@ accounting segment rather than by one instruction.
    best solved together: a deleting rewrite either moves the deleted item's cost
    onto a surviving item or fails closed.
 
-   No differential shape that reaches this has been constructed yet: the two
-   obvious candidates (`benchmarks/vm-jit/kernels/native_closure_sinking.rss` and
-   the equivalent inline `local f = |x| { ... }; f(i)` loop) are rejected by
-   Artifact verification with `invalid typed executable facts: typed call
-   parameter disagrees with its argument register` before they reach the JIT at
-   all, which is a separate defect outside this contract.
+   The gap is real but **dormant, and now measured**. The verification defect
+   that used to hide it is fixed: both candidate shapes
+   (`benchmarks/vm-jit/kernels/native_closure_sinking.rss` and the inline
+   `local f = |x| { ... }; f(i)` loop) verify and run, and the kernel is in the
+   differential corpus. They still do not reach generated code, for a reason
+   inside this contract rather than outside it: nothing consumes the sinking
+   analysis's `sink_calls`. `loop_local_sinkable_closures` marks the
+   `MakeClosure` and its copy `Move`s dead and the rewrite deletes them, but no
+   arm inlines a sunk `CallClosure` — the closure-dispatch arms are gated on
+   `monomorphic_closure_inline_target` / `polymorphic_closure_inline_targets`,
+   both of which return `None`. The `CallClosure` that made the closure sinkable
+   therefore survives the pass and fails `native_subset_instruction`, so
+   whole-function translation declines; and `osr_loop_candidate` refuses a
+   closure-bearing loop outright, because
+   `native_readable_or_sinkable_closure_operand_candidate` is `false`. No region
+   is generated, so no deleted instruction's step is lost.
+
+   Measured, at every step budget in `STEP_PARITY_BUDGETS` and with eager OSR
+   both off and on: native and interpreter `steps_consumed` agree exactly (2,
+   101, 1001, 10001, … 72016 for the 3000-iteration shape) and
+   `native_calls + osr_entries + continuation_entries` is `0`.
+   `a_closure_bearing_loop_accounts_steps_exactly_by_declining_generated_code`
+   pins that zero, so restoring the sunk-`CallClosure` inline arm fails this
+   test before it can silently under-report, and the attribution above must be
+   built as part of that change.
 4. **A region containing a call still needs a per-region allocation proof.** See
    "Allocation bytes" above: whole-function entry admits an armed
    `allocation_budget` or `live_memory_limit` only for a body that cannot grow
