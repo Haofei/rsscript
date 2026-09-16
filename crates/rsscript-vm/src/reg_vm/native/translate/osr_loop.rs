@@ -203,31 +203,27 @@ pub(super) fn translate_osr_loop_inner(request: OsrLoweringRequest<'_>) -> Optio
                     // The value type flows from its definition (Int or Float);
                     // lowering picks MapInsertInt/MapInsertFloat, and a wrong-value-type
                     // map bails at the helper.
+                    //
+                    // A key the region has ALREADY proven to be a heap handle — a
+                    // `String` built in the loop by `StringConcat`, or loaded in the
+                    // preheader by `LoadString` — keeps that type instead of being
+                    // forced to `Int`. Forcing it conflicted with the producer's own
+                    // typing and declined the whole region, which left
+                    // `MapInsertHandleKeyInt` reachable only for a heap *parameter*.
+                    // The helper resolves the handle and hashes it with the host's own
+                    // `VmMapKey`, and charges the key's data-proportional work itself.
+                    let key_ty = native_key_operand_ty(ty, *key, heap_param(*key));
                     native_set_ty(ty, *map, NativeTy::Handle, c)
-                        && native_set_ty(
-                            ty,
-                            *key,
-                            if heap_param(*key) {
-                                NativeTy::Handle
-                            } else {
-                                NativeTy::Int
-                            },
-                            c,
-                        )
+                        && native_set_ty(ty, *key, key_ty, c)
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
                 RegInstr::SetInsert { dst, set, value } => {
+                    // See `MapInsert`: a value already proven to be a heap handle
+                    // keeps it, so a `String`-keyed set insert reaches
+                    // `SetInsertHandle` instead of declining the region.
+                    let value_ty = native_key_operand_ty(ty, *value, heap_param(*value));
                     native_set_ty(ty, *set, NativeTy::Handle, c)
-                        && native_set_ty(
-                            ty,
-                            *value,
-                            if heap_param(*value) {
-                                NativeTy::Handle
-                            } else {
-                                NativeTy::Int
-                            },
-                            c,
-                        )
+                        && native_set_ty(ty, *value, value_ty, c)
                         && native_set_ty(ty, *dst, NativeTy::Bool, c)
                 }
                 RegInstr::SortedSetInsert { dst, set, value } => {
@@ -1753,4 +1749,20 @@ pub(super) fn translate_osr_loop_inner(request: OsrLoweringRequest<'_>) -> Optio
         written_regs,
         string_literals,
     })
+}
+
+/// The native type an unsorted map/set key operand must carry.
+///
+/// A key the region has already proven to be a heap handle keeps `Handle`: the
+/// helper resolves it and hashes it with the host's own `VmMapKey`, and charges
+/// the key's data-proportional hash work against the call-owned limits cell.
+/// Anything else is the `Int`-keyed shape, whose one-unit hash cost is a
+/// compile-time constant the owning item carries statically.
+#[cfg(feature = "native-jit")]
+fn native_key_operand_ty(ty: &[Option<NativeTy>], reg: usize, heap_param: bool) -> NativeTy {
+    if heap_param || matches!(ty.get(reg), Some(Some(NativeTy::Handle))) {
+        NativeTy::Handle
+    } else {
+        NativeTy::Int
+    }
 }

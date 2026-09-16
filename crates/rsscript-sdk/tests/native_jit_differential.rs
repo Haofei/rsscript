@@ -2379,3 +2379,114 @@ fn main() -> Int {
     assert_eq!(rejected_resident_bytes, 0);
     assert_eq!(native.value(), completed.value());
 }
+
+/// Shapes whose loop hashes a key whose cost is a property of the runtime value.
+///
+/// `map_key_from_value` bills `1 + len / 64` for a `String`/`Bytes` key through
+/// `RegVm::charge_work`, which charges nothing at all unless a step budget,
+/// cancellation token or deadline is armed. Generated code cannot know that cost
+/// at compile time and keeps its running count in a register, so
+/// `MapInsertHandleKeyInt` and `SetInsertHandle` charge it themselves against the
+/// call-owned limits cell while the region flushes and reloads its count around
+/// them, and `native_source_cost_is_static` no longer declines the region.
+///
+/// Each loop sits in a function that also writes output, so it reaches generated
+/// code through OSR rather than whole-function entry, and the long-key shape makes
+/// the `len / 64` term two units rather than one so a flat constant charge would
+/// drift.
+const KEY_HASH_PARITY_CASES: &[(&str, &str)] = &[
+    (
+        "string-keyed-map-insert.rss",
+        "fn main() -> Unit { local table = Map<String, Int>.new(); let key = \"fixed-key\"; let mut i = 0; while i < 2000 { Map.insert<String, Int>(map: mut table, key, value: i); i = i + 1 }; Output.write(message: String.from_int(value: Map.len<String, Int>(map: table))); return Unit }",
+    ),
+    (
+        "string-keyed-set-insert.rss",
+        "fn main() -> Unit { local seen = Set<String>.new(); let tag = \"fixed-tag\"; let mut i = 0; while i < 2000 { let added = Set.insert<String>(set: mut seen, value: tag); i = i + 1 }; Output.write(message: String.from_int(value: Set.len<String>(set: seen))); return Unit }",
+    ),
+    (
+        "long-string-keyed-map-insert.rss",
+        "fn main() -> Unit { local table = Map<String, Int>.new(); let key = \"0123456789012345678901234567890123456789012345678901234567890123456789\"; let mut i = 0; while i < 2000 { Map.insert<String, Int>(map: mut table, key, value: i); i = i + 1 }; Output.write(message: String.from_int(value: Map.len<String, Int>(map: table))); return Unit }",
+    ),
+];
+
+#[test]
+fn native_key_hash_work_matches_the_interpreter_under_an_armed_budget() {
+    for (name, source) in KEY_HASH_PARITY_CASES {
+        for eager_osr in [false, true] {
+            let mut regions = 0_u64;
+            for &budget in STEP_PARITY_BUDGETS {
+                let limits = RunLimits::unbounded_for_trusted_host().with_step_budget(budget);
+                let (interpreter, native) = accounting_pair(
+                    name,
+                    source,
+                    limits,
+                    NativeJitOptions {
+                        cost_model: NativeCostModel::Off,
+                        eager_osr,
+                        collect_telemetry: true,
+                        ..NativeJitOptions::default()
+                    },
+                );
+                assert_eq!(
+                    native.outcome(),
+                    interpreter.outcome(),
+                    "{name} at step budget {budget} (eager_osr={eager_osr}) must terminate for the same reason as the interpreter"
+                );
+                assert_eq!(
+                    native.usage.steps_consumed, interpreter.usage.steps_consumed,
+                    "{name} at step budget {budget} (eager_osr={eager_osr}) must report the interpreter's step count"
+                );
+                assert_eq!(
+                    native.stdout, interpreter.stdout,
+                    "{name} at step budget {budget} (eager_osr={eager_osr}) must produce the interpreter's output"
+                );
+                regions = regions.saturating_add(native_region_entries(&native));
+            }
+            // Without this the test would pass by declining the region, which is
+            // exactly what this change retires.
+            assert!(
+                regions > 0,
+                "{name} (eager_osr={eager_osr}) must reach generated code for its step counts to mean anything"
+            );
+        }
+    }
+}
+
+#[test]
+fn an_unarmed_key_hash_loop_reports_the_interpreter_step_count() {
+    // `charge_work` charges nothing with no control armed, so a natively executed
+    // key-hash loop must not bill the hash either — applying the charge
+    // unconditionally would *over*-report by one unit per insert or more.
+    for (name, source) in KEY_HASH_PARITY_CASES {
+        for eager_osr in [false, true] {
+            let (interpreter, native) = accounting_pair(
+                name,
+                source,
+                RunLimits::unbounded_for_trusted_host(),
+                NativeJitOptions {
+                    cost_model: NativeCostModel::Off,
+                    eager_osr,
+                    collect_telemetry: true,
+                    ..NativeJitOptions::default()
+                },
+            );
+            assert_eq!(
+                native.outcome(),
+                interpreter.outcome(),
+                "{name} (eager_osr={eager_osr}) must terminate like the interpreter with nothing armed"
+            );
+            assert_eq!(
+                native.usage.steps_consumed, interpreter.usage.steps_consumed,
+                "{name} (eager_osr={eager_osr}) must report the interpreter's step count with nothing armed"
+            );
+            assert_eq!(
+                native.usage.intrinsic_calls, interpreter.usage.intrinsic_calls,
+                "{name} (eager_osr={eager_osr}) must report the interpreter's intrinsic count with nothing armed"
+            );
+            assert!(
+                native_region_entries(&native) > 0,
+                "{name} (eager_osr={eager_osr}) must reach generated code with nothing armed too"
+            );
+        }
+    }
+}

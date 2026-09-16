@@ -96,7 +96,7 @@ pub use limits::JitLimits;
 pub use module::{
     CompilePhaseTimings, CompiledId, JitError, JitErrorKind, LogicalCallDepth, NativeCallSession,
     NativeDeclineReason, NativeModule, PreparedCall, RegionCallControls, RegionCallUsage,
-    RegionCompileControls, is_native_callable_leaf, signal_bail, user_host_ctx,
+    RegionCompileControls, charge_hidden_work, is_native_callable_leaf, signal_bail, user_host_ctx,
 };
 pub use validated::{ValidatedJitFunction, validate_function};
 

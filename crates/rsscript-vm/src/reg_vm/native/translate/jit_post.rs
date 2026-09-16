@@ -189,9 +189,11 @@ fn hashes_a_constant_cost_key(instruction: &vm_jit::JitInstr) -> bool {
 
 /// Whether one native item hashes a key whose interpreter work is proportional to
 /// the key's size (`1 + len / 64` for a String/Bytes key, and recursive for a
-/// structural key). Generated code cannot know that at compile time and cannot
-/// add to the in-register step counter from inside a host helper, so a region
-/// containing one declines while step accounting is armed.
+/// structural key).
+///
+/// Generated code cannot know that cost at compile time, so the item cannot carry
+/// it as a static `source_cost`. It is charged at runtime instead — see
+/// [`native_source_cost_is_static`].
 #[cfg(feature = "native-jit")]
 fn hashes_a_data_dependent_key(instruction: &vm_jit::JitInstr) -> bool {
     matches!(
@@ -200,6 +202,21 @@ fn hashes_a_data_dependent_key(instruction: &vm_jit::JitInstr) -> bool {
             helper: vm_jit::HostHelper::MapInsertHandleKeyInt | vm_jit::HostHelper::SetInsertHandle,
             ..
         }
+    )
+}
+
+/// Whether the backend's own helper contract says this item charges its
+/// data-proportional work against the call-owned limits cell.
+///
+/// Reading the fact from `HostHelper` rather than restating the helper list keeps
+/// the two sides from drifting: a data-dependent helper added to the list above
+/// without a `charge_hidden_work` call in its body declines the region instead of
+/// running uncharged.
+#[cfg(feature = "native-jit")]
+fn charges_its_own_data_dependent_work(instruction: &vm_jit::JitInstr) -> bool {
+    matches!(
+        instruction,
+        vm_jit::JitInstr::HostCall { helper, .. } if helper.charges_data_dependent_work()
     )
 }
 
@@ -237,12 +254,24 @@ pub(in crate::reg_vm) fn charge_native_key_hash_work(
     }
 }
 
-/// Whether every source step this region can spend is statically attributable,
-/// which is what an armed step budget (or the shared source-step stream a
-/// cancellation/deadline poll rides on) requires.
+/// Whether every source step this region can spend is attributable.
+///
+/// Most items own a compile-time constant cost. An item whose cost is a property
+/// of a runtime value — a `String`/`Bytes` map or set key, whose hash the
+/// interpreter bills `1 + len / 64` for through `RegVm::charge_work` — is admitted
+/// only when its helper charges that cost itself against the call-owned limits
+/// cell. Generated code keeps its running count in an SSA variable, so codegen
+/// publishes the count to the cell before such a call and adopts the helper's
+/// result afterwards, the same flush/reload a native-to-native call edge uses; the
+/// helper bails when an armed budget no longer fits, and the interpreter then
+/// re-executes the instruction and raises its own error. Anything else still
+/// declines rather than under-reporting.
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn native_source_cost_is_static(code: &[vm_jit::JitInstr]) -> bool {
-    !code.iter().any(hashes_a_data_dependent_key)
+    code.iter().all(|instruction| {
+        !hashes_a_data_dependent_key(instruction)
+            || charges_its_own_data_dependent_work(instruction)
+    })
 }
 
 /// Owned state threaded through native rewrites.

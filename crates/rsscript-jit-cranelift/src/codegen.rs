@@ -1272,6 +1272,26 @@ pub(crate) fn build_function(
                 bcx.def_var(reg(*dst), res);
             }
             JitInstr::HostCall { helper, dst, args } => {
+                // Data-dependent key-hash accounting. The interpreter bills
+                // `1 + len / 64` for a String/Bytes map or set key through its
+                // `charge_work` hook, which charges nothing at all unless a step
+                // ceiling, cancellation token or deadline is armed. Generated code
+                // keeps its running count in an SSA variable, so the helper — the
+                // only place the key's size is known — cannot add to it directly:
+                // publish the count to the shared cell first and adopt the helper's
+                // result afterwards, exactly as a native-to-native call edge does.
+                // The helper signals a bail when the armed budget no longer fits, so
+                // the roll-back is the ordinary one: this instruction can bail, so it
+                // ends its accounting segment, `steps_resume` holds the count as of
+                // the instruction before it, and the interpreter re-executes the
+                // whole instruction and charges the same units itself.
+                let charges_hidden_work = helper.charges_data_dependent_work()
+                    && (limit_checks.step_ceiling || limit_checks.cancel || limit_checks.deadline);
+                if charges_hidden_work && let Some(steps_var) = steps_var {
+                    let s = bcx.use_var(steps_var);
+                    bcx.ins()
+                        .store(MemFlags::trusted(), s, limits_ptr, LIMITS_STEPS);
+                }
                 let call_args: Vec<Value> = std::iter::once(host_ctx)
                     .chain(args.iter().map(|arg| match arg {
                         HostArg::Reg(arg) => bcx.use_var(reg(*arg)),
@@ -1293,6 +1313,12 @@ pub(crate) fn build_function(
                         );
                         bcx.switch_to_block(cont);
                     }
+                }
+                if charges_hidden_work && let Some(steps_var) = steps_var {
+                    let charged =
+                        bcx.ins()
+                            .load(types::I64, MemFlags::trusted(), limits_ptr, LIMITS_STEPS);
+                    bcx.def_var(steps_var, charged);
                 }
                 let stored = match helper.signature().result {
                     HostResult::Exact(_) => result,

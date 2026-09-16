@@ -1213,12 +1213,23 @@ pub(in crate::reg_vm) fn rss_jit_map_insert_handle_key_int_with_ctx(
     key_handle: i64,
     value: i64,
 ) -> i64 {
-    // Resolve the heap key to the host's canonical map key BEFORE the journaled write.
-    let Some(key) = ctx.heap_read_handle(key_handle, |value| Some(VmMapKey::new(value.clone())))
-    else {
+    // Resolve the heap key to the host's canonical map key BEFORE the journaled
+    // write, through the same `map_key_from_value` the interpreter uses, so the
+    // hashability verdict and the data-proportional work units are the host's own
+    // rather than a native re-implementation.
+    let Some((key, work)) = ctx.heap_read_handle(key_handle, |value| {
+        crate::reg_vm::map_key_from_value(value).ok()
+    }) else {
         ctx.signal_bail();
         return 0;
     };
+    // The interpreter charges the key's hash work *before* the insert, so an
+    // over-budget key never writes. Generated code flushed its running count into
+    // the limits cell for exactly this call and reloads it after.
+    if !ctx.charge_hidden_work(work) {
+        ctx.signal_bail();
+        return 0;
+    }
     match ctx.with_journaled_map_write(handle, |map| {
         map.insert(key, VmValue::Int(value));
         Some(0)

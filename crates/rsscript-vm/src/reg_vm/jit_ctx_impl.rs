@@ -212,6 +212,22 @@ impl JitHostCallCtx {
         vm_jit::signal_bail(self.call_context);
     }
 
+    /// Charge data-proportional work — the `1 + len / 64` a String/Bytes map or
+    /// set key costs `map_key_from_value` — against this activation's limits cell.
+    ///
+    /// This is the native half of `RegVm::charge_work`, and it is reached on
+    /// exactly the same condition: generated code only emits the flush/reload
+    /// around a helper that calls this when the region's controls say a step
+    /// ceiling, cancellation token or deadline is armed, which is precisely when
+    /// `charge_work` charges anything at all. `false` means the armed step budget
+    /// no longer fits, so the caller must bail *without* performing its effect;
+    /// the interpreter then re-executes the instruction and raises the canonical
+    /// `StepBudgetExceeded` itself.
+    #[must_use]
+    pub(in crate::reg_vm) fn charge_hidden_work(self, units: usize) -> bool {
+        vm_jit::charge_hidden_work(self.call_context, i64::try_from(units).unwrap_or(i64::MAX))
+    }
+
     pub(in crate::reg_vm) fn push_heap_arg(self, value: VmValue) -> usize {
         JitCallCtx::push_heap_arg(value)
     }

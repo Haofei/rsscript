@@ -49,11 +49,19 @@ pub(in crate::reg_vm) fn rss_jit_set_insert_handle_with_ctx(
     handle: i64,
     value_handle: i64,
 ) -> i64 {
-    let Some(key) = ctx.heap_read_handle(value_handle, |value| Some(VmMapKey::new(value.clone())))
-    else {
+    let Some((key, work)) = ctx.heap_read_handle(value_handle, |value| {
+        crate::reg_vm::map_key_from_value(value).ok()
+    }) else {
         ctx.signal_bail();
         return 0;
     };
+    // See `rss_jit_map_insert_handle_key_int_with_ctx`: the interpreter charges the
+    // key's data-proportional hash work before the insert, so an over-budget key
+    // bails without writing and the interpreter re-runs the instruction.
+    if !ctx.charge_hidden_work(work) {
+        ctx.signal_bail();
+        return 0;
+    }
     match ctx.with_journaled_map_write(handle, move |map| {
         Some(i64::from(map.insert(key, VmValue::Unit).is_none()))
     }) {

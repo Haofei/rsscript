@@ -1888,6 +1888,12 @@ impl Drop for TopLevelCallGuard {
 struct HostCallContext {
     user: HostCtx,
     bail: *mut u8,
+    /// The call-owned `[steps, step_budget, cancel_addr, intrinsic_calls,
+    /// intrinsic_budget]` cell this activation charges, or null when the
+    /// activation is unaccounted. [`charge_hidden_work`] is the only helper-facing
+    /// door onto it. It is held as `*const` to match the call frame's own word, and
+    /// derives from the same `as_mut_ptr` the generated code's stores go through.
+    limits: *const i64,
 }
 
 /// Signal from a [`HostHelpers`] callback that the in-flight native call cannot be
@@ -1905,6 +1911,44 @@ pub fn signal_bail(context: HostCtx) {
     let context = unsafe { &mut *(context as *mut HostCallContext) };
     // SAFETY: the bail cell belongs to the same live call frame.
     unsafe { *context.bail = 1 };
+}
+
+/// Charge `units` of *data-proportional* interpreter work — work an embedding VM
+/// bills on top of one bytecode instruction's own tick, such as hashing a `String`
+/// map key whose cost grows with the key's length — against the call-owned limits
+/// cell.
+///
+/// A helper is the only place such a cost is known, because it is a property of
+/// the runtime value rather than of the instruction. Generated code therefore
+/// flushes its running source count into the cell before the helper and reloads it
+/// afterwards, exactly as it does across a native-to-native call edge, so the
+/// helper's addition lands in the same stream as the region's own charges.
+///
+/// Returns `false` when an armed step budget is now exceeded. The helper must then
+/// [`signal_bail`] without completing its effect: the region's transactional work
+/// is rolled back and the embedding VM re-executes the instruction, charging the
+/// same units itself and raising its own canonical error at the same point. An
+/// unaccounted activation charges nothing and returns `true`, which mirrors an
+/// embedding whose own hidden-work hook is inactive.
+pub fn charge_hidden_work(context: HostCtx, units: i64) -> bool {
+    if context == 0 || units <= 0 {
+        return true;
+    }
+    // SAFETY: see `signal_bail`; helpers receive only the address of the live
+    // `HostCallContext` created by `call_inner`.
+    let context = unsafe { &*(context as *const HostCallContext) };
+    if context.limits.is_null() {
+        return true;
+    }
+    // SAFETY: the limits cell belongs to the same live activation and is the
+    // five-word `[steps, step_budget, cancel_addr, intrinsic_calls,
+    // intrinsic_budget]` array `call_inner` borrowed for the whole call.
+    unsafe {
+        let steps = context.limits.cast_mut();
+        let charged = steps.read().saturating_add(units);
+        steps.write(charged);
+        charged <= steps.add(1).read()
+    }
 }
 
 /// Recover the embedding VM's opaque context from the call-scoped helper context.

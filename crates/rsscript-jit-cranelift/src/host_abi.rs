@@ -625,6 +625,22 @@ macro_rules! host_helpers {
                 self.descriptor().heap_effect
             }
 
+            /// Whether this helper hashes a key whose interpreter cost is
+            /// proportional to the key's size, and therefore charges that cost
+            /// itself through `charge_hidden_work`.
+            ///
+            /// Generated code cannot know the cost at compile time — it is a
+            /// property of the runtime value — so the region flushes its running
+            /// source count to the limits cell before such a call and reloads it
+            /// afterwards. Sorted maps and sorted sets are list-backed, hash
+            /// nothing, and are deliberately absent.
+            pub fn charges_data_dependent_work(self) -> bool {
+                matches!(
+                    self,
+                    HostHelper::MapInsertHandleKeyInt | HostHelper::SetInsertHandle
+                )
+            }
+
             pub fn heap_reads(self) -> &'static [HostHeapAccess] {
                 self.descriptor().heap_reads
             }

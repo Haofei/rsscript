@@ -23,11 +23,13 @@ closed. A spliced-in callee body owns its own source steps, and a deopt inside
 one rolls that region's charge back to the caller's call instruction, which the
 interpreter re-executes. A native-to-native call edge compiles its callee with the caller's controls and
 charges the same limits cell. A region whose source cost still cannot be
-attributed exactly — a key whose hash work is proportional to its size — declines
-instead of under-reporting. An OSR region composes the same owned cost vector the
+attributed exactly declines instead of under-reporting, but no shape is declined
+structurally any more. An OSR region composes the same owned cost vector the
 whole-function pipeline does across its whole pass chain, so a loop containing a
 call the inliner dissolves is accounted rather than declined, and a rewrite that
-loses a charge declines that region. The
+loses a charge declines that region; a key whose hash work is proportional to its
+size is charged at runtime by the helper that hashes it, against the same
+call-owned cell. The
 intrinsic-call meter is charged the same way: every native item carries an
 explicit intrinsic cost beside its source cost, because generated code runs the
 same intrinsics as host helpers *and* as direct lowerings and there is no single
@@ -133,6 +135,28 @@ the *rejection* half is conditional. Six mechanisms make that exact:
   An armed callee never gets the frame-free direct scalar entry, which carries no
   limits pointer, and `NativeModule::resolve_native_callees` refuses an edge whose
   caller and callee disagree on the controls.
+- **Data-dependent key-hash work is charged by the helper that hashes.** A
+  `String`/`Bytes` map or set key costs the interpreter `1 + len / 64`, which is a
+  property of the runtime value and has no compile-time constant an item could
+  carry. The helper is the only place the size is known and generated code keeps
+  its running count in an SSA variable, so the region publishes that count to the
+  limits cell before the call and adopts the helper's result afterwards — the same
+  flush/reload a native-to-native call edge uses. `rss_jit_map_insert_handle_key_int`
+  and `rss_jit_set_insert_handle` resolve the key through the interpreter's own
+  `map_key_from_value`, so the work units and the hashability verdict are the
+  host's, then call `vm_jit::charge_hidden_work` **before** the journaled write,
+  exactly where `RegVm::charge_work` sits. When an armed step budget no longer
+  fits, the helper signals a bail without writing: the region's transaction rolls
+  back, `steps_resume` holds the count as of the instruction before it (the call
+  can bail, so it ends its accounting segment), and the interpreter re-executes the
+  instruction, charges the same units and raises the canonical
+  `StepBudgetExceeded`. Codegen emits the flush/reload only when the region's
+  controls say `step_ceiling || cancel || deadline`, which is precisely when
+  `charge_work` charges anything at all, so an unarmed run bills nothing on either
+  engine. `native_source_cost_is_static` reads the "this helper charges its own
+  work" fact from `HostHelper::charges_data_dependent_work` rather than restating
+  the helper list, so a data-dependent helper added on one side and not the other
+  declines the region instead of running uncharged.
 - **Constant key-hash work is billed on exactly the interpreter's condition.**
   `map_key_from_value` (`crates/rsscript-vm/src/reg_vm/value_ops.rs`) bills one
   unit for a scalar map key on top of the instruction's own tick, so an
@@ -147,17 +171,12 @@ the *rejection* half is conditional. Six mechanisms make that exact:
   *over*-report one step per hashing instruction. Sorted maps and sorted sets are
   list-backed, hash nothing, and are deliberately absent from that set.
 
-One shape **declines** instead of running natively, because its source cost is
-not attributable. Accounting is unconditional, so the decline applies to every run
-rather than only to an armed one:
-
-- a region that hashes a key whose cost is proportional to its size
-  (`native_source_cost_is_static`), including one reached over a call edge.
-
-The OSR pass chain declines *conditionally* rather than structurally: a region
-whose chain loses a charge at some hop, or whose transformed item cannot be traced
-back to a real bytecode instruction, declines; a loop containing a dissolvable
-call no longer does.
+No shape **declines structurally** for accounting reasons any more. What remains
+is conditional: a region declines when its own pass chain loses a charge at some
+hop, when a transformed item cannot be traced back to a real bytecode instruction,
+or when it contains a data-dependent site whose helper does not charge its own
+work (`native_source_cost_is_static`). Accounting is unconditional, so those
+declines apply to every run rather than only to an armed one.
 
 A whole-region hand-back that is **not** a precise resume (a failed heap commit,
 an unresolvable handle, a mismatched outcome, or a deopt whose precise resume
@@ -295,22 +314,35 @@ accounting segment rather than by one instruction.
    Needed: find and lift whichever canonical-loop precondition the match-shaped
    body fails, which is a loop-recognition change rather than an accounting one.
 
-2. **Data-dependent key hashing cannot be charged from generated code.**
-   `map_key_from_value` bills `1 + len / 64` for a String/Bytes key and recurses
-   for a structural one. `native_source_cost_is_static` therefore declines
-   `MapInsertHandleKeyInt` and `SetInsertHandle` regions, and that decline is now
-   unconditional rather than armed-only, for the same reason as gap 1.
+2. **Closed: a data-dependent key's hash work is charged by its helper.** The
+   obstacle was never the ABI — the limits cell already existed and was already
+   forwarded into every child frame — but that the running count lives in a
+   Cranelift register between charge points, so a helper adding to the cell would
+   be overwritten by the next write-back. Codegen now brackets the two hashing
+   helpers with the same flush/reload `CallNative` uses, `HostCallContext` carries
+   the cell so `vm_jit::charge_hidden_work` can reach it, and both helpers bill
+   the interpreter's own `map_key_from_value` units before their journaled write.
+   `native_source_cost_is_static` no longer declines them. See "Step count" above
+   for the full rule.
 
-   The limits cell a helper could charge against now exists and is already
-   forwarded into every child frame, so the ABI half of this is no longer the
-   obstacle. The obstacle is that the running count lives in a Cranelift register
-   variable between block-charge points, not in the cell: a helper that added to
-   the cell would be overwritten by the next write-back. Needed: either spill the
-   counter around a data-dependent helper the way `CallNative` already flushes and
-   reloads it, or give the helper a separate cell word that the region folds in at
-   its exits. The `CallNative` flush/reload in
-   `crates/rsscript-jit-cranelift/src/codegen.rs` is the worked example, and the
-   intrinsic meter's flush/reload on the same edge is a second one.
+   Making the decline reachable took one further change, which is a lowering fix
+   rather than an accounting one: the OSR type inference forced an unsorted map or
+   set key operand to `Int` unless it was a heap *parameter*, which conflicted with
+   the producer's own `Handle` typing and declined the whole region — so
+   `MapInsertHandleKeyInt` and `SetInsertHandle` were unreachable outside a
+   heap-parameter key regardless of accounting. A key operand the region has
+   already proven to be a `Handle` now keeps it (`native_key_operand_ty` in
+   `crates/rsscript-vm/src/reg_vm/native/translate/osr_loop.rs`).
+
+   What still declines is a key the loop *builds*: the OSR lowering has no arm for
+   a `StringConcat` whose result survives as a live heap `String` (the string
+   length-law fold exists to dissolve such a value, not to keep it), so
+   `while ... { let key = String.concat(...); Map.insert(key, ...) }` is refused at
+   `lower reject: StringConcat`. That is a lowering gap, not an accounting one —
+   the interpreter owns the loop and reports every step exactly — and the shapes
+   that do reach generated code (a key loaded in the preheader or passed in) cover
+   the charge on both the armed and unarmed paths.
+
 3. **Closed: a sunk closure's steps are attributed, and the loop now runs
    natively.** `native_inline_leaf_calls_inner` deletes a sunk `MakeClosure` and
    its dead copy `Move`s and emits nothing for them, so they owned no source step
@@ -626,8 +658,10 @@ directly: `armed_native_to_native_edge_shares_and_rolls_back_the_step_cell` and
   reported usage facts and not only ceilings. That includes the instructions of a
   callee the leaf inliner spliced in, the body of a callee reached over a
   native-to-native edge, and — when the interpreter's own `charge_work` is
-  active — the constant key-hash unit it bills on top of an `Int`-keyed map
-  operation. Each meter's missing ceiling is represented as `i64::MAX` in the
+  active — both the constant key-hash unit it bills on top of an `Int`-keyed map
+  operation and the length-proportional unit it bills for a `String`/`Bytes` key,
+  which the hashing helper charges against the same cell while the region flushes
+  and reloads its running count around the call. Each meter's missing ceiling is represented as `i64::MAX` in the
   call-owned limits cell and suppresses its per-segment reservation entirely
   rather than being compared against. Scheduler-owned async bookkeeping remains
   outside the native source map.

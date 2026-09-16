@@ -120,6 +120,7 @@ impl NativeModule {
         let mut helper_context = HostCallContext {
             user: host_ctx,
             bail: &mut bail,
+            limits: limits_ptr,
         };
         let mut frame = JitCallFrame {
             abi_version: JIT_CALL_ABI_VERSION,
