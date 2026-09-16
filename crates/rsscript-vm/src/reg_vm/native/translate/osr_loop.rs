@@ -22,6 +22,7 @@ pub(super) fn translate_osr_loop_inner(request: OsrLoweringRequest<'_>) -> Optio
         typed_ir,
         source_ip_map,
         source_instruction_count,
+        source_accounting,
         enable_flat_buffers,
     } = request;
     let _ = &profile_hot_branch_edges;
@@ -1719,11 +1720,16 @@ pub(super) fn translate_osr_loop_inner(request: OsrLoweringRequest<'_>) -> Optio
     // Handle parameters marshal through the window; scalars use `reg_types`.
     let param_types: Vec<NativeTy> = native_reg_types[..n_params].to_vec();
 
+    // Both post-lowering rewrites above take `&mut [JitInstr]`: they replace items
+    // in place and can neither add nor remove one, so the cost vector composed
+    // across the OSR pass chain stays index-aligned with `jit_code` here.
+    debug_assert_eq!(jit_code.len(), code.len());
     let instruction_origins = native_jit_origins(
         &jit_code,
         source_function_code,
         source_ip_map,
         source_instruction_count,
+        source_accounting,
     )?;
 
     let jit_fn = vm_jit::JitFunction {

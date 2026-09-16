@@ -14,7 +14,10 @@ mod type_infer;
 use type_infer::*;
 
 use jit_post::*;
-pub(in crate::reg_vm) use jit_post::{charge_native_key_hash_work, native_source_cost_is_static};
+pub(in crate::reg_vm) use jit_post::{
+    NativeInstructionOrigin, charge_native_key_hash_work, native_compose_origins,
+    native_osr_seed_origins, native_source_cost_is_static,
+};
 pub(in crate::reg_vm) use loop_regions::*;
 
 #[cfg(all(test, feature = "native-jit"))]
@@ -1751,6 +1754,11 @@ pub(in crate::reg_vm) struct OsrTranslationRequest<'a> {
     pub(in crate::reg_vm) ip_map: &'a [usize],
     pub(in crate::reg_vm) parameter_types: &'a [Option<NativeTy>],
     pub(in crate::reg_vm) immutable_leaf_params: &'a [bool],
+    /// Exact interpreter cost per transformed item, composed by
+    /// `RegVm::build_osr_plan` across the OSR pass chain. `None` keeps the
+    /// one-cost-per-distinct-`source_ip` rule, which is exact only for a stream
+    /// the leaf inliner did not splice a callee body into.
+    pub(in crate::reg_vm) source_accounting: Option<&'a [NativeInstructionOrigin]>,
 }
 
 #[cfg(feature = "native-jit")]
@@ -1769,6 +1777,7 @@ pub(in crate::reg_vm) fn translate_osr_loop_profiled(
         ip_map,
         parameter_types: param_native_types,
         immutable_leaf_params,
+        source_accounting,
     } = request;
     // The direct verified-bytecode OSR path consumes the same bounded typed
     // block IR as continuations. Transformed/inlined streams retain their
@@ -1777,6 +1786,10 @@ pub(in crate::reg_vm) fn translate_osr_loop_profiled(
     let typed_ir;
     let typed_code;
     let code = if std::ptr::eq(code, func.code.as_slice()) {
+        // The typed lowering re-derives the stream, so a caller-supplied cost
+        // vector stated over the incoming stream would no longer be index-aligned.
+        // The direct path never supplies one; fail closed rather than mis-charge.
+        require(source_accounting.is_none())?;
         let mut included = vec![false; code.len()];
         included.get_mut(lp.header..lp.exit)?.fill(true);
         typed_ir = Some(TypedRegionIr::derive(func, facts, &included)?);
@@ -1802,6 +1815,7 @@ pub(in crate::reg_vm) fn translate_osr_loop_profiled(
         typed_ir: typed_ir.as_ref(),
         source_ip_map: Some(ip_map),
         source_instruction_count: func.code.len(),
+        source_accounting,
         enable_flat_buffers: true,
     })
 }
@@ -1840,5 +1854,7 @@ struct OsrLoweringRequest<'a> {
     typed_ir: Option<&'a TypedRegionIr>,
     source_ip_map: Option<&'a [usize]>,
     source_instruction_count: usize,
+    /// See [`OsrTranslationRequest::source_accounting`].
+    source_accounting: Option<&'a [NativeInstructionOrigin]>,
     enable_flat_buffers: bool,
 }

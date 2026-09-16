@@ -547,6 +547,7 @@ pub(in crate::reg_vm) fn translate_scalar_continuation_region(
         typed_ir: Some(&typed_ir),
         source_ip_map: None,
         source_instruction_count: func.code.len(),
+        source_accounting: None,
         enable_flat_buffers: false,
     })?;
     if !derived_liveins.is_empty()

@@ -188,6 +188,7 @@ impl RegVm {
                             ip_map: &identity_ip_map,
                             parameter_types: param_native_types,
                             immutable_leaf_params,
+                            source_accounting: None,
                         });
                         if let Some(started) = translation_started {
                             native.stats.translation_nanos = native
@@ -370,32 +371,19 @@ impl RegVm {
                 // bails OSR rather than misresume mid-fragment.
                 let real_code = &func.code;
                 mapped_osr_loop(&eff_func.code, &expand_map, header_ip).and_then(|lp_orig| {
-                // Exact source accounting: the OSR origin table charges one step per
-                // distinct source ip, so a call the leaf inliner dissolves into the
-                // region would own zero steps for its entire callee body — including
-                // a loop inside it. Until the OSR origin pipeline carries the same
-                // inline accounting as whole-function translation, an armed region
-                // declines instead of under-reporting usage and running past an armed
-                // step budget. See "Accounting parity status" in
-                // docs/spec/native-jit-contract.md.
-                if emit_step
-                    && eff_func
-                        .code
-                        .get(lp_orig.header..lp_orig.exit)
-                        .is_none_or(|region| {
-                            region.iter().any(|instr| {
-                                matches!(
-                                    instr,
-                                    RegInstr::CallKnown { .. }
-                                        | RegInstr::CallClosure { .. }
-                                        | RegInstr::SpawnTask { .. }
-                                )
-                            })
-                        })
-                {
-                    return None;
-                }
-                native_inline_leaf_calls(
+                // Exact source accounting for the whole OSR pass chain. `osr_origins`
+                // is the same owned cost vector the whole-function pipeline carries:
+                // it is seeded from the leaf inliner's per-item accounting, re-based
+                // through the combinator expansion so one real `CallIntrinsic` is
+                // billed once rather than once per expanded item, and composed onto
+                // every rewrite hop below by `native_compose_origins`, which
+                // re-charges only the first item mapping to a predecessor and rejects
+                // a hop whose total cost changed. A pass that deletes a source
+                // instruction without moving its charge onto a surviving item
+                // therefore declines the region instead of under-reporting it. See
+                // "Accounting parity status" in docs/spec/native-jit-contract.md.
+                let mut osr_origins: Vec<NativeInstructionOrigin> = Vec::new();
+                native_inline_leaf_calls_with_accounting(
                     &unit,
                     eff_func,
                     if eff_owned.is_some() { None } else { profile },
@@ -403,7 +391,14 @@ impl RegVm {
                     true,
                     Some((lp_orig.header, lp_orig.exit)),
                 ).and_then(
-                    |(inlined_code, n_regs0, ip_map0)| {
+                    |(inlined_code, n_regs0, ip_map0, inline_accounting)| {
+                    osr_origins = native_osr_seed_origins(
+                        &inlined_code,
+                        &ip_map0,
+                        &inline_accounting,
+                        &expand_map,
+                        real_code,
+                    )?;
                     // OSR × stored-closure helper fusion: after the closure inline pass
                     // has introduced `NativeClosureId`/`NativeClosureCapture`, collapse
                     // `GetFieldSlot`-materialized closure handles that are used only for
@@ -411,6 +406,7 @@ impl RegVm {
                     // helper call while preserving an index-stable stream.
                     let (inlined_code, n_regs0, ip_map_fc) =
                         native_fuse_field_closure_metadata_reads(&inlined_code, n_regs0)?;
+                    osr_origins = native_compose_origins(&osr_origins, &ip_map_fc)?;
                     let ip_map0: Vec<usize> = ip_map_fc
                         .iter()
                         .map(|&idx| ip_map0[idx])
@@ -437,6 +433,7 @@ impl RegVm {
                         &inlined_code, n_regs0, lp_sl.header, lp_sl.exit,
                     )
                     .and_then(|(inlined_code, n_regs0, ip_map_sl)| {
+                    osr_origins = native_compose_origins(&osr_origins, &ip_map_sl)?;
                     // OSR × scalar replacement for BYTES LENGTH-LAW FOLDING (read-only sibling of the
                     // string fold above): dissolve any non-escaping Bytes value built
                     // ONLY to be measured (`Bytes.len` of `Bytes.slice`/
@@ -453,6 +450,7 @@ impl RegVm {
                         &inlined_code, n_regs0, lp_by.header, lp_by.exit,
                     )
                     .and_then(|(inlined_code, n_regs0, ip_map_by)| {
+                    osr_origins = native_compose_origins(&osr_origins, &ip_map_by)?;
                     // OSR × scalar replacement for LIST FULL-SLICE QUERY FOLDING: dissolve a
                     // non-escaping `List.slice(list, 0, List.len(list))` whose result
                     // is only used by read-only list queries. The materialized shallow
@@ -467,14 +465,22 @@ impl RegVm {
                             lp_list.header,
                             lp_list.exit,
                         )?;
+                    // Both this pass and the checked-payload lowering below rewrite in
+                    // place and return an index-identity map, which is why the ip-map
+                    // composition below can skip them. The cost chain composes them
+                    // anyway: an identity hop is free, and a future pass that stopped
+                    // being index-identity would be caught here rather than silently
+                    // dropped.
+                    osr_origins = native_compose_origins(&osr_origins, &ip_map_list)?;
                     let lp_checked = mapped_osr_loop(&inlined_code, &ip_map_list, lp_list.header)?;
-                    let (inlined_code, n_regs0, _ip_map_checked) =
+                    let (inlined_code, n_regs0, ip_map_checked) =
                         native_lower_checked_payload_intrinsics_in_region(
                             &inlined_code,
                             n_regs0,
                             lp_checked.header,
                             lp_checked.exit,
                         )?;
+                    osr_origins = native_compose_origins(&osr_origins, &ip_map_checked)?;
                     // OSR × scalar replacement for RESULTS (deopt-before-heap, Slice 1): scalar-replace
                     // any non-escaping, statically-always-`Ok` `Result<Scalar,_>` living
                     // entirely inside the region. An inlined leaf whose `Err` arm built a
@@ -490,11 +496,12 @@ impl RegVm {
                     // non-dissolvable shape) returns the code unchanged with an identity
                     // ip-map (or bails), so a pure-Option/plain body is byte-for-byte the
                     // old path.
-                    mapped_osr_loop(&inlined_code, &_ip_map_checked, lp_checked.header).and_then(|lp_r| {
+                    mapped_osr_loop(&inlined_code, &ip_map_checked, lp_checked.header).and_then(|lp_r| {
                     native_scalar_replace_results_in_region(
                         &inlined_code, n_regs0, lp_r.header, lp_r.exit,
                     )
                     .and_then(|(code_r, n_regs_r, ip_map_r, recipes_r)| {
+                        osr_origins = native_compose_origins(&osr_origins, &ip_map_r)?;
                         // OSR × scalar replacement for OPTIONS: dissolve any non-escaping scalar Option
                         // living entirely inside the region. After Result-SR the region
                         // carries only Option ops + native subset, so the strict
@@ -505,6 +512,7 @@ impl RegVm {
                             native_scalar_replace_options_in_region(
                                 &code_r, n_regs_r, lp1.header, lp1.exit,
                             )?;
+                        osr_origins = native_compose_origins(&osr_origins, &ip_map1)?;
                         // OSR × scalar replacement for VARIANTS: after dissolving Options/Results, re-detect
                         // the loop on the transformed stream and scalar-replace any
                         // non-escaping user variant whose arms carry only scalar fields
@@ -520,6 +528,7 @@ impl RegVm {
                             native_scalar_replace_variants_in_region(
                                 &code1, n_regs1, lp_v.header, lp_v.exit,
                             )?;
+                        osr_origins = native_compose_origins(&osr_origins, &ip_map2)?;
                         // OSR × scalar replacement for STRUCTS: after dissolving Options and variants,
                         // re-detect the loop on the transformed stream and scalar-replace
                         // any non-escaping flat user struct living entirely inside that
@@ -534,6 +543,7 @@ impl RegVm {
                             native_scalar_replace_structs_in_region(
                                 &code2, n_regs2, lp_s.header, lp_s.exit,
                             )?;
+                        osr_origins = native_compose_origins(&osr_origins, &ip_map3)?;
                         // OSR × scalar replacement for LOOP-CARRIED STRUCTS: after the loop-LOCAL
                         // struct pass, dissolve a struct created in the pre-header,
                         // mutated in place across iterations (`SetFieldSlot`), and dead
@@ -549,6 +559,7 @@ impl RegVm {
                         .unwrap_or_else(|| {
                             (code_s.clone(), n_regs_s, (0..code_s.len()).collect())
                         });
+                        osr_origins = native_compose_origins(&osr_origins, &ip_map3b)?;
                         // Compose all FIVE maps to land in the (effective) inlined
                         // `func.code` index space. The transform order is now
                         // result → option → variant → struct, so:
@@ -658,14 +669,36 @@ impl RegVm {
                             } else {
                                 return None;
                             };
+                            if osr_origins.len() != code.len() {
+                                return None;
+                            }
                             let mut real_ip_map = Vec::with_capacity(code.len());
-                            for transformed_ip in 0..code.len() {
+                            for (transformed_ip, origin) in osr_origins.iter().enumerate() {
                                 let eff_ip = *ip_map.get(transformed_ip)?;
-                                if maps_into_inline(transformed_ip, eff_ip) {
-                                    real_ip_map.push(usize::MAX);
-                                } else {
-                                    real_ip_map.push(to_real(eff_ip).unwrap_or(usize::MAX));
+                                // An item spliced in from an inlined callee has no
+                                // position of its own in `func.code`; it resumes at
+                                // the call the interpreter re-executes, which is
+                                // exactly the real ip the cost chain carries for it.
+                                // An item of an expanded combinator fragment likewise
+                                // resumes at the combinator the interpreter runs whole
+                                // — `to_real` refuses that only as an OSR *boundary*,
+                                // which the header/exit checks above still enforce.
+                                // Both maps are composed from the same hops, so pin
+                                // their agreement wherever `to_real` has a verdict.
+                                let real_ip = origin.source_ip;
+                                if to_real(eff_ip).is_some_and(|real| real != real_ip) {
+                                    return None;
                                 }
+                                // Every instruction that actually runs natively must
+                                // map to a real interpreter instruction, or its steps
+                                // would be charged to nobody.
+                                if transformed_ip >= lp.header
+                                    && transformed_ip < lp.exit
+                                    && real_ip >= real_code.len()
+                                {
+                                    return None;
+                                }
+                                real_ip_map.push(real_ip);
                             }
                             let translation_started =
                                 native.collect_stats.then(std::time::Instant::now);
@@ -681,6 +714,7 @@ impl RegVm {
                                 ip_map: &real_ip_map,
                                 parameter_types: param_native_types,
                                 immutable_leaf_params,
+                                source_accounting: Some(&osr_origins),
                             });
                             if let Some(started) = translation_started {
                                 native.stats.translation_nanos = native

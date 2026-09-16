@@ -23,8 +23,11 @@ closed. A spliced-in callee body owns its own source steps, and a deopt inside
 one rolls that region's charge back to the caller's call instruction, which the
 interpreter re-executes. A native-to-native call edge compiles its callee with the caller's controls and
 charges the same limits cell. A region whose source cost still cannot be
-attributed exactly — an OSR loop containing a dissolved call, or a key whose hash
-work is proportional to its size — declines instead of under-reporting. The
+attributed exactly — a key whose hash work is proportional to its size — declines
+instead of under-reporting. An OSR region composes the same owned cost vector the
+whole-function pipeline does across its whole pass chain, so a loop containing a
+call the inliner dissolves is accounted rather than declined, and a rewrite that
+loses a charge declines that region. The
 intrinsic-call meter is charged the same way: every native item carries an
 explicit intrinsic cost beside its source cost, because generated code runs the
 same intrinsics as host helpers *and* as direct lowerings and there is no single
@@ -87,6 +90,30 @@ the *rejection* half is conditional. Six mechanisms make that exact:
   callee instruction owns one interpreter step and the call itself owns one,
   instead of the whole callee body collapsing onto the caller's call ip and
   owning nothing.
+- **The OSR pass chain carries the same cost vector.** `RegVm::build_osr_plan`
+  (`crates/rsscript-vm/src/reg_vm/tier/osr_plan_builder.rs`) seeds
+  `native_osr_seed_origins` from the leaf inliner's `NativeInlineAccounting` and
+  composes every rewrite hop onto it with `native_compose_origins`
+  (`crates/rsscript-vm/src/reg_vm/native/translate/jit_post.rs`) — the same rule
+  `NativePipelineState::apply_rewrite` applies to the whole-function chain: only
+  the first item mapping to a predecessor re-charges it, and a hop whose total
+  source or intrinsic cost changed is rejected, so a pass that deleted a source
+  instruction without moving its charge onto a surviving item declines the region.
+  All eleven hops are composed, including the two whose maps used to be computed
+  and dropped (`native_elide_readonly_full_list_slices_in_region` and
+  `native_lower_checked_payload_intrinsics_in_region`, both index-identity today —
+  a future pass that stopped being index-identity is now caught rather than
+  ignored). The seed is re-based through the combinator-expansion map, because
+  that pass runs *before* inlining: one real `Option.map`/`Result.unwrap_or`
+  `CallIntrinsic` owns one interpreter tick and one intrinsic dispatch however
+  many expanded items it became, while the mapper body the inliner splices in
+  owns its instructions one by one, exactly as `RegVm::call_closure_one` ->
+  `run_frame` ticks them. The resulting vector reaches `native_jit_origins`
+  through `OsrTranslationRequest::source_accounting`; the two rewrites inside
+  `translate_osr_loop_inner`
+  (`native_memoize_loop_invariant_runtime_helper_calls`,
+  `native_forward_direct_list_store_loads`) take `&mut [JitInstr]` and can neither
+  add nor remove an item, so they are index-stable by construction.
 - **All-or-nothing roll-back for an inlined region.** A deopt inside an inlined
   region resumes the interpreter at the caller's call instruction, which
   re-executes the whole call, so generated code reports `steps_resume` — the
@@ -120,14 +147,17 @@ the *rejection* half is conditional. Six mechanisms make that exact:
   *over*-report one step per hashing instruction. Sorted maps and sorted sets are
   list-backed, hash nothing, and are deliberately absent from that set.
 
-Two shapes **decline** instead of running natively, because their source cost is
-not attributable. Accounting is unconditional, so both declines now apply to
-every run rather than only to an armed one:
+One shape **declines** instead of running natively, because its source cost is
+not attributable. Accounting is unconditional, so the decline applies to every run
+rather than only to an armed one:
 
-- an OSR region whose loop body contains a call the inliner would dissolve
-  (`RegVm::build_osr_plan`);
 - a region that hashes a key whose cost is proportional to its size
   (`native_source_cost_is_static`), including one reached over a call edge.
+
+The OSR pass chain declines *conditionally* rather than structurally: a region
+whose chain loses a charge at some hop, or whose transformed item cannot be traced
+back to a real bytecode instruction, declines; a loop containing a dissolvable
+call no longer does.
 
 A whole-region hand-back that is **not** a precise resume (a failed heap commit,
 an unresolvable handle, a mismatched outcome, or a deopt whose precise resume
@@ -236,58 +266,35 @@ accounting segment rather than by one instruction.
 
 ### Remaining gap list
 
-1. **OSR origins carry no inline accounting.** `native_jit_origins`
-   (`crates/rsscript-vm/src/reg_vm/native/translate/jit_post.rs`) derives both
-   costs from `source_ip` uniqueness, so an item the leaf inliner spliced in owns
-   no source step. `RegVm::build_osr_plan`
-   (`crates/rsscript-vm/src/reg_vm/tier/osr_plan_builder.rs`) therefore declines
-   **any** OSR region containing a `CallKnown`, `CallClosure`, or `SpawnTask`.
-   Note the widened blast radius: accounting is now unconditional, so this
-   decline, which used to apply only under an armed control, applies to every run,
-   and an OSR loop containing a dissolvable call no longer reaches generated code
-   at all.
+1. **Option/Result scalar replacement under OSR is reachable only through the
+   combinator expansion.** The OSR accounting gap that used to make
+   `RegVm::build_osr_plan` decline **any** loop containing a `CallKnown`,
+   `CallClosure` or `SpawnTask` is closed (see "The OSR pass chain carries the same
+   cost vector" above), and closing it fixed a live mis-count rather than only
+   unlocking an optimization: the shape
+   `while i < 3000 { total = total + Option.unwrap_or<Int>(value: Some(i * 2), default: 0) ... }`
+   ran natively through the combinator expansion and reported **51053 of the
+   interpreter's 54014 steps and 41 of its 3002 intrinsic calls**. It now reports
+   both exactly, and the same loop with a dissolvable `CallKnown` in it
+   (`Result.unwrap_or(value: checked(v: i), default: 0)`) reaches OSR at all for
+   the first time.
 
-   This is more than threading `NativeInlineAccounting` down to
-   `native_jit_origins`. `build_osr_plan` composes **eight** `next -> previous`
-   ip maps (`ip_map0`, `ip_map_fc`, `ip_map_sl`, `ip_map_by`, `ip_map_r`,
-   `ip_map1`, `ip_map2`, `ip_map3`, `ip_map3b`) and several of those passes delete
-   or replace source instructions rather than permuting them — the string
-   length-law fold deletes a dead string allocation outright
-   (`native_string_length_fold_in_region` in
-   `crates/rsscript-vm/src/reg_vm/native/passes/region_optimization_sr.rs`), and
-   the Option/Result/variant/struct scalar-replacement passes dissolve the
-   aggregates they replace. A cost vector composed naively across those hops would
-   silently under-report exactly the steps the interpreter still ticks. Two of the
-   maps (`ip_map_list` and the checked-payload pass's map) are dropped rather than
-   composed, so an accumulator has to decide whether those passes are
-   index-identity before it can trust the chain.
+   What remains is upstream of accounting and is a lost optimization rather than a
+   mis-count. Measured: for a `main` whose `while` body holds a hand-written
+   `match` over an `Option`/`Result`, `detect_natural_loops`
+   (`crates/rsscript-vm/src/reg_vm/native/translate/loop_regions.rs`, via
+   `analyze_canonical_loops`) returns **no loop at all**, so
+   `select_osr_candidate_loops` offers nothing, `RegVm::try_osr` is never reached,
+   no region is generated, and the interpreter owns every step exactly. The same
+   holds for the hand-written kernels `osr_option_loop.rss`, `osr_struct_loop.rss`
+   and `osr_closure_loop.rss`, which all report
+   `native_calls + osr_entries + continuation_entries == 0`. Option/Result scalar
+   replacement is therefore observable under OSR only through the combinator forms
+   (`Option.unwrap_or`, `Result.unwrap_or`), whose source shape is a
+   `CallIntrinsic` and carries no match op until the expansion pass rewrites it.
+   Needed: find and lift whichever canonical-loop precondition the match-shaped
+   body fails, which is a loop-recognition change rather than an accounting one.
 
-   The seed is a second obstacle: the combinator-expansion pass runs *before*
-   inlining, so the inliner's `NativeInlineAccounting` is stated over the expanded
-   stream (`eff_func.code`), where one interpreter `CallIntrinsic` has become
-   several primitives. A chain seeded at cost one per expanded item would
-   over-report; the seed has to be "one per distinct *real* ip" plus the
-   inliner's spliced-item extras.
-
-   The whole-function path already has the right shape for this:
-   `NativePipelineState::apply_rewrite` composes one hop, re-charges only the
-   first item mapping to a given predecessor, and **rejects** a rewrite whose
-   total cost changed. Needed: give the OSR chain the same accumulator, seeded
-   from `native_inline_leaf_calls_preserving_known_calls_with_accounting` and
-   re-based through the expansion map, so a cost-losing hop declines the region
-   instead of mis-charging it; then thread the result through
-   `OsrTranslationRequest` and `OsrLoweringRequest` into `native_jit_origins`, and
-   cover the rewrites inside `translate_osr_loop_inner` itself
-   (`native_memoize_loop_invariant_runtime_helper_calls`,
-   `native_forward_direct_list_store_loads`) the same way. The corpus shapes that
-   exercise the dissolving passes (`native-option`, `native-result`,
-   `native-struct`, `native-variant`, `native-string`) currently reach generated
-   code through whole-function translation, which does account exactly, so this
-   gap is a lost optimization rather than a live mis-count. Where those passes do
-   run under OSR — a length-fold loop in a function that also writes output — both
-   meters are measured exact today
-   (`a_rewritten_osr_region_reports_the_interpreter_intrinsic_call_count`), but
-   that is an observation about those passes, not a proof carried by the pipeline.
 2. **Data-dependent key hashing cannot be charged from generated code.**
    `map_key_from_value` bills `1 + len / 64` for a String/Bytes key and recurses
    for a structural one. `native_source_cost_is_static` therefore declines
@@ -410,7 +417,14 @@ whose tier-0 run would swallow a native-eligible callee on the interpreter loop
 (gap 4) emits no different code and measured 1.83 ms against 1.79 ms over four
 interleaved paired runs, within noise on the same gate: the gate's own `main`
 was never tier-0 eligible, because its `Output.write` barrier is not a tier-0
-instruction. The first two are recorded because they are the
+instruction. Composing the OSR pass chain's cost vector likewise emits no
+different code for the gate — whose loop is call-free and takes the direct OSR
+entry — and measured a native median of 1.72 ms against 1.79 ms over four
+interleaved paired runs. The first shape of that change did cost a measurable
+~7% (1.85 ms against 1.73 ms) by allocating a `HashSet` per hop for an
+eleven-hop chain that is index-identity at almost every hop; `native_compose_origins`
+now returns immediately on an identity map and uses a `Vec<bool>` otherwise,
+which is what the paired median above measures. The first two are recorded because they are the
 obvious implementations and both miss the gate's ~10% budget; what costs is the
 per-segment reservation bail site and the live `steps_resume` variable, not the
 counting.
@@ -449,6 +463,15 @@ segment-reservation model rather than block charging),
 helper (`String.len`), an `Int`-keyed map get whose constant key-hash unit rides
 the step meter beside it, and an intrinsic inside a leaf call the inliner
 dissolves, so a helper-side charge would fail three of the four.
+
+`native_step_accounting_matches_the_interpreter_for_an_osr_loop_containing_an_inlined_call`
+and `an_osr_loop_containing_an_inlined_call_reports_the_interpreter_intrinsic_call_count`
+replay `OSR_INLINE_PARITY_CASES` — a dissolvable leaf call in the loop, that call
+alongside the string length-law fold, and the Option/Result combinator expansion
+with and without a dissolvable `CallKnown` — across the whole
+`STEP_PARITY_BUDGETS` list and the armed/unarmed intrinsic budgets, under eager
+OSR and under the production tiering defaults. Each asserts `osr_entries > 0` per
+case and per `eager_osr` setting, so neither can pass by declining the region.
 
 `a_rewritten_osr_region_reports_the_interpreter_intrinsic_call_count` covers the
 regions whose rewrites replace or delete the dispatch; its companion

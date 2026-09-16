@@ -292,6 +292,25 @@ pub(in crate::reg_vm) fn native_inline_leaf_calls(
     Some((code, n_regs, ip_map))
 }
 
+/// Like [`native_inline_leaf_calls`], but also returns the exact per-instruction
+/// source-step accounting for the rewritten stream.
+///
+/// `RegVm::build_osr_plan` seeds its OSR cost chain from this, so a call the
+/// inliner dissolves into an OSR loop owns the interpreter steps of its whole
+/// callee body instead of collapsing onto the caller's call ip.
+#[cfg(feature = "native-jit")]
+#[allow(clippy::type_complexity)]
+pub(in crate::reg_vm) fn native_inline_leaf_calls_with_accounting(
+    unit: &RegUnit,
+    func: &RegFunction,
+    profile: Option<&FunctionProfile>,
+    call_count: u32,
+    j3: bool,
+    loop_region: Option<(usize, usize)>,
+) -> Option<(Vec<RegInstr>, usize, Vec<usize>, NativeInlineAccounting)> {
+    native_inline_leaf_calls_inner(unit, func, profile, call_count, j3, loop_region, &|_| false)
+}
+
 /// Exact interpreter source-step accounting for one inline-pass result.
 ///
 /// The inliner splices a callee body into the caller's instruction stream, where

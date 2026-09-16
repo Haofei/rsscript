@@ -1216,6 +1216,130 @@ fn native_step_accounting_matches_the_interpreter_for_osr_entered_loops() {
     }
 }
 
+/// OSR loops whose exact source cost the OSR pass chain has to compose.
+///
+/// Each shape puts its loop in a function that also writes output, so
+/// whole-function native entry declines and the loop can reach generated code
+/// only through OSR. Between them they exercise every hop the chain has to get
+/// right: a call the leaf inliner dissolves into the loop (which used to make
+/// `RegVm::build_osr_plan` decline the region outright), the string length-law
+/// fold, which replaces the source instruction it folds, and the Option/Result
+/// combinator expansion, which turns one interpreter `CallIntrinsic` into several
+/// items *before* the inliner runs and whose scalar-replacement passes then
+/// dissolve the Option/Result it built.
+///
+/// The last two also pin the bug the composition fixes rather than merely an
+/// optimization it unlocks: before the chain carried a cost vector, the
+/// combinator shape ran natively and reported 51053 of the interpreter's 54014
+/// steps and 41 of its 3002 intrinsic calls.
+const OSR_INLINE_PARITY_CASES: &[(&str, &str)] = &[
+    (
+        "osr-inlined-leaf-call.rss",
+        "fn square(v: Int) -> Int { return v * v } fn main() -> Unit { let mut i = 0; let mut total = 0; while i < 3000 { total = total + square(v: i % 97); i = i + 1 }; Output.write(message: String.from_int(value: total)); return Unit }",
+    ),
+    (
+        "osr-inlined-call-string-fold.rss",
+        "fn bump(v: Int) -> Int { return v + 1 } fn main() -> Unit { let mut i = 0; let mut total = 0; while i < 3000 { total = total + String.len(value: String.concat(left: \"ab\", right: \"cde\")) + bump(v: i); i = i + 1 }; Output.write(message: String.from_int(value: total)); return Unit }",
+    ),
+    (
+        "osr-option-combinator-sr.rss",
+        "fn main() -> Unit { let mut i = 0; let mut total = 0; while i < 3000 { total = total + Option.unwrap_or<Int>(value: Some(i * 2), default: 0); i = i + 1 }; Output.write(message: String.from_int(value: total)); return Unit }",
+    ),
+    (
+        "osr-result-combinator-sr.rss",
+        "fn checked(v: Int) -> Result<Int, String> { return Ok(v * 2) } fn main() -> Unit { let mut i = 0; let mut total = 0; while i < 3000 { total = total + Result.unwrap_or<Int, String>(value: checked(v: i), default: 0); i = i + 1 }; Output.write(message: String.from_int(value: total)); return Unit }",
+    ),
+];
+
+#[test]
+fn native_step_accounting_matches_the_interpreter_for_an_osr_loop_containing_an_inlined_call() {
+    for (name, source) in OSR_INLINE_PARITY_CASES {
+        for eager_osr in [false, true] {
+            let mut osr_entries = 0_u64;
+            for &budget in STEP_PARITY_BUDGETS {
+                let limits = RunLimits::unbounded_for_trusted_host().with_step_budget(budget);
+                let (interpreter, native) = accounting_pair(
+                    name,
+                    source,
+                    limits,
+                    NativeJitOptions {
+                        cost_model: NativeCostModel::Off,
+                        eager_osr,
+                        collect_telemetry: true,
+                        ..NativeJitOptions::default()
+                    },
+                );
+                assert_eq!(
+                    native.outcome(),
+                    interpreter.outcome(),
+                    "{name} at step budget {budget} (eager_osr={eager_osr}) must terminate for the same reason as the interpreter"
+                );
+                assert_eq!(
+                    native.usage.steps_consumed, interpreter.usage.steps_consumed,
+                    "{name} at step budget {budget} (eager_osr={eager_osr}) must report the interpreter's step count"
+                );
+                assert_eq!(
+                    native.stdout, interpreter.stdout,
+                    "{name} at step budget {budget} (eager_osr={eager_osr}) must produce the interpreter's output"
+                );
+                osr_entries = osr_entries.saturating_add(native_telemetry(&native).osr_entries);
+            }
+            // Without this the test would pass by declining the region, which is
+            // exactly the behavior it exists to retire.
+            assert!(
+                osr_entries > 0,
+                "{name} (eager_osr={eager_osr}) must enter OSR for its step counts to mean anything"
+            );
+        }
+    }
+}
+
+#[test]
+fn an_osr_loop_containing_an_inlined_call_reports_the_interpreter_intrinsic_call_count() {
+    for (name, source) in OSR_INLINE_PARITY_CASES {
+        for eager_osr in [false, true] {
+            let mut osr_entries = 0_u64;
+            for limits in [
+                RunLimits::unbounded_for_trusted_host(),
+                RunLimits::unbounded_for_trusted_host().with_intrinsic_call_budget(1_500),
+                RunLimits::unbounded_for_trusted_host()
+                    .with_intrinsic_call_budget(1_000_000)
+                    .with_step_budget(10_000_000),
+            ] {
+                let (interpreter, native) = accounting_pair(
+                    name,
+                    source,
+                    limits,
+                    NativeJitOptions {
+                        cost_model: NativeCostModel::Off,
+                        eager_osr,
+                        collect_telemetry: true,
+                        ..NativeJitOptions::default()
+                    },
+                );
+                assert_eq!(
+                    native.outcome(),
+                    interpreter.outcome(),
+                    "{name} (eager_osr={eager_osr}) must terminate like the interpreter"
+                );
+                assert_eq!(
+                    native.usage.intrinsic_calls, interpreter.usage.intrinsic_calls,
+                    "{name} (eager_osr={eager_osr}) must report the interpreter's intrinsic count"
+                );
+                assert_eq!(
+                    native.usage.steps_consumed, interpreter.usage.steps_consumed,
+                    "{name} (eager_osr={eager_osr}) must report the interpreter's step count"
+                );
+                osr_entries = osr_entries.saturating_add(native_telemetry(&native).osr_entries);
+            }
+            assert!(
+                osr_entries > 0,
+                "{name} (eager_osr={eager_osr}) must enter OSR under an armed intrinsic budget"
+            );
+        }
+    }
+}
+
 /// A loop that allocates and calls a `local` closure keeps exact step accounting
 /// because it never reaches generated code.
 ///

@@ -4,24 +4,24 @@ use super::*;
 
 #[cfg(feature = "native-jit")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct NativeInstructionOrigin {
+pub(in crate::reg_vm) struct NativeInstructionOrigin {
     /// Instruction in the original register bytecode that produced this item.
-    pub(super) source_ip: usize,
+    pub(in crate::reg_vm) source_ip: usize,
     /// Interpreter instruction to resume when a guard before this item deopts.
-    pub(super) resume_ip: usize,
+    pub(in crate::reg_vm) resume_ip: usize,
     /// Interpreter source-step cost owned by this native item. Expansion assigns
     /// the cost to exactly one result; fusion must preserve the summed cost.
-    pub(super) source_cost: u32,
+    pub(in crate::reg_vm) source_cost: u32,
     /// Interpreter intrinsic dispatches owned by this native item. The
     /// interpreter charges one per executed `CallIntrinsic`/`CallTypedIntrinsic`
     /// (`RegVm::charge_intrinsic_call`), so this is derived exactly like
     /// `source_cost`: the item that owns a source instruction's step also owns its
     /// intrinsic dispatch.
-    pub(super) intrinsic_cost: u32,
+    pub(in crate::reg_vm) intrinsic_cost: u32,
     /// This item came from an inlined callee region. Its `resume_ip` is the
     /// caller's call instruction, so a deopt re-executes the whole call and the
     /// region's charge must be rolled back instead of reported.
-    pub(super) inlined: bool,
+    pub(in crate::reg_vm) inlined: bool,
 }
 
 #[cfg(feature = "native-jit")]
@@ -37,13 +37,71 @@ impl NativeInstructionOrigin {
     }
 }
 
+/// Derive the per-item origin table for a lowered OSR/continuation region.
+///
+/// `accounting`, when present, is the exact interpreter cost the OSR pass chain
+/// composed for this stream (see [`native_osr_seed_origins`] and
+/// [`native_compose_origins`]): an item spliced in from an inlined callee owns its
+/// own source steps, and a rewrite that deleted or replaced a source instruction
+/// has already moved that instruction's charge onto a surviving item. Without it
+/// the table falls back to the one-cost-per-distinct-`source_ip` rule, which is
+/// exact only for a stream no pass has inlined into.
+///
+/// A non-executing boundary item (`Bail` for an instruction outside the loop
+/// region, the region's `OsrExit`) owns nothing on either path: generated code
+/// never runs it, so the interpreter still owns every step it stands for.
 #[cfg(feature = "native-jit")]
 pub(super) fn native_jit_origins(
     instructions: &[vm_jit::JitInstr],
     source_code: &[RegInstr],
     source_ip_map: Option<&[usize]>,
     source_instruction_count: usize,
+    accounting: Option<&[NativeInstructionOrigin]>,
 ) -> Option<Vec<vm_jit::JitInstructionOrigin>> {
+    if let Some(accounting) = accounting {
+        if accounting.len() != instructions.len() {
+            return None;
+        }
+        return instructions
+            .iter()
+            .enumerate()
+            .map(|(ip, instruction)| {
+                let origin = accounting.get(ip).copied()?;
+                let executes_source = !matches!(
+                    instruction,
+                    vm_jit::JitInstr::Bail
+                        | vm_jit::JitInstr::OsrExit
+                        | vm_jit::JitInstr::RegionExit { .. }
+                );
+                let valid_source = (origin.source_ip < source_instruction_count).then_some(());
+                let charges = executes_source && valid_source.is_some();
+                let source_cost = if charges { origin.source_cost } else { 0 };
+                NativeInstructionOrigin {
+                    source_ip: if valid_source.is_some() {
+                        origin.source_ip
+                    } else {
+                        0
+                    },
+                    resume_ip: if valid_source.is_some() {
+                        origin.resume_ip
+                    } else {
+                        0
+                    },
+                    source_cost,
+                    intrinsic_cost: if source_cost != 0 {
+                        origin.intrinsic_cost
+                    } else {
+                        0
+                    },
+                    // A spliced item keeps its `inlined` mark even when it owns no
+                    // step (the call's own tick may already be owned by an earlier
+                    // item), so codegen keeps the run's charge all-or-nothing.
+                    inlined: charges && origin.inlined,
+                }
+                .to_jit()
+            })
+            .collect();
+    }
     // The intrinsic meter reads the *source* instruction each native item is
     // charged for, not the transformed one it lowers. A region rewrite may replace
     // an intrinsic dispatch with something else - the string and bytes length-law
@@ -279,35 +337,7 @@ impl NativePipelineState {
         if code.len() != next_to_previous.len() {
             return None;
         }
-        let previous_cost = self.origins.iter().try_fold(0_u64, |sum, origin| {
-            sum.checked_add(u64::from(origin.source_cost))
-        })?;
-        let previous_intrinsic_cost = self.origins.iter().try_fold(0_u64, |sum, origin| {
-            sum.checked_add(u64::from(origin.intrinsic_cost))
-        })?;
-        let mut charged_previous = std::collections::HashSet::new();
-        let origins = next_to_previous
-            .into_iter()
-            .map(|previous| {
-                let mut origin = self.origins.get(previous).copied()?;
-                if !charged_previous.insert(previous) {
-                    origin.source_cost = 0;
-                    origin.intrinsic_cost = 0;
-                }
-                Some(origin)
-            })
-            .collect::<Option<Vec<_>>>()?;
-        let next_cost = origins.iter().try_fold(0_u64, |sum, origin| {
-            sum.checked_add(u64::from(origin.source_cost))
-        })?;
-        let next_intrinsic_cost = origins.iter().try_fold(0_u64, |sum, origin| {
-            sum.checked_add(u64::from(origin.intrinsic_cost))
-        })?;
-        if next_cost != previous_cost || next_intrinsic_cost != previous_intrinsic_cost {
-            // A rewrite may expand one source item, but silently dropping source
-            // accounting would make bounded native execution disagree with the VM.
-            return None;
-        }
+        let origins = native_compose_origins(&self.origins, &next_to_previous)?;
         self.code = code;
         self.n_regs = n_regs;
         self.origins = origins;
@@ -318,6 +348,148 @@ impl NativePipelineState {
         debug_assert_eq!(self.code.len(), self.origins.len());
         (self.code, self.n_regs, self.origins)
     }
+}
+
+/// Compose one `next -> previous` rewrite hop onto an owned cost vector.
+///
+/// This is the one accounting rule every native pass chain shares — the
+/// whole-function pipeline reaches it through
+/// [`NativePipelineState::apply_rewrite`], and `RegVm::build_osr_plan` composes
+/// its eight-hop OSR chain with it directly:
+///
+/// - only the **first** item mapping to a given predecessor re-charges that
+///   predecessor's step and intrinsic dispatch, so an expanded source instruction
+///   is billed exactly once;
+/// - a hop whose total source or intrinsic cost **changed** is rejected, so a
+///   rewrite that deleted an instruction without moving its charge onto a
+///   surviving item declines the region instead of under-reporting it.
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) fn native_compose_origins(
+    previous: &[NativeInstructionOrigin],
+    next_to_previous: &[usize],
+) -> Option<Vec<NativeInstructionOrigin>> {
+    // Most hops in a chain are index-identity (a pass with nothing to do returns
+    // the code unchanged), and an identity hop can neither drop nor duplicate a
+    // charge. Skipping the scan keeps the accounting free for an ordinary loop.
+    if next_to_previous.len() == previous.len()
+        && next_to_previous
+            .iter()
+            .enumerate()
+            .all(|(next, &index)| next == index)
+    {
+        return Some(previous.to_vec());
+    }
+    let previous_cost = previous.iter().try_fold(0_u64, |sum, origin| {
+        sum.checked_add(u64::from(origin.source_cost))
+    })?;
+    let previous_intrinsic_cost = previous.iter().try_fold(0_u64, |sum, origin| {
+        sum.checked_add(u64::from(origin.intrinsic_cost))
+    })?;
+    let mut charged_previous = vec![false; previous.len()];
+    let origins = next_to_previous
+        .iter()
+        .map(|&index| {
+            let mut origin = previous.get(index).copied()?;
+            let charged = charged_previous.get_mut(index)?;
+            if std::mem::replace(charged, true) {
+                origin.source_cost = 0;
+                origin.intrinsic_cost = 0;
+            }
+            Some(origin)
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let next_cost = origins.iter().try_fold(0_u64, |sum, origin| {
+        sum.checked_add(u64::from(origin.source_cost))
+    })?;
+    let next_intrinsic_cost = origins.iter().try_fold(0_u64, |sum, origin| {
+        sum.checked_add(u64::from(origin.intrinsic_cost))
+    })?;
+    if next_cost != previous_cost || next_intrinsic_cost != previous_intrinsic_cost {
+        // A rewrite may expand one source item, but silently dropping source
+        // accounting would make bounded native execution disagree with the VM.
+        return None;
+    }
+    Some(origins)
+}
+
+/// Seed the OSR pass chain's cost vector from the leaf inliner's result.
+///
+/// Two corrections turn the inliner's accounting — which is stated over the
+/// *effective* stream the OSR builder handed it — into a vector stated over the
+/// function's real bytecode:
+///
+/// - The combinator-expansion pass runs **before** inlining, so one real
+///   `CallIntrinsic` (`Option.map`, `Result.and_then`, …) may already have become
+///   several effective instructions. The interpreter still ticks that instruction
+///   exactly once and bills exactly one intrinsic dispatch, so the base charge is
+///   one step per distinct *real* ip, not per effective ip.
+/// - A mapper body the inliner spliced in keeps its own per-instruction charge on
+///   top of that: the interpreter runs the mapper as a real frame and ticks every
+///   instruction in it (`RegVm::call_closure_one` -> `run_frame`).
+///
+/// The intrinsic dispatch is read from the *real* instruction for a copy-through
+/// item (a rewrite may have replaced the dispatch while the interpreter still runs
+/// it) and from the spliced instruction for a callee item (which has no position
+/// in this function's bytecode at all). An item that would own both declines,
+/// because one native item may own at most one dispatch.
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) fn native_osr_seed_origins(
+    inlined_code: &[RegInstr],
+    inline_ip_map: &[usize],
+    accounting: &NativeInlineAccounting,
+    effective_to_real: &[usize],
+    real_code: &[RegInstr],
+) -> Option<Vec<NativeInstructionOrigin>> {
+    if inline_ip_map.len() != inlined_code.len()
+        || accounting.source_cost.len() != inlined_code.len()
+        || accounting.inlined.len() != inlined_code.len()
+    {
+        return None;
+    }
+    let mut charged_effective = vec![false; effective_to_real.len()];
+    let mut charged_real = vec![false; real_code.len()];
+    let mut origins = Vec::with_capacity(inlined_code.len());
+    for (transformed, &effective_ip) in inline_ip_map.iter().enumerate() {
+        let real_ip = effective_to_real.get(effective_ip).copied()?;
+        if real_ip >= real_code.len() {
+            return None;
+        }
+        let effective_base = u32::from(!std::mem::replace(
+            charged_effective.get_mut(effective_ip)?,
+            true,
+        ));
+        // Whatever the inliner charged beyond the effective instruction's own tick
+        // is callee-body cost, which has no position in this function's bytecode
+        // and therefore survives the re-basing unchanged.
+        let spliced = accounting.source_cost[transformed].checked_sub(effective_base)?;
+        let real_base = u32::from(!std::mem::replace(charged_real.get_mut(real_ip)?, true));
+        let source_cost = real_base.checked_add(spliced)?;
+        let charges_real_dispatch = real_base != 0 && dispatches_an_intrinsic(&real_code[real_ip]);
+        let charges_spliced_dispatch =
+            spliced != 0 && dispatches_an_intrinsic(&inlined_code[transformed]);
+        if charges_real_dispatch && charges_spliced_dispatch {
+            return None;
+        }
+        origins.push(NativeInstructionOrigin {
+            source_ip: real_ip,
+            resume_ip: real_ip,
+            source_cost,
+            intrinsic_cost: u32::from(charges_real_dispatch || charges_spliced_dispatch),
+            inlined: accounting.inlined[transformed],
+        });
+    }
+    // Fail closed: an intrinsic dispatch that owns no charge would run natively
+    // without being billed against `intrinsic_call_budget`.
+    if inlined_code
+        .iter()
+        .zip(origins.iter())
+        .any(|(instruction, origin)| {
+            dispatches_an_intrinsic(instruction) && origin.intrinsic_cost == 0
+        })
+    {
+        return None;
+    }
+    Some(origins)
 }
 
 #[cfg(all(test, feature = "native-jit"))]
