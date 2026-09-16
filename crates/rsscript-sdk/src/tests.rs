@@ -2547,3 +2547,107 @@ fn main() -> fresh String {
         "each arm is selected by its own length and element tests"
     );
 }
+
+/// Sum-variant patterns bind every declared field and recurse.
+///
+/// A variant pattern tests its tag before it projects anything, because
+/// `GetField` on a value of the wrong case has no meaning; a field whose
+/// sub-pattern is itself refutable adds its own test after the tag test. The
+/// positional and named spellings of one variant resolve to the same
+/// declared-field list, so both reach that single path — which is what the
+/// `area`/`named` pair pins.
+#[test]
+fn variant_match_patterns_lower_and_execute() {
+    const SOURCE: &str = r#"
+sum Shape {
+    Circle(radius: Int)
+    Rectangle(width: Int, height: Int)
+    Prism(width: Int, height: Int, depth: Int)
+}
+
+sum Entry {
+    Pair(key: Int, value: Option<Int>)
+    Tagged(tag: String, shape: Shape)
+}
+
+fn area(shape: Shape) -> Int {
+    match read shape {
+        Circle(r) => { return read r * read r * 3 }
+        Rectangle(w, h) => { return read w * read h }
+        Prism(w, _, d) => { return read w * read d }
+    }
+}
+
+fn named(shape: Shape) -> Int {
+    match read shape {
+        Circle { radius } => { return read radius }
+        Rectangle { width, .. } => { return read width }
+        Prism { width, height: _, depth } => { return read width + read depth }
+    }
+}
+
+fn literal_position(shape: Shape) -> fresh String {
+    match read shape {
+        Rectangle(1, h) => { return String.concat(left: "unit-wide:", right: String.from_int(value: read h)) }
+        Rectangle { width: 2, height } => { return String.concat(left: "two-wide:", right: String.from_int(value: read height)) }
+        Rectangle(w, h) => { return String.from_int(value: read w * read h) }
+        _ => { return "other" }
+    }
+}
+
+fn nested(entry: Entry) -> Int {
+    match read entry {
+        Pair(k, Some(v)) => { return read k + read v }
+        Pair(k, None) => { return read k }
+        Tagged(_, Rectangle(w, h)) => { return read w * read h }
+        Tagged(_, s) => { return area(shape: read s) }
+    }
+}
+
+fn deep(value: Result<Option<Int>, String>) -> Int {
+    match value {
+        Ok(Some(n)) => { return n }
+        Ok(None) => { return 0 }
+        Err(_) => { return 0 - 1 }
+    }
+}
+
+fn main() -> fresh String {
+    let parts = [
+        String.from_int(value: area(shape: Rectangle(width: 3, height: 4))),
+        String.from_int(value: area(shape: Prism(width: 2, height: 3, depth: 5))),
+        String.from_int(value: named(shape: Circle(radius: 6))),
+        String.from_int(value: named(shape: Rectangle(width: 7, height: 1))),
+        String.from_int(value: named(shape: Prism(width: 1, height: 2, depth: 3))),
+        literal_position(shape: Rectangle(width: 1, height: 9)),
+        literal_position(shape: Rectangle(width: 2, height: 8)),
+        literal_position(shape: Rectangle(width: 3, height: 3)),
+        literal_position(shape: Circle(radius: 1)),
+        String.from_int(value: nested(entry: Pair(key: 1, value: Some(2)))),
+        String.from_int(value: nested(entry: Pair(key: 5, value: None))),
+        String.from_int(value: nested(entry: Tagged(tag: "a", shape: Rectangle(width: 3, height: 3)))),
+        String.from_int(value: nested(entry: Tagged(tag: "a", shape: Circle(radius: 2)))),
+        String.from_int(value: deep(value: Ok(Some(11)))),
+        String.from_int(value: deep(value: Ok(None))),
+        String.from_int(value: deep(value: Err("x"))),
+    ]
+    return String.join(parts: read parts, separator: "|")
+}
+"#;
+
+    let built = Compiler
+        .compile("variant-patterns.rss", SOURCE)
+        .expect("multi-field and nested variant patterns compile");
+    let admitted = admitted(built);
+    let report = Runtime::default()
+        .link(&admitted)
+        .expect("link variant pattern program")
+        .execute(ExecutionRequest::default());
+
+    assert_eq!(report.termination_reason(), TerminationReason::Completed);
+    assert_eq!(
+        report.value(),
+        Some("12|10|6|7|4|unit-wide:9|two-wide:8|9|other|3|5|9|12|11|0|-1"),
+        "each declared field is bound, and a nested case adds its own test"
+    );
+}

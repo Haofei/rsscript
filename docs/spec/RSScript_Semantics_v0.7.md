@@ -2813,7 +2813,8 @@ pattern outside it is a build error rather than a check error:
 | --- | --- |
 | wildcard | yes |
 | literal | yes |
-| variant — `Ok`/`Err`, `Some`/`None`, declared sum variants | yes, with flat positional bindings or `_` per declared field |
+| variant — `Ok`/`Err`, `Some`/`None`, declared sum variants | yes, with any lowerable sub-pattern per declared field |
+| struct pattern naming a declared sum variant (`Circle { radius }`) | yes: the same subset as the positional spelling, and `..` omits the rest |
 | tuple (`__TupleN` struct pattern) | yes: each element may bind, be `_`, be a literal, or be a nested tuple pattern of the same |
 | every other struct pattern | no |
 | list | yes: each element may bind, be `_`, or be a literal; the rest may be ignored or bound |
@@ -2834,8 +2835,18 @@ non-match. A bound `..name` is the `List.slice` of everything the prefix and
 suffix did not name, so it is a `fresh List<T>` under the same slicing contract
 as an explicit `List.slice` call.
 
+A variant pattern tests its tag first and only then projects its declared
+fields, because `GetField` on a value of the wrong case has no meaning. A field
+whose sub-pattern is itself refutable — `Pair(k, Some(v))`, `Ok(Some(n))`,
+`Tagged(_, Rectangle(w, h))` — adds its own test after the tag test, in its own
+block, and the recursion bottoms out at the forms in the table. The positional
+and named spellings of one variant resolve to the same declared-field list
+before anything is emitted, so they cannot accept different sub-patterns.
+
 This subset is shared by the statement and the expression form of `match`,
-which cannot drift apart because both go through one `lower_pattern_edge`.
+which cannot drift apart because both go through one `lower_pattern_edge`, and
+by the test and binding halves of a pattern, which go through
+`lower_pattern_edge` and `bind_pattern` over the same forms.
 
 **Accepted** — guards
 

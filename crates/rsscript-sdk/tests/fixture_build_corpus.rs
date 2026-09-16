@@ -28,18 +28,11 @@ use rsscript_semantics::{FrontendInputSnapshot, standard_package_interfaces};
 /// in the typed MIR subset, not a fixture defect: the program is valid RSScript
 /// and `rss check` reports nothing, so the split is recorded here rather than
 /// hidden. Removing an entry is the acceptance test for closing its gap.
-const CANNOT_BUILD_YET: &[(&str, &str)] = &[
-    (
-        "positional-multifield-nested.rss",
-        "`nested checked HIR variant match binding`: a variant pattern that \
-         binds through another pattern is not lowered.",
-    ),
-    (
-        "positional-multifield-variant.rss",
-        "`non-literal checked HIR match pattern`: a positional multi-field \
-         variant pattern is not lowered.",
-    ),
-];
+///
+/// The list is currently empty: every `pass` fixture with a `main` builds and
+/// verifies. Add an entry only for a gap that is being recorded, never to make
+/// a regression quiet.
+const CANNOT_BUILD_YET: &[(&str, &str)] = &[];
 
 /// Fixtures whose `main` is not the entry point of a self-contained program.
 fn has_main(source: &str) -> bool {

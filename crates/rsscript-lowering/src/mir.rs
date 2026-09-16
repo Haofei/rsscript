@@ -815,29 +815,66 @@ struct VariantLayout {
     fields: Vec<String>,
 }
 
-/// Bindings made available after a checked match edge. User sum variants use
-/// their semantic layout; `Result` is a language primitive and therefore has
-/// a dedicated typed payload projection instead of a synthetic source name.
-enum MatchBindings {
-    /// A tuple pattern's elements, keyed by the synthetic `itemN` field names
-    /// the parser gives them.
-    Tuple(Vec<rsscript_syntax::ast::MatchFieldPattern>),
-    Variant(VariantLayout, Vec<rsscript_syntax::ast::MatchPattern>),
-    /// A `List<T>` slice pattern's element and rest bindings. The arm's own
-    /// block projects them, so the pattern parts travel with the arm.
-    List {
-        prefix: Vec<rsscript_syntax::ast::MatchPattern>,
-        rest: Option<Option<String>>,
-        suffix: Vec<rsscript_syntax::ast::MatchPattern>,
-    },
-    Result {
-        ok: bool,
-        binding: rsscript_syntax::ast::MatchPattern,
-    },
-    Option {
-        some: bool,
-        binding: Option<rsscript_syntax::ast::MatchPattern>,
-    },
+/// A sum-variant pattern's declared fields paired with the sub-pattern each
+/// one carries, in declared order.
+///
+/// Both variant spellings — positional `Rectangle(w, h)` and named
+/// `Rectangle { width, height }` — are resolved to this form before anything is
+/// emitted, so the tag test, the nested tests, and the bindings are written
+/// once rather than once per spelling.
+struct VariantPatternPositions {
+    fields: Vec<(String, rsscript_syntax::ast::MatchPattern)>,
+}
+
+/// Whether a pattern can fail to match the value it is applied to.
+///
+/// An irrefutable pattern needs no test, only a binding, so the match edge can
+/// jump straight past it. This is a structural fact about the pattern, not a
+/// type fact: a single-case sum still gets its tag test, because lowering does
+/// not own exhaustiveness.
+fn pattern_is_refutable(pattern: &rsscript_syntax::ast::MatchPattern) -> bool {
+    match pattern {
+        rsscript_syntax::ast::MatchPattern::Binding { .. }
+        | rsscript_syntax::ast::MatchPattern::Wildcard(_) => false,
+        rsscript_syntax::ast::MatchPattern::Literal { .. }
+        | rsscript_syntax::ast::MatchPattern::Variant { .. }
+        | rsscript_syntax::ast::MatchPattern::List { .. } => true,
+        // A tuple has one shape, so a tuple pattern is refutable only where an
+        // element is; every other struct pattern names a case and tests its tag.
+        rsscript_syntax::ast::MatchPattern::Struct { name, fields, .. } => {
+            tuple_struct_arity(name).is_none()
+                || fields
+                    .iter()
+                    .any(|field| field.pattern.as_deref().is_some_and(pattern_is_refutable))
+        }
+    }
+}
+
+/// Whether a pattern introduces any binding, and therefore whether the arm's
+/// block has to project the value it applies to at all.
+fn pattern_binds(pattern: &rsscript_syntax::ast::MatchPattern) -> bool {
+    match pattern {
+        rsscript_syntax::ast::MatchPattern::Binding { .. } => true,
+        rsscript_syntax::ast::MatchPattern::Wildcard(_)
+        | rsscript_syntax::ast::MatchPattern::Literal { .. } => false,
+        rsscript_syntax::ast::MatchPattern::Variant { bindings, .. } => {
+            bindings.iter().any(pattern_binds)
+        }
+        rsscript_syntax::ast::MatchPattern::List {
+            prefix,
+            rest,
+            suffix,
+            ..
+        } => {
+            prefix.iter().any(pattern_binds)
+                || suffix.iter().any(pattern_binds)
+                || matches!(rest, Some(Some(_)))
+        }
+        rsscript_syntax::ast::MatchPattern::Struct { fields, .. } => fields.iter().any(|field| {
+            !field.ignored
+                && (field.binding.is_some() || field.pattern.as_deref().is_some_and(pattern_binds))
+        }),
+    }
 }
 
 /// Re-seat a receiver-call receiver as the call's parameter-zero argument.
