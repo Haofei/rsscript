@@ -3096,7 +3096,23 @@ fn main() -> Unit {
 ### 6.9 `let … else`
 
 `let <pattern> = <expr> else { … }` binds when the pattern matches and runs the
-else block otherwise. The else block must diverge (return, break, continue).
+else block otherwise.
+
+| Rule | Code |
+| --- | --- |
+| the else block must diverge — it may not fall out of its closing brace | `RS0020` |
+
+The binding holds nothing on the else path, so falling out of the block would
+reach the next statement with an unbound binding: a read of uninitialized
+storage that Artifact verification rejects. The checker therefore rejects the
+source instead of letting the program check clean and fail the build.
+
+A block diverges when it ends in `return`, `break`, `continue`, or a `loop` with
+no `break` that targets it. Divergence is judged by the same analysis as
+function fall-through (§4.7, `RS0208`), so the two rules cannot disagree: a
+trailing `if` diverges only when it has an `else` and both arms diverge, and a
+trailing `match` only when every arm does. Closure bodies are not analysed, as
+in §6.12.
 
 **Accepted**
 
@@ -3111,6 +3127,17 @@ fn first(values: read List<Int>) -> Int {
 fn main() -> Unit {
     Output.write(message: Int.to_string(value: first(values: [7])))
     return Unit
+}
+```
+
+**Rejected — `RS0020`**
+
+```rsscript
+fn first(values: read List<Int>) -> Int {
+    let Some(value) = List.first(list: values) else {
+        let fallback = "no value"
+    }
+    return value
 }
 ```
 
@@ -4518,6 +4545,7 @@ explanations).
 | `RS0013` | invalid try operator | §6.10 |
 | `RS0016` | `break`/`continue` outside a loop | §6.3 |
 | `RS0017` | binding read before it is assigned | §6.12 |
+| `RS0020` | `let … else` block does not diverge | §6.9 |
 | `RS0021` | non-exhaustive match | §6.7 |
 | `RS0037` | variant pattern arity mismatch | §6.4 |
 | `RS0209` | control-flow type mismatch (condition, iterable, scrutinee, literal pattern, variant family, match-arm type) | §6.2, §6.3, §6.6, §6.8 |
@@ -4600,7 +4628,8 @@ reads its own source back and fails if a declared code has no explanation, so a
 new code cannot be added without a catalog entry.
 
 Note that the code space has holes: `RS0004`, `RS0006`, `RS0008`–`RS0012`,
-`RS0014`, `RS0019`, `RS0020`, `RS0703`, and `RS0705` are not defined.
+`RS0014`, `RS0703`, and `RS0705` are not defined. (`RS0019` is defined, §1.6;
+`RS0020` was a hole until `let … else` divergence took it, §6.9.)
 
 ---
 

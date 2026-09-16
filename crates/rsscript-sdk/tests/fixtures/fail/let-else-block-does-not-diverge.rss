@@ -1,0 +1,18 @@
+// expect: RS0020
+
+// The `else` block runs when the pattern did not match, so `value` holds
+// nothing after it. Falling out of the block reaches `return value` with an
+// unbound binding, which is a read of uninitialized storage: without RS0020
+// this file checks clean and is then rejected by Artifact verification.
+
+fn first(values: read List<Int>) -> Int {
+    let Some(value) = List.first(list: values) else {
+        let fallback = "no value"
+    }
+    return value
+}
+
+fn main() -> Unit {
+    Output.write(message: String.from_int(value: first(values: read [7])))
+    return Unit
+}

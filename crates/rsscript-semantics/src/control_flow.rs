@@ -364,6 +364,146 @@ fn collect_deferred_let_spans(block: &Block, spans: &mut HashSet<Span>) {
     }
 }
 
+/// `let … else` else blocks that do not diverge (spec §6.9, `RS0020`).
+///
+/// The else block runs exactly when the pattern did not match, so the binding
+/// holds nothing on that path. Falling out of the block reaches the next
+/// statement with an unbound binding, which lowers to a read of uninitialized
+/// storage: without this rule such a program checks clean and is then rejected
+/// by Artifact verification, which is the one failure shape the checker exists
+/// to prevent.
+///
+/// A `let … else` lowers to a two-arm `match` carrying the statement's own span
+/// (`hir/lower/bodies.rs`), so the statement is identified from the *syntax*
+/// tree — exactly as `definite_assignment_diagnostics` does, and for the same
+/// reason — and the divergence question is then asked of the lowered else arm
+/// through `block_may_fall_through`, the analysis RS0208 uses for function
+/// fall-through. The two rules therefore cannot disagree about what diverges.
+///
+/// Closure bodies are not analysed, matching `RS0017`: a closure runs at a time
+/// this walk does not model.
+pub fn let_else_divergence_diagnostics(body: &Block, block: &HirBlock) -> Vec<Diagnostic> {
+    let mut spans = HashSet::new();
+    collect_let_else_spans(body, &mut spans);
+    if spans.is_empty() {
+        return Vec::new();
+    }
+    let mut diagnostics = Vec::new();
+    collect_let_else_divergence(block, &spans, &mut diagnostics);
+    diagnostics
+}
+
+/// Collect the spans of `let … else` statements in one function body.
+fn collect_let_else_spans(block: &Block, spans: &mut HashSet<Span>) {
+    for statement in &block.statements {
+        match statement {
+            Stmt::LetElse(stmt) => {
+                spans.insert(stmt.span.clone());
+                collect_let_else_spans(&stmt.else_body, spans);
+            }
+            Stmt::If(stmt) => {
+                collect_let_else_spans(&stmt.then_body, spans);
+                if let Some(else_body) = &stmt.else_body {
+                    collect_let_else_spans(else_body, spans);
+                }
+            }
+            Stmt::Loop(stmt) => collect_let_else_spans(&stmt.body, spans),
+            Stmt::For(stmt) => collect_let_else_spans(&stmt.body, spans),
+            Stmt::With(stmt) => collect_let_else_spans(&stmt.body, spans),
+            Stmt::TaskGroup(stmt) => collect_let_else_spans(&stmt.body, spans),
+            Stmt::Match(stmt) => {
+                for arm in &stmt.arms {
+                    collect_let_else_spans(&arm.body, spans);
+                }
+            }
+            Stmt::Select(stmt) => {
+                for arm in &stmt.arms {
+                    collect_let_else_spans(&arm.body, spans);
+                }
+            }
+            Stmt::Let(_)
+            | Stmt::Return(_)
+            | Stmt::Assign(_)
+            | Stmt::Expr(_)
+            | Stmt::Break(_)
+            | Stmt::Continue(_)
+            | Stmt::MalformedWith(_)
+            | Stmt::MalformedIf(_)
+            | Stmt::MalformedLoop(_)
+            | Stmt::MalformedFor(_)
+            | Stmt::MalformedMatch(_)
+            | Stmt::Unknown(_) => {}
+        }
+    }
+}
+
+fn collect_let_else_divergence(
+    block: &HirBlock,
+    spans: &HashSet<Span>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for statement in &block.statements {
+        if let HirStmt::Match { span, arms, .. } = statement
+            && spans.contains(span)
+            && let [_bound, otherwise] = arms.as_slice()
+            && block_may_fall_through(&otherwise.body)
+        {
+            diagnostics.push(let_else_must_diverge_diagnostic(
+                otherwise.body.span.clone(),
+            ));
+        }
+        match statement {
+            HirStmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_let_else_divergence(then_body, spans, diagnostics);
+                if let Some(else_body) = else_body {
+                    collect_let_else_divergence(else_body, spans, diagnostics);
+                }
+            }
+            HirStmt::Loop { body, .. } | HirStmt::For { body, .. } | HirStmt::With { body, .. } => {
+                collect_let_else_divergence(body, spans, diagnostics);
+            }
+            HirStmt::Match { arms, .. } => {
+                for arm in arms {
+                    collect_let_else_divergence(&arm.body, spans, diagnostics);
+                }
+            }
+            HirStmt::Select { arms, .. } => {
+                for arm in arms {
+                    collect_let_else_divergence(&arm.body, spans, diagnostics);
+                }
+            }
+            HirStmt::Let { .. }
+            | HirStmt::Return { .. }
+            | HirStmt::Assign { .. }
+            | HirStmt::Expr(_)
+            | HirStmt::Break(_)
+            | HirStmt::Continue(_)
+            | HirStmt::Unknown(_) => {}
+        }
+    }
+}
+
+fn let_else_must_diverge_diagnostic(span: Span) -> Diagnostic {
+    Diagnostic::error(
+        code::LET_ELSE_MUST_DIVERGE,
+        "the `else` block of a `let … else` must diverge.",
+        span,
+        "this `else` block can fall through",
+    )
+    .with_cause(
+        "The `else` block runs when the pattern did not match, so the binding holds no value after it. Falling out of the block would reach the next statement with an unbound binding.",
+    )
+    .with_fix(
+        "diverge_from_let_else",
+        "End the `else` block with `return`, `break`, `continue`, or a `loop` that never breaks.",
+        "manual",
+    )
+}
+
 fn read_before_assignment_diagnostic(name: &str, span: Span) -> Diagnostic {
     Diagnostic::error(
         code::READ_BEFORE_ASSIGNMENT,
@@ -1677,5 +1817,95 @@ mod tests {
         assert_eq!(unknown.code, code::UNKNOWN_FIELD);
         let omitted = omitted_pattern_fields_diagnostic("Record", &span);
         assert_eq!(omitted.code, code::CONTROL_FLOW_TYPE_MISMATCH);
+    }
+
+    fn let_else_codes(source: &str) -> Vec<String> {
+        let program = parse_source("let-else.rss", source);
+        let hir = Hir::from_syntax(&program);
+        let Some(Item::Function(function)) = program
+            .items
+            .iter()
+            .find(|item| matches!(item, Item::Function(function) if function.name == "check"))
+        else {
+            panic!("a `check` function");
+        };
+        let block = hir
+            .function_body("check")
+            .and_then(|body| body.block.as_ref())
+            .expect("function body");
+        let_else_divergence_diagnostics(&function.body, block)
+            .into_iter()
+            .map(|diagnostic| diagnostic.code.clone())
+            .collect()
+    }
+
+    #[test]
+    fn rejects_a_let_else_block_that_falls_through() {
+        assert_eq!(
+            let_else_codes(
+                "fn check(value: Option<Int>) -> Int {\n    let Some(n) = value else {\n        let fallback = 0\n    }\n    return n\n}"
+            ),
+            [code::LET_ELSE_MUST_DIVERGE]
+        );
+        assert_eq!(
+            let_else_codes(
+                "fn check(value: Option<Int>) -> Int {\n    let Some(n) = value else {\n    }\n    return n\n}"
+            ),
+            [code::LET_ELSE_MUST_DIVERGE],
+            "an empty else block falls through too"
+        );
+    }
+
+    /// The same divergence analysis RS0208 uses, so the `if` case needs both
+    /// arms and the `loop` case needs no `break` targeting it.
+    #[test]
+    fn accepts_every_diverging_let_else_block() {
+        for block in [
+            "return 0",
+            "if true { return 0 } else { return 1 }",
+            "match value { Some(m) => { return m } None => { return 0 } }",
+            "loop { let spin = 1 }",
+        ] {
+            assert!(
+                let_else_codes(&format!(
+                    "fn check(value: Option<Int>) -> Int {{\n    let Some(n) = value else {{\n        {block}\n    }}\n    return n\n}}"
+                ))
+                .is_empty(),
+                "`{block}` diverges"
+            );
+        }
+    }
+
+    #[test]
+    fn a_one_armed_if_does_not_diverge() {
+        assert_eq!(
+            let_else_codes(
+                "fn check(value: Option<Int>) -> Int {\n    let Some(n) = value else {\n        if true { return 0 }\n    }\n    return n\n}"
+            ),
+            [code::LET_ELSE_MUST_DIVERGE]
+        );
+    }
+
+    #[test]
+    fn a_loop_that_breaks_does_not_diverge() {
+        assert_eq!(
+            let_else_codes(
+                "fn check(value: Option<Int>) -> Int {\n    let Some(n) = value else {\n        loop { break }\n    }\n    return n\n}"
+            ),
+            [code::LET_ELSE_MUST_DIVERGE]
+        );
+    }
+
+    #[test]
+    fn a_break_or_continue_inside_a_loop_diverges_the_block() {
+        for keyword in ["break", "continue"] {
+            assert!(
+                let_else_codes(&format!(
+                    "fn check(value: Option<Int>) -> Int {{\n    let mut total = 0\n    while total < 1 {{\n        let Some(n) = value else {{\n            {keyword}\n        }}\n        total = total + n\n    }}\n    return total\n}}"
+                ))
+                .is_empty(),
+                "`{keyword}` leaves the else block"
+            );
+        }
     }
 }

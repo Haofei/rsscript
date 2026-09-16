@@ -16,6 +16,7 @@ pub mod code {
     pub const LOOP_CONTROL_OUTSIDE_LOOP: &str = "RS0016";
     pub const READ_BEFORE_ASSIGNMENT: &str = "RS0017";
     pub const UNRESOLVED_IMPORT: &str = "RS0018";
+    pub const LET_ELSE_MUST_DIVERGE: &str = "RS0020";
     pub const NON_EXHAUSTIVE_MATCH: &str = "RS0021";
     pub const ASYNC_CALL_NOT_CONSUMED: &str = "RS0022";
     pub const FD_OUTSIDE_INTERNAL_BOUNDARY: &str = "RS0023";
@@ -445,6 +446,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::UNRESOLVED_IMPORT,
         title: "unresolved import",
         explanation: "`use a.b.name` imports `name` from module `a.b`, so `a.b` must be declared by a `module a.b` header on some file in the compilation unit — the sources being checked or an interface supplied to the check. When it is not, the import binds nothing: name resolution leaves the reference unmangled, and a typo in the path goes unnoticed until the imported name is used, if it is used at all. Core and standard-package interfaces declare no module and are prelude-visible, so their names need no `use` at all.",
+    },
+    DiagnosticExplanation {
+        code: code::LET_ELSE_MUST_DIVERGE,
+        title: "`let … else` block does not diverge",
+        explanation: "The else block of a `let … else` runs exactly when the pattern did not match, so the binding holds nothing on that path. The block must therefore leave the enclosing control flow rather than fall out of its closing brace: end it with `return`, `break`, `continue`, or a `loop` with no `break` that targets it. Falling through would reach the next statement with an unbound binding, which is a read of uninitialized storage — the executable would be rejected by verification, so the checker rejects the source instead. Divergence is judged the same way as function fall-through (RS0208): a trailing `if` diverges only when it has an `else` and both arms diverge, and a `match` only when every arm does.",
     },
     DiagnosticExplanation {
         code: code::NON_EXHAUSTIVE_MATCH,

@@ -1,0 +1,73 @@
+// Every way a `let … else` block may leave its enclosing control flow
+// (spec §6.9, RS0020): `return`, `continue`/`break` inside a loop, a trailing
+// `if` whose arms both diverge, a `match` whose arms all diverge, and a `loop`
+// with no `break` that targets it.
+
+fn returns(values: read List<Int>) -> Int {
+    let Some(value) = List.first(list: values) else {
+        return 0
+    }
+    return value
+}
+
+fn continues(values: read List<Int>) -> Int {
+    let mut total = 0
+    for element in values {
+        let Some(n) = Some(element) else {
+            continue
+        }
+        total = total + n
+    }
+    return total
+}
+
+fn breaks(values: read List<Int>) -> Int {
+    let mut total = 0
+    while total < 1 {
+        let Some(n) = List.first(list: values) else {
+            break
+        }
+        total = total + n
+    }
+    return total
+}
+
+fn branches(values: read List<Int>) -> Int {
+    let Some(value) = List.first(list: values) else {
+        if List.len(list: values) == 0 {
+            return 0
+        } else {
+            return 1
+        }
+    }
+    return value
+}
+
+fn matches(values: read List<Int>) -> Int {
+    let Some(value) = List.first(list: values) else {
+        match List.len(list: values) {
+            0 => { return 0 }
+            _ => { return 1 }
+        }
+    }
+    return value
+}
+
+fn loops_forever(values: read List<Int>) -> Int {
+    let Some(value) = List.first(list: values) else {
+        loop {
+            Output.write(message: "unreachable")
+        }
+    }
+    return value
+}
+
+fn main() -> Unit {
+    Output.write(message: String.from_int(value: returns(values: read [7])))
+    Output.write(message: String.from_int(value: continues(values: read [1, 2])))
+    Output.write(message: String.from_int(value: breaks(values: read [3])))
+    Output.write(message: String.from_int(value: branches(values: read [4])))
+    Output.write(message: String.from_int(value: matches(values: read [5])))
+    Output.write(message: String.from_int(value: loops_forever(values: read [6])))
+    return Unit
+}

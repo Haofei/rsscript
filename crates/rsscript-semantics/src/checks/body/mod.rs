@@ -120,6 +120,12 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
                     &function.body,
                     block,
                 ));
+            analyzer
+                .diagnostics
+                .extend(rsscript_semantics::let_else_divergence_diagnostics(
+                    &function.body,
+                    block,
+                ));
             check_block(
                 analyzer,
                 &local_analysis,
