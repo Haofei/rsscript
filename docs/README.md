@@ -35,8 +35,7 @@ When documents disagree, use this order:
 | [architecture/contracts.toml](architecture/contracts.toml) | Machine-checked public contract identifiers and owning constants |
 | [architecture/runner-platforms.toml](architecture/runner-platforms.toml) | Machine-readable isolation controls and platform limitations |
 | [architecture/experimental-retention.toml](architecture/experimental-retention.toml) | Evidence, retention clocks, and product ownership for surfaces outside Core |
-| [development/DEVELOPMENT.md](development/DEVELOPMENT.md) | Local development and verification |
-| [development/DOCKER.md](development/DOCKER.md) | Containerized development |
+| [development/DEVELOPMENT.md](development/DEVELOPMENT.md) | Development rules, the local verification gate, and the container toolchain |
 | [generated/language-card.md](generated/language-card.md) | Generated keyword, diagnostic, and core-interface quick reference |
 | [generated/language-card.json](generated/language-card.json), [grammar.json](generated/grammar.json), [diagnostic-catalog.json](generated/diagnostic-catalog.json), [core-interfaces.json](generated/core-interfaces.json), [signatures.md](generated/signatures.md) | Machine-readable generated language-reference catalogs and the core signature index |
 | [planning/2026-09-model-failure-modes.md](planning/2026-09-model-failure-modes.md) | Measured model failure classes and the oracle changes they justified |

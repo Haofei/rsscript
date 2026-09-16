@@ -150,3 +150,25 @@ broad quiet test -> inspect failure -> focused loop -> broad quiet test -> full 
 ```
 
 This keeps the evidence strong while avoiding repeated command output.
+
+## Containerized development
+
+A single Docker toolchain image builds and tests the workspace identically on
+macOS, Windows, and Linux. It carries the Rust toolchain, `cargo-nextest`, and
+the C build dependencies; the checkout is bind-mounted at `/work`, so host edits
+take effect immediately. Only Docker with Compose v2 is required locally.
+
+```sh
+docker compose build                                   # first run downloads the toolchain
+docker compose run --rm dev cargo test --workspace     # the broad gate
+docker compose run --rm dev cargo run -p rsscript-cli --bin rss --features execution -- check examples/scripts/basic/hello.rss
+docker compose run --rm dev bash                       # interactive shell
+```
+
+Every command in the testing loop above works unchanged inside the container.
+`target`, the Cargo registry, and Cargo git checkouts live in named volumes so
+compilation persists between runs; `docker compose down -v` resets them. The
+image tracks `rust:1-bookworm`; pin a concrete tag in `Dockerfile` for a fully
+reproducible toolchain. `.devcontainer/devcontainer.json` reuses the same
+service for VS Code and Codespaces, and the image builds natively on `amd64`
+and `arm64`.
