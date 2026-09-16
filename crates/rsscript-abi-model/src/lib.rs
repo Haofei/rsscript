@@ -573,6 +573,14 @@ impl WireCallTypeTable {
                     self.insert(argument)?;
                 }
             }
+            WireType::Function {
+                parameters, result, ..
+            } => {
+                for parameter in parameters {
+                    self.insert(parameter)?;
+                }
+                self.insert(result)?;
+            }
             WireType::Unit
             | WireType::Bool
             | WireType::Int { .. }
@@ -754,6 +762,19 @@ pub enum WireType {
     Handle {
         name: String,
     },
+    /// A first-class function value.
+    ///
+    /// Arity, per-parameter data effects, and the result type are proved facts
+    /// whenever the contract is written down (`noescape Fn(Int) -> Int`), so
+    /// the wire model carries them rather than collapsing a callback to an
+    /// opaque handle. A position the checker could not prove still carries
+    /// [`WireType::UNRESOLVED`] inside, which keeps the whole function type
+    /// unresolved and therefore absent from the typed executable facts.
+    Function {
+        parameters: Vec<WireType>,
+        parameter_effects: Vec<DataEffect>,
+        result: Box<WireType>,
+    },
     Qualified {
         qualifier: WireQualifier,
         value: Box<WireType>,
@@ -798,6 +819,15 @@ impl WireType {
             Self::Option { value } | Self::Qualified { value, .. } => value.is_resolved(),
             Self::Result { ok, error } => ok.is_resolved() && error.is_resolved(),
             Self::Tuple { elements } => elements.iter().all(Self::is_resolved),
+            Self::Function {
+                parameters,
+                parameter_effects,
+                result,
+            } => {
+                parameters.len() == parameter_effects.len()
+                    && parameters.iter().all(Self::is_resolved)
+                    && result.is_resolved()
+            }
             Self::Unit
             | Self::Bool
             | Self::Int { .. }
@@ -838,6 +868,9 @@ impl WireType {
             "Char" => return Self::Char,
             "Bytes" => return Self::Bytes,
             _ => {}
+        }
+        if let Some(parsed) = Self::parse_function(source) {
+            return parsed;
         }
         if source.starts_with('(') && source.ends_with(')') {
             return Self::Tuple {
@@ -889,6 +922,33 @@ impl WireType {
         }
     }
 
+    /// Parse the canonical `Fn(...) -> T` spelling of a first-class function
+    /// type, including per-parameter effect prefixes (`Fn(mut List<Int>)`).
+    /// An omitted result reads as `Unit`, matching the source language.
+    fn parse_function(source: &str) -> Option<Self> {
+        let rest = source.strip_prefix("Fn(")?;
+        let close = matching_paren(rest)?;
+        let (parameter_text, tail) = rest.split_at(close);
+        let tail = tail[1..].trim();
+        let result = if tail.is_empty() {
+            Self::Unit
+        } else {
+            Self::parse(tail.strip_prefix("->")?)
+        };
+        let mut parameters = Vec::new();
+        let mut parameter_effects = Vec::new();
+        for parameter in split_type_arguments(parameter_text) {
+            let (effect, parameter) = DataEffect::split_prefix(parameter);
+            parameters.push(Self::parse(parameter));
+            parameter_effects.push(effect);
+        }
+        Some(Self::Function {
+            parameters,
+            parameter_effects,
+            result: Box::new(result),
+        })
+    }
+
     fn encode_canonical(&self, output: &mut Vec<u8>) {
         let encoded = serde_json::to_vec(self).expect("WireType serialization cannot fail");
         output.extend_from_slice(&(encoded.len() as u64).to_be_bytes());
@@ -906,6 +966,22 @@ impl From<String> for WireType {
     fn from(value: String) -> Self {
         Self::parse(&value)
     }
+}
+
+/// Byte offset of the `)` that closes a parameter list opened just before
+/// `source`, skipping nested brackets.
+fn matching_paren(source: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    for (index, character) in source.char_indices() {
+        match character {
+            '(' | '<' => depth += 1,
+            '>' => depth = depth.saturating_sub(1),
+            ')' if depth == 0 => return Some(index),
+            ')' => depth -= 1,
+            _ => {}
+        }
+    }
+    None
 }
 
 fn split_generic(source: &str) -> (&str, Option<&str>) {
@@ -975,12 +1051,36 @@ impl fmt::Display for ExternalSymbol {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InvalidExternalSymbol;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DataEffect {
     Read,
     Mut,
     Take,
+}
+
+impl DataEffect {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Mut => "mut",
+            Self::Take => "take",
+        }
+    }
+
+    /// Split a leading effect keyword off a type spelling. An unannotated
+    /// parameter is `read`, which is also how the checker binds it.
+    fn split_prefix(source: &str) -> (Self, &str) {
+        for effect in [Self::Read, Self::Mut, Self::Take] {
+            if let Some(rest) = source
+                .strip_prefix(effect.as_str())
+                .and_then(|rest| rest.strip_prefix(' '))
+            {
+                return (effect, rest.trim_start());
+            }
+        }
+        (Self::Read, source)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

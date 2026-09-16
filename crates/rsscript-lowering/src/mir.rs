@@ -1307,6 +1307,7 @@ fn resource_type_name_from_wire(wire: &WireType) -> Option<String> {
         | WireType::Map { .. }
         | WireType::Option { .. }
         | WireType::Result { .. }
+        | WireType::Function { .. }
         | WireType::Tuple { .. } => None,
     }
 }

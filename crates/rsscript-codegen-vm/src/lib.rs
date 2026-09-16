@@ -1127,6 +1127,7 @@ fn wire_runtime_type_name(ty: &rsscript_abi_model::WireType) -> Option<String> {
         | rsscript_abi_model::WireType::Map { .. }
         | rsscript_abi_model::WireType::Option { .. }
         | rsscript_abi_model::WireType::Result { .. }
+        | rsscript_abi_model::WireType::Function { .. }
         | rsscript_abi_model::WireType::Tuple { .. } => None,
     }
 }

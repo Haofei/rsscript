@@ -882,6 +882,14 @@ fn wire_type_contains(ty: &WireType, needle: &WireType) -> bool {
         WireType::Named { arguments, .. } => arguments
             .iter()
             .any(|argument| wire_type_contains(argument, needle)),
+        WireType::Function {
+            parameters, result, ..
+        } => {
+            parameters
+                .iter()
+                .any(|parameter| wire_type_contains(parameter, needle))
+                || wire_type_contains(result, needle)
+        }
         WireType::Qualified { value, .. } => wire_type_contains(value, needle),
         WireType::Unit
         | WireType::Bool
@@ -968,6 +976,23 @@ fn unify_generic_wire_type(
             left.iter()
                 .zip(right)
                 .all(|(left, right)| unify_generic_wire_type(left, right, substitutions))
+        }
+        (
+            WireType::Function {
+                parameters: left,
+                parameter_effects: left_effects,
+                result: left_result,
+            },
+            WireType::Function {
+                parameters: right,
+                parameter_effects: right_effects,
+                result: right_result,
+            },
+        ) if left.len() == right.len() && left_effects == right_effects => {
+            left.iter()
+                .zip(right)
+                .all(|(left, right)| unify_generic_wire_type(left, right, substitutions))
+                && unify_generic_wire_type(left_result, right_result, substitutions)
         }
         (
             WireType::Qualified {

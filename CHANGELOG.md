@@ -15,6 +15,11 @@ track migrations without confusing crate versions with wire versions.
 
 - `rsscript.bytecode.v1` is the sole emitted and executable bytecode contract.
 - Artifact admission now has an explicit origin-verification extension point.
+- The canonical `WireType` model gains a `Function` form carrying a callback's
+  arity, per-parameter data effects, and result type, so a user function with a
+  `noescape Fn(...)` parameter is an ordinary ABI position that builds, verifies,
+  and runs (ADR 0234). The addition is backward compatible: the new `"function"`
+  tag appears only in artifacts that use a function type.
 
 ### Provider ABI
 

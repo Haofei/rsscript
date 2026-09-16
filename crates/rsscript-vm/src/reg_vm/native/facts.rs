@@ -418,6 +418,9 @@ fn typed_storage_type(ty: &rsscript_bytecode::TypedFactTypeV1) -> Option<Verifie
             | WireType::Result { .. }
             | WireType::Tuple { .. }
             | WireType::Named { .. }
+            // A closure value is `VmValue::Closure`, a reference-counted heap
+            // value like any other non-scalar.
+            | WireType::Function { .. }
             | WireType::Resource { .. }
             | WireType::Handle { .. } => VerifiedStorageType::Handle,
             WireType::Qualified { value, .. } => wire_storage_type(value),

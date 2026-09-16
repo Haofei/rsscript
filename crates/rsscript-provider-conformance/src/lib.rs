@@ -174,9 +174,12 @@ fn placeholder_wire_value(
         WireType::Tuple { elements } => WireValue::Tuple {
             values: elements.iter().map(placeholder_wire_value).collect(),
         },
-        WireType::Option { .. } | WireType::Result { .. } | WireType::Named { .. } => {
-            WireValue::Unit
-        }
+        // A Provider interface cannot declare an RSScript function value, so
+        // there is no placeholder to build for one beyond the unit value.
+        WireType::Function { .. }
+        | WireType::Option { .. }
+        | WireType::Result { .. }
+        | WireType::Named { .. } => WireValue::Unit,
         WireType::Resource { .. } | WireType::Handle { .. } => WireValue::Unit,
     }
 }

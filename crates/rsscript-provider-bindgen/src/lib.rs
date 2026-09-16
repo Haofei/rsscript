@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use rsscript_abi_model::{
-    ExternalSymbol, FunctionSignature, WireQualifier, WireRecordLayout, WireType,
+    DataEffect, ExternalSymbol, FunctionSignature, WireQualifier, WireRecordLayout, WireType,
 };
 use rsscript_semantics::{
     InterfaceDescriptorError, InterfaceDescriptorResourceV1, InterfaceDescriptorSumV1,
@@ -347,9 +347,13 @@ fn embedded_named_types(ty: &WireType, nodes: &[WireType], output: &mut Vec<usiz
                 embedded_named_types(element, nodes, output);
             }
         }
+        // A function value is opaque to generated Rust, and the types it
+        // mentions live behind the callable rather than inside the enclosing
+        // record, so it cannot make that record infinite either.
+        WireType::Function { .. }
         // Generated Rust maps/lists are `Vec`, so their elements are already
         // behind an allocation and cannot make the enclosing type infinite.
-        WireType::List { .. }
+        | WireType::List { .. }
         | WireType::Map { .. }
         | WireType::Unit
         | WireType::Bool
@@ -467,6 +471,11 @@ fn render_rust_type(
             ),
         },
         WireType::Qualified { value, .. } => render_rust_type(value, resources, records, sums),
+        // Provider interfaces exchange data, not RSScript callables. A
+        // function type cannot be declared in a `.rssi`, so generated Rust
+        // falls back to the opaque wire value rather than inventing a closure
+        // type the host could not call.
+        WireType::Function { .. } => "rsscript_abi_model::WireValue".into(),
         WireType::Named {
             name, arguments, ..
         } if arguments.is_empty() => record_wrapper_for(ty, records)
@@ -734,6 +743,23 @@ fn wire_type_source(ty: &WireType) -> String {
             }
         }
         WireType::Resource { name } | WireType::Handle { name } => name.clone(),
+        WireType::Function {
+            parameters,
+            parameter_effects,
+            result,
+        } => format!(
+            "Fn({}) -> {}",
+            parameters
+                .iter()
+                .enumerate()
+                .map(|(index, parameter)| match parameter_effects.get(index) {
+                    Some(DataEffect::Read) | None => wire_type_source(parameter),
+                    Some(effect) => format!("{} {}", effect.as_str(), wire_type_source(parameter)),
+                })
+                .collect::<Vec<_>>()
+                .join(", "),
+            wire_type_source(result)
+        ),
         WireType::Qualified { qualifier, value } => format!(
             "{} {}",
             match qualifier {
@@ -776,6 +802,24 @@ fn render_wire_type(ty: &WireType) -> String {
             "rsscript_abi_model::WireType::Result {{ ok: Box::new({}), error: Box::new({}) }}",
             render_wire_type(ok),
             render_wire_type(error)
+        ),
+        WireType::Function {
+            parameters,
+            parameter_effects,
+            result,
+        } => format!(
+            "rsscript_abi_model::WireType::Function {{ parameters: vec![{}], parameter_effects: vec![{}], result: Box::new({}) }}",
+            parameters
+                .iter()
+                .map(render_wire_type)
+                .collect::<Vec<_>>()
+                .join(", "),
+            parameter_effects
+                .iter()
+                .map(|effect| format!("rsscript_abi_model::DataEffect::{effect:?}"))
+                .collect::<Vec<_>>()
+                .join(", "),
+            render_wire_type(result)
         ),
         WireType::Tuple { elements } => format!(
             "rsscript_abi_model::WireType::Tuple {{ elements: vec![{}] }}",

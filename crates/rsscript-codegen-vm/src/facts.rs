@@ -762,6 +762,18 @@ fn substitute_wire_type(ty: &WireType, substitutions: &[(WireType, WireType)]) -
                 .map(|element| substitute_wire_type(element, substitutions))
                 .collect(),
         },
+        WireType::Function {
+            parameters,
+            parameter_effects,
+            result,
+        } => WireType::Function {
+            parameters: parameters
+                .iter()
+                .map(|parameter| substitute_wire_type(parameter, substitutions))
+                .collect(),
+            parameter_effects: parameter_effects.clone(),
+            result: Box::new(substitute_wire_type(result, substitutions)),
+        },
         WireType::Named {
             package,
             name,
@@ -838,6 +850,26 @@ pub(super) fn legacy_signature_type(ty: &rsscript_abi_model::WireType) -> String
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("({elements})")
+        }
+        WireType::Function {
+            parameters,
+            parameter_effects,
+            result,
+        } => {
+            let parameters = parameters
+                .iter()
+                .enumerate()
+                .map(|(index, parameter)| match parameter_effects.get(index) {
+                    Some(rsscript_abi_model::DataEffect::Read) | None => {
+                        legacy_signature_type(parameter)
+                    }
+                    Some(effect) => {
+                        format!("{} {}", effect.as_str(), legacy_signature_type(parameter))
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("Fn({parameters}) -> {}", legacy_signature_type(result))
         }
         WireType::Named {
             package,
