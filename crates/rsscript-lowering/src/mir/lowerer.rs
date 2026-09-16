@@ -237,6 +237,39 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 });
                 self.lower_assignment_target(base, base_value)
             }
+            // `xs[i] = value` is the source spelling of the same in-place list
+            // update `List.set(list: mut xs, index: i, value: value)` performs,
+            // so it lowers to the one `ListSet` operation rather than a second
+            // MIR place form with its own bounds contract. An out-of-range
+            // index therefore raises the interpreter's existing list-index
+            // runtime error instead of silently rebuilding the list. The
+            // checker already restricts index assignment to `List` bases
+            // (`deferred_index_assignment_diagnostic`); any other base type
+            // never reaches here.
+            checked::HirExpr::Index {
+                base,
+                index,
+                base_type,
+                ..
+            } if base_type
+                .as_ref()
+                .is_some_and(|ty| ty.root_name() == Some("List")) =>
+            {
+                let list = self.lower_mutable_place(base)?;
+                let index = self.lower_expression(index)?;
+                let destination = self.value();
+                self.emit(MirInstruction::ListSet {
+                    destination,
+                    list,
+                    index,
+                    value,
+                });
+                self.emit(MirInstruction::Discard { value: destination });
+                Ok(())
+            }
+            checked::HirExpr::Index { .. } => {
+                self.unsupported("non-list checked HIR index assignment")
+            }
             _ => self.unsupported("non-place checked HIR assignment"),
         }
     }

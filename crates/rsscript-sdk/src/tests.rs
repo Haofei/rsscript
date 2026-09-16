@@ -2333,3 +2333,87 @@ fn main() -> Int {
         "reading a capture is not a write"
     );
 }
+
+/// `xs[i] = value` reaches the typed MIR control-flow subset.
+///
+/// Index assignment is the source spelling of `List.set`, so it lowers to the
+/// single `ListSet` operation rather than to a second MIR place form. That
+/// keeps every path a source assignment can name — a bare element, a struct
+/// field behind an element, an element of a nested list, and an element of a
+/// list held in a struct field — on one in-place update whose bounds contract
+/// is the interpreter's existing `List.set` runtime error.
+#[test]
+fn list_index_assignment_lowers_and_executes() {
+    const SOURCE: &str = r#"
+struct Account derives(Clone) {
+    balance: Int
+}
+
+struct Ledger derives(Clone) {
+    entries: List<Int>
+}
+
+fn main() -> Int {
+    let mut xs: List<Int> = [1, 2, 3]
+    xs[1] = 20
+
+    let mut accounts: List<Account> = [Account(balance: 1), Account(balance: 2)]
+    accounts[1].balance = 7
+
+    let mut grid: List<List<Int>> = [[1, 2], [3, 4]]
+    grid[0][1] = 9
+
+    let mut ledger = Ledger(entries: [5, 6])
+    ledger.entries[0] = 50
+
+    let inner = List.get(list: grid, index: 0)
+    return List.get(list: xs, index: 1)
+        + List.get(list: accounts, index: 1).balance
+        + List.get(list: inner, index: 1)
+        + List.get(list: ledger.entries, index: 0)
+}
+"#;
+
+    let built = Compiler
+        .compile("index-assignment.rss", SOURCE)
+        .expect("index assignment compiles");
+    let admitted = admitted(built);
+    let report = Runtime::default()
+        .link(&admitted)
+        .expect("link index assignment program")
+        .execute(ExecutionRequest::default());
+
+    assert_eq!(report.termination_reason(), TerminationReason::Completed);
+    assert_eq!(
+        report.value(),
+        Some("86"),
+        "each assigned element is observable through the list it was written to"
+    );
+}
+
+/// An out-of-range index assignment raises the interpreter's existing list
+/// bounds error rather than quietly rebuilding or extending the list.
+#[test]
+fn out_of_range_index_assignment_raises_the_list_bounds_error() {
+    let built = Compiler
+        .compile(
+            "index-assignment-bounds.rss",
+            "fn main() -> Int { let mut xs: List<Int> = [1, 2, 3]\n    xs[5] = 9\n    return List.get(list: xs, index: 0) }",
+        )
+        .expect("an out-of-range index is a runtime fact, not a check failure");
+    let admitted = admitted(built);
+    let report = Runtime::default()
+        .link(&admitted)
+        .expect("link index assignment bounds program")
+        .execute(ExecutionRequest::default());
+
+    assert_eq!(report.termination_reason(), TerminationReason::ScriptError);
+    let ExecutionOutcome::Failed(error) = report.outcome() else {
+        panic!("an out-of-range index assignment must fail the run");
+    };
+    assert!(
+        error.message.contains("List.set index 5 out of bounds"),
+        "the failure must be the existing `List.set` bounds error, got {}",
+        error.message
+    );
+}

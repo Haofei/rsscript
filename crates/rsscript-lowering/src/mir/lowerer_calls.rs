@@ -156,18 +156,18 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
         self.lower_mutable_place(value)
     }
 
-    /// A checked `mut` argument is usually a local place. Struct fields are
-    /// also valid mutable collection locations: materialize the field value in
-    /// a compiler-private place so the existing collection MIR instructions
-    /// retain their explicit mutation operand while the runtime continues to
-    /// mutate the shared collection identity.
+    /// A checked `mut` argument is usually a local place. Struct fields and
+    /// list elements are also valid mutable collection locations: materialize
+    /// the projected value in a compiler-private place so the existing
+    /// collection MIR instructions retain their explicit mutation operand
+    /// while the runtime continues to mutate the shared collection identity.
     pub(super) fn lower_mutable_place(
         &mut self,
         value: &checked::HirExpr,
     ) -> Result<PlaceId, MirLoweringError> {
         match value {
             checked::HirExpr::Ident { name, .. } => self.lookup_place(name),
-            checked::HirExpr::Field { .. } => {
+            checked::HirExpr::Field { .. } | checked::HirExpr::Index { .. } => {
                 let source = self.lower_expression(value)?;
                 let place = self.place(&format!("$mir_mut_field_{}", self.place_names.len()));
                 self.emit(MirInstruction::WritePlace {

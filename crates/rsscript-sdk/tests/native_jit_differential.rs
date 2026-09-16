@@ -93,6 +93,13 @@ const CASES: &[(&str, &str)] = &[
         "native-list-write.rss",
         include_str!("../../../benchmarks/vm-jit/kernels/native_list_write_loop.rss"),
     ),
+    // The `xs[i] = value` spelling of `List.set`: index assignment lowers to
+    // the same `ListSet` operation the namespaced call does, so generated code
+    // must reproduce the interpreter's element writes and bounds behaviour.
+    (
+        "index-assignment-loop.rss",
+        "fn hot(limit: Int, values: mut List<Int>) -> Int { let mut i = 0; let mut total = 0; while i < limit { let slot = i % 8; values[slot] = i; total = total + values[slot]; i = i + 1 }; return total } fn main() -> Int { let mut values: List<Int> = [0, 0, 0, 0, 0, 0, 0, 0]; return hot(limit: 20000, values: mut values) }",
+    ),
     (
         "native-map-match.rss",
         include_str!("../../../benchmarks/vm-jit/kernels/native_map_get_match_loop.rss"),

@@ -30,11 +30,6 @@ use rsscript_semantics::{FrontendInputSnapshot, standard_package_interfaces};
 /// hidden. Removing an entry is the acceptance test for closing its gap.
 const CANNOT_BUILD_YET: &[(&str, &str)] = &[
     (
-        "assign-field-and-index.rss",
-        "`non-place checked HIR assignment`: assigning through an index \
-         (`accounts[i].balance = ...`) has no MIR place form.",
-    ),
-    (
         "core-receiver-call.rss",
         "`List.push with invalid checked call shape`: the receiver-call \
          spelling of a mutating core list method is not lowered.",
