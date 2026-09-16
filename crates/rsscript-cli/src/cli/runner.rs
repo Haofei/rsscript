@@ -24,16 +24,14 @@ use rsscript_sdk::experimental::native_jit::NativeJitOptions;
 use rsscript_sdk::{
     artifact::{
         ARTIFACT_BUNDLE_MAGIC, AdmissionError, ArtifactAdmission, ArtifactAdmissionPolicy,
-        ArtifactBundle, ArtifactVerifier, VerifiedArtifact,
+        ArtifactBundle, ArtifactVerifier, BuiltArtifact, VerifiedArtifact,
     },
-    compile::Compiler,
     operation::MonotonicDeadline,
-    project::ProjectCompiler,
     provider_api::ProviderRegistry,
     runtime::{ExecutionRequest, RunLimits, Runtime, TracePolicy},
 };
 
-use super::{is_package_directory, read_cli_source};
+use super::artifact::{PREBUILT_INTERFACE_ERROR, build_input};
 
 const RUNNER_STDERR_LIMIT: usize = 1024 * 1024;
 /// Rust process/runtime overhead reserved in addition to the VM's explicitly
@@ -44,11 +42,12 @@ const RUNNER_FILESYSTEM_ROOT_ENV: &str = "RSSCRIPT_RUNNER_FILESYSTEM_ROOT";
 
 pub(crate) fn run_isolated(
     path: &str,
+    interfaces: &[&str],
     program_args: &[&str],
     json: bool,
     profile: RunnerProfileV1,
 ) -> ExitCode {
-    let bundle = match build_bundle(path) {
+    let bundle = match build_bundle(path, interfaces) {
         Ok(bundle) => bundle,
         Err(error) => {
             eprintln!("{error}");
@@ -81,11 +80,12 @@ pub(crate) fn run_isolated(
 
 pub(crate) fn run_trusted_in_process(
     path: &str,
+    interfaces: &[&str],
     program_args: &[&str],
     json: bool,
     native: bool,
 ) -> ExitCode {
-    let bundle = match build_bundle(path) {
+    let bundle = match build_bundle(path, interfaces) {
         Ok(bundle) => bundle,
         Err(error) => {
             eprintln!("{error}");
@@ -185,26 +185,24 @@ fn take_engine_telemetry_for_the_runner_contract(
     }
 }
 
-fn build_bundle(path: &str) -> Result<ArtifactBundle, String> {
+/// Turn one `rss run` input into an Artifact Bundle.
+///
+/// Source and package inputs go through the same `build_input` the `rss build`
+/// and `rss inspect` paths use, so a file that `rss check` accepts is a file
+/// `rss run` can compile.
+fn build_bundle(path: &str, interfaces: &[&str]) -> Result<ArtifactBundle, String> {
     if Path::new(path).is_file() {
         let bytes = fs::read(path).map_err(|error| format!("cannot read {path}: {error}"))?;
         if bytes.starts_with(ARTIFACT_BUNDLE_MAGIC) {
+            if !interfaces.is_empty() {
+                return Err(PREBUILT_INTERFACE_ERROR.to_string());
+            }
             return ArtifactBundle::from_bytes(&bytes).map_err(|error| error.to_string());
         }
     }
-    let compiler = Compiler;
-    if is_package_directory(path) {
-        ProjectCompiler::new()
-            .compile_package(Path::new(path))
-            .map(|built| built.into_bundle())
-            .map_err(|error| error.to_string())
-    } else {
-        let source = read_cli_source(Path::new(path))?;
-        compiler
-            .compile(path, &source)
-            .map(|built| built.into_bundle())
-            .map_err(|error| error.to_string())
-    }
+    build_input(path, interfaces)
+        .map(BuiltArtifact::into_bundle)
+        .map_err(|error| error.to_string())
 }
 
 fn invoke_runner(
@@ -754,7 +752,7 @@ fn finish_report(report: ExecutionReportV2, expected_module_digest: &str, json: 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rsscript_sdk::compile::FrontendInputSnapshot;
+    use rsscript_sdk::compile::{Compiler, FrontendInputSnapshot};
     use std::io::Cursor;
 
     fn runner_fault_bundle() -> ArtifactBundle {

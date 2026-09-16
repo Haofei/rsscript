@@ -11,6 +11,7 @@ mod check;
 mod fix;
 mod fmt;
 mod generate;
+mod inputs;
 #[cfg(feature = "execution")]
 mod profile;
 #[cfg(feature = "execution")]
@@ -163,7 +164,7 @@ pub(crate) fn is_package_directory(path: &str) -> bool {
 }
 
 const USAGE: &str = r#"usage:
-  rss build [--out <artifact.rssbundle>] [--analysis-out <analysis.json>] <file-or-package-directory>
+  rss build [--out <artifact.rssbundle>] [--analysis-out <analysis.json>] [--interface <file.rssi> ...] <file-or-package-directory>
   rss diff [--json|--markdown] <old-source-package-or-bundle> <new-source-package-or-bundle>
   rss verify <artifact.rssbundle>
   rss check [--json] [--lint] [--core|--no-core] [--interface <file.rssi> ...] <file.rss>
@@ -173,11 +174,11 @@ const USAGE: &str = r#"usage:
   rss fmt <file.rss>  # writes formatted source to stdout
   rss generate prefix-status [--json] [--no-core] [--interface <file.rssi> ...] <file.rss>
   rss generate continuations [--json] [--no-core] [--interface <file.rssi> ...] [--max-names <N>] <file.rss>
-  rss inspect <imports|bytecode> [--json] <file-or-artifact-or-package>
-  rss inspect <analysis|resources|async|call-graph> [--json] <package-directory>
+  rss inspect <imports|bytecode> [--json] [--interface <file.rssi> ...] <file-or-artifact-or-package>
+  rss inspect <analysis|resources|async|call-graph> [--json] [--interface <file.rssi> ...] <package-directory>
   rss profile [--json] [profile-name]  # inspect host-selected runner presets
-  rss run [--json] [--profile <profile-name>] <file-package-or-bundle> [-- <args>...]  # isolated runner + verified VM
-  rss run --trusted-in-process [--native] [--json] <file-package-or-bundle> [-- <args>...]"#;
+  rss run [--json] [--profile <profile-name>] [--interface <file.rssi> ...] <file-package-or-bundle> [-- <args>...]  # isolated runner + verified VM
+  rss run --trusted-in-process [--native] [--json] [--interface <file.rssi> ...] <file-package-or-bundle> [-- <args>...]"#;
 
 fn usage() -> String {
     USAGE.to_owned()

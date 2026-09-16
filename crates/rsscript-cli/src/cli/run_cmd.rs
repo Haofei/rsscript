@@ -15,6 +15,7 @@ struct RunOptions<'a> {
     native: bool,
     profile: RunnerProfileV1,
     path: Option<&'a str>,
+    interfaces: Vec<&'a str>,
     program_args: Vec<&'a str>,
 }
 
@@ -24,6 +25,7 @@ fn parse_run_args(args: &[String]) -> Result<RunOptions<'_>, String> {
     let mut native = false;
     let mut profile = RunnerProfileV1::default();
     let mut path = None;
+    let mut interfaces = Vec::new();
     let mut program_args = Vec::new();
     let mut index = 0;
 
@@ -42,6 +44,9 @@ fn parse_run_args(args: &[String]) -> Result<RunOptions<'_>, String> {
             let name = required_flag_value(args, index, "--profile")?;
             profile = RunnerProfileV1::parse_name(name)
                 .ok_or_else(|| format!("unknown runner profile `{name}`."))?;
+        } else if arg == "--interface" && path.is_none() {
+            index += 1;
+            interfaces.push(required_flag_value(args, index, "--interface")?);
         } else if arg.starts_with("--") && path.is_none() {
             return Err(format!("unknown argument `{arg}`."));
         } else if path.is_none() {
@@ -58,6 +63,7 @@ fn parse_run_args(args: &[String]) -> Result<RunOptions<'_>, String> {
         native,
         profile,
         path,
+        interfaces,
         program_args,
     };
     validate_run_options(&options)?;
@@ -96,12 +102,19 @@ pub(crate) fn run_input(args: &[String]) -> ExitCode {
     if options.trusted_in_process {
         return super::runner::run_trusted_in_process(
             path,
+            &options.interfaces,
             &options.program_args,
             options.json,
             options.native,
         );
     }
-    super::runner::run_isolated(path, &options.program_args, options.json, options.profile)
+    super::runner::run_isolated(
+        path,
+        &options.interfaces,
+        &options.program_args,
+        options.json,
+        options.profile,
+    )
 }
 
 #[cfg(test)]

@@ -726,8 +726,10 @@ fn session_owns_the_core_interface_policy() {
     assert!(semantics.contains("SessionInterfacePolicy::WithoutCore"));
     assert!(semantics.contains("SessionInterfacePolicy::WithStandardPackages"));
 
-    let cli_check = read(&root.join("crates/rsscript-cli/src/cli/check.rs"));
-    assert!(cli_check.contains("CompilationSession::without_core()"));
+    // The CLI owns one input-assembly module; `--no-core` is a mode of that
+    // assembly rather than a session each command constructs for itself.
+    let cli_inputs = read(&root.join("crates/rsscript-cli/src/cli/inputs.rs"));
+    assert!(cli_inputs.contains("CompilationSession::without_core()"));
 
     let sdk = sdk_source(&root);
     assert!(sdk.contains("CompilationSession::default()"));
@@ -756,9 +758,11 @@ fn production_frontend_callers_share_the_compilation_session_boundary() {
     let compiler_output = read(&root.join("crates/rsscript-compiler/src/compiler_output.rs"));
     let sdk = sdk_source(&root);
     let project = sdk_source(&root);
+    let cli_inputs = read(&root.join("crates/rsscript-cli/src/cli/inputs.rs"));
     let cli_check = read(&root.join("crates/rsscript-cli/src/cli/check.rs"));
     let cli_fmt = read(&root.join("crates/rsscript-cli/src/cli/fmt.rs"));
     let cli_fix = read(&root.join("crates/rsscript-cli/src/cli/fix.rs"));
+    let cli_runner = read(&root.join("crates/rsscript-cli/src/cli/runner.rs"));
     let cli_artifact = read(&root.join("crates/rsscript-cli/src/cli/artifact.rs"));
 
     for required in [
@@ -779,12 +783,39 @@ fn production_frontend_callers_share_the_compilation_session_boundary() {
             "ordinary SDK analysis must use the shared session boundary: {required}"
         );
     }
-    for (name, source) in [("check", cli_check), ("fmt", cli_fmt), ("fix", cli_fix)] {
+    assert!(
+        cli_inputs.contains("CompilationSession"),
+        "the CLI's shared input assembly must use CompilationSession rather than construct a frontend analyzer"
+    );
+    assert!(
+        cli_fmt.contains("CompilationSession"),
+        "CLI fmt must use CompilationSession rather than construct a frontend analyzer"
+    );
+    // Every command that compiles or checks a single file reads it through the
+    // one shared assembly. `check` attaching the standard package interfaces
+    // while `build`/`run`/`inspect` attached none is what this guards against.
+    for (name, source) in [
+        ("check", &cli_check),
+        ("fix", &cli_fix),
+        ("artifact", &cli_artifact),
+    ] {
         assert!(
-            source.contains("CompilationSession"),
-            "CLI {name} must use CompilationSession rather than construct a frontend analyzer"
+            source.contains("SourceInput"),
+            "CLI {name} must read its single-file input through the shared assembly"
+        );
+        assert!(
+            !source.contains("CompilationSession"),
+            "CLI {name} must not construct a second frontend session"
+        );
+        assert!(
+            !source.contains("standard_package_interfaces"),
+            "CLI {name} must not assemble the standard package prelude for itself"
         );
     }
+    assert!(
+        cli_runner.contains("build_input(path, interfaces)"),
+        "CLI run must compile through the same build input as `rss build`"
+    );
     assert!(
         cli_artifact.contains("ProjectCompiler::new()")
             && cli_artifact.contains(".compile_package(Path::new(input))"),

@@ -600,6 +600,210 @@ fn build_writes_a_bundle_that_verify_accepts() {
     );
 }
 
+/// A program that uses the standard package interfaces (`Channel`, `Sender`,
+/// `Receiver`, `Output`) and names no host interface of its own.
+#[cfg(feature = "execution")]
+const CHANNEL_PROGRAM: &str = r#"async fn produce(sender: Sender<Int>) -> Result<Unit, ChannelError> {
+    local first = 10
+    await Sender.send(sender, value: take first)?
+    return Ok(Unit)
+}
+
+async fn consume(receiver: Receiver<Int>) -> Result<Int, ChannelError> {
+    let a = await Receiver.recv(receiver)?
+    return Ok(2)
+}
+
+fn main() -> Result<Unit, ChannelError> {
+    let mut channel = Channel.bounded<Int>(capacity: 4)?
+    let sender = Channel.sender(channel)
+    let receiver = Channel.receiver(channel: mut channel)?
+
+    task_group {
+        async let producer = produce(sender)
+        async let consumer = consume(receiver)
+
+        await producer?
+        let count = await consumer?
+    }
+
+    Output.write(message: "channel pipeline ok")
+    return Ok(Unit)
+}
+"#;
+
+/// `rss check` attached the language's standard package interfaces while
+/// `rss build`/`rss run` attached none, so a channel program checked clean and
+/// then failed to build with sixteen diagnostics. Every command now assembles
+/// its interfaces in one place, so this needs no `--interface` anywhere.
+#[cfg(feature = "execution")]
+#[test]
+fn check_build_and_run_share_one_standard_package_interface_assembly() {
+    let bin = env!("CARGO_BIN_EXE_rss");
+    let temp = tempfile::tempdir().expect("temp dir");
+    let source = temp.path().join("main.rss");
+    let bundle = temp.path().join("main.rssbundle");
+    fs::write(&source, CHANNEL_PROGRAM).expect("write fixture");
+
+    let checked = Command::new(bin)
+        .arg("check")
+        .arg(&source)
+        .output()
+        .expect("rss check should run");
+    assert!(
+        checked.status.success(),
+        "check: {}",
+        String::from_utf8_lossy(&checked.stdout)
+    );
+
+    let built = Command::new(bin)
+        .args(["build", "--out", bundle.to_str().unwrap()])
+        .arg(&source)
+        .output()
+        .expect("rss build should run");
+    assert!(
+        built.status.success(),
+        "build: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    assert!(bundle.exists(), "a successful build must write its bundle");
+
+    let ran = Command::new(bin)
+        .args(["run", "--trusted-in-process", "--json"])
+        .arg(&source)
+        .output()
+        .expect("rss run should run");
+    assert!(
+        ran.status.success(),
+        "run: {}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+
+    let inspected = Command::new(bin)
+        .args(["inspect", "imports"])
+        .arg(&source)
+        .output()
+        .expect("rss inspect should run");
+    assert!(
+        inspected.status.success(),
+        "inspect: {}",
+        String::from_utf8_lossy(&inspected.stderr)
+    );
+}
+
+/// The other side of the shared assembly: a host interface is *not* implied by
+/// any command. All four refuse the program without `--interface` and all four
+/// get past the frontend with it.
+#[cfg(feature = "execution")]
+#[test]
+fn a_host_interface_is_required_by_check_build_run_and_inspect() {
+    let bin = env!("CARGO_BIN_EXE_rss");
+    let temp = tempfile::tempdir().expect("temp dir");
+    let source = temp.path().join("main.rss");
+    let interface = temp.path().join("host.rssi");
+    let bundle = temp.path().join("main.rssbundle");
+    fs::write(&source, "fn main() -> Int {\n    return Host.value()\n}\n").expect("write fixture");
+    fs::write(&interface, "module Host\n\npub fn value() -> Int\n").expect("write interface");
+    let source = source.to_str().unwrap();
+    let interface = interface.to_str().unwrap();
+    let bundle = bundle.to_str().unwrap();
+
+    let commands: [&[&str]; 4] = [
+        &["check"],
+        &["build", "--out", bundle],
+        &["run", "--trusted-in-process"],
+        &["inspect", "imports"],
+    ];
+    for command in commands {
+        let without = Command::new(bin)
+            .args(command)
+            .arg(source)
+            .output()
+            .expect("command should run");
+        assert!(
+            !without.status.success(),
+            "{command:?} must not resolve `Host.value` without `--interface`"
+        );
+        let reported = String::from_utf8_lossy(&without.stdout).into_owned()
+            + &String::from_utf8_lossy(&without.stderr);
+        assert!(
+            reported.contains("RS0206"),
+            "{command:?} must report the unresolved call: {reported}"
+        );
+
+        let with = Command::new(bin)
+            .args(command)
+            .args(["--interface", interface])
+            .arg(source)
+            .output()
+            .expect("command should run");
+        let reported = String::from_utf8_lossy(&with.stdout).into_owned()
+            + &String::from_utf8_lossy(&with.stderr);
+        assert!(
+            !reported.contains("RS0206"),
+            "{command:?} must accept the declared interface: {reported}"
+        );
+    }
+}
+
+/// `rss build` used to print `"compilation failed with N diagnostic(s)"`. It
+/// now renders the same diagnostics `rss check` does, so a failing build tells
+/// the caller what to fix.
+#[cfg(feature = "execution")]
+#[test]
+fn check_and_build_report_the_same_diagnostics() {
+    let bin = env!("CARGO_BIN_EXE_rss");
+    let temp = tempfile::tempdir().expect("temp dir");
+    let source = temp.path().join("main.rss");
+    let bundle = temp.path().join("main.rssbundle");
+    fs::write(
+        &source,
+        "fn main() -> Int {\n    return missing_helper()\n}\n",
+    )
+    .expect("write fixture");
+
+    let checked = Command::new(bin)
+        .arg("check")
+        .arg(&source)
+        .output()
+        .expect("rss check should run");
+    assert_eq!(checked.status.code(), Some(1));
+    let built = Command::new(bin)
+        .args(["build", "--out", bundle.to_str().unwrap()])
+        .arg(&source)
+        .output()
+        .expect("rss build should run");
+    assert_eq!(built.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&built.stderr),
+        String::from_utf8_lossy(&checked.stdout),
+        "build must render exactly the diagnostics check renders"
+    );
+
+    let json = Command::new(bin)
+        .args(["check", "--json"])
+        .arg(&source)
+        .output()
+        .expect("rss check --json should run");
+    let diagnostics: serde_json::Value =
+        serde_json::from_slice(&json.stdout).expect("check --json emits JSON");
+    let codes = diagnostics
+        .as_array()
+        .expect("diagnostics are an array")
+        .iter()
+        .map(|diagnostic| diagnostic["code"].as_str().unwrap_or_default().to_string())
+        .collect::<Vec<_>>();
+    assert!(!codes.is_empty(), "the program must be rejected");
+    let build_output = String::from_utf8_lossy(&built.stderr);
+    for code in codes {
+        assert!(
+            build_output.contains(&code),
+            "build output must carry {code}: {build_output}"
+        );
+    }
+    assert!(!bundle.exists(), "a failed build must write nothing");
+}
+
 /// Check `source` end to end through the real `rss check --json` entry point and
 /// return the diagnostic codes it reports, in order.
 fn check_diagnostic_codes(source: &str) -> Vec<String> {

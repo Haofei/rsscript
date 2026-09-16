@@ -2,12 +2,10 @@ use std::fs;
 use std::process::ExitCode;
 
 use rsscript_diagnostics::{Diagnostic, FixEdit};
-use rsscript_semantics::{
-    CompilationSession, analyze_source_with_interfaces, standard_package_interfaces,
-};
 use serde_json::json;
 
-use super::{print_usage, read_interface_sources, required_flag_value};
+use super::inputs::{InterfacePrelude, SourceInput};
+use super::{print_usage, required_flag_value};
 
 #[derive(Debug)]
 struct FixOptions<'a> {
@@ -138,32 +136,6 @@ fn apply_edits(source: &str, edits: &[PlannedEdit]) -> (String, Vec<usize>, Vec<
     (rebuilt, applied, skipped)
 }
 
-fn analyze(path: &str, source: &str, interfaces: &[(&str, &str)]) -> Vec<Diagnostic> {
-    let mut combined = standard_package_interfaces().to_vec();
-    combined.extend(interfaces.iter().copied());
-    // Session files use one stable path identity. Preserve the legacy
-    // duplicate-interface diagnostic rather than silently overwriting an
-    // input when a caller supplies the same logical interface twice.
-    let unique_paths = combined
-        .iter()
-        .map(|(interface_path, _)| *interface_path)
-        .collect::<std::collections::BTreeSet<_>>();
-    if unique_paths.len() != combined.len() {
-        return analyze_source_with_interfaces(path, source, &combined);
-    }
-
-    let mut session = CompilationSession::default();
-    session
-        .set_file(path, source)
-        .expect("CLI source path must be a valid session path");
-    for (interface_path, interface_source) in combined {
-        session
-            .set_interface(interface_path, interface_source)
-            .expect("CLI interface path must be a valid session path");
-    }
-    session.workspace_analysis().diagnostics().to_vec()
-}
-
 pub(crate) fn run_fix(args: &[String]) -> ExitCode {
     let options = match parse_fix_args(args) {
         Ok(options) => options,
@@ -176,28 +148,22 @@ pub(crate) fn run_fix(args: &[String]) -> ExitCode {
         print_usage();
         return ExitCode::from(2);
     };
-    let source = match fs::read_to_string(path) {
-        Ok(source) => source,
-        Err(error) => {
-            eprintln!("failed to read {path}: {error}");
-            return ExitCode::from(2);
-        }
-    };
-    let interfaces = match read_interface_sources(&options.interfaces) {
-        Ok(interfaces) => interfaces,
+    let input = match SourceInput::read(
+        path,
+        &options.interfaces,
+        InterfacePrelude::StandardPackages,
+    ) {
+        Ok(input) => input,
         Err(error) => {
             eprintln!("{error}");
             return ExitCode::from(2);
         }
     };
-    let interface_refs: Vec<(&str, &str)> = interfaces
-        .iter()
-        .map(|interface| (interface.path.as_str(), interface.contents.as_str()))
-        .collect();
+    let source = input.source();
 
-    let diagnostics = analyze(path, &source, &interface_refs);
+    let diagnostics = input.analyze();
     let planned = plan_edits(&diagnostics);
-    let (rewritten, applied, skipped) = apply_edits(&source, &planned);
+    let (rewritten, applied, skipped) = apply_edits(source, &planned);
 
     if options.write
         && !applied.is_empty()
@@ -262,35 +228,4 @@ pub(crate) fn run_fix(args: &[String]) -> ExitCode {
         );
     }
     ExitCode::SUCCESS
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn fix_analysis_uses_the_session_owned_workspace_query() {
-        let diagnostics = super::analyze(
-            "main.rss",
-            "fn main() -> Int { return Host.value() }",
-            &[("host.rssi", "module Host\npub fn value() -> Int\n")],
-        );
-        assert!(
-            diagnostics.is_empty(),
-            "session-owned fix analysis should retain explicit interface visibility: {diagnostics:#?}"
-        );
-    }
-
-    #[test]
-    fn fix_analysis_preserves_duplicate_interface_diagnostics() {
-        let source = "fn main() -> Int { return Host.value() }";
-        let interfaces = [
-            ("host.rssi", "module Host\npub fn value() -> Int\n"),
-            ("host.rssi", "module Host\npub fn value() -> String\n"),
-        ];
-        let mut combined = rsscript_semantics::standard_package_interfaces().to_vec();
-        combined.extend(interfaces);
-        assert_eq!(
-            super::analyze("main.rss", source, &interfaces),
-            rsscript_semantics::analyze_source_with_interfaces("main.rss", source, &combined),
-        );
-    }
 }

@@ -2,28 +2,80 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use rsscript_diagnostics::{Diagnostic, format_diagnostics_human};
 use rsscript_sdk::{
     analysis::SemanticDiffV2,
     artifact::{
         ARTIFACT_BUNDLE_MAGIC, ArtifactBundle, ArtifactVerifier, BYTECODE_MAGIC, BuiltArtifact,
         BytecodeArtifact, BytecodeVerifier,
     },
-    compile::Compiler,
+    compile::{CompileError, Compiler},
     project::ProjectCompiler,
 };
 use serde_json::json;
 
-use super::{is_package_directory, read_cli_source};
+use super::inputs::{InterfacePrelude, SourceInput};
+use super::{is_package_directory, required_flag_value};
+
+/// Why a build input could not be turned into an Artifact.
+///
+/// Compilation diagnostics are kept as diagnostics so `rss build` can render
+/// them exactly as `rss check` does instead of printing a count.
+pub(crate) enum InputError {
+    Diagnostics(Vec<Diagnostic>),
+    Message(String),
+}
+
+impl InputError {
+    fn report(&self) {
+        match self {
+            Self::Diagnostics(diagnostics) => eprint!("{}", format_diagnostics_human(diagnostics)),
+            Self::Message(message) => eprintln!("{message}"),
+        }
+    }
+}
+
+impl From<CompileError> for InputError {
+    fn from(error: CompileError) -> Self {
+        match error {
+            CompileError::Diagnostics(diagnostics) => Self::Diagnostics(diagnostics),
+            other => Self::Message(other.to_string()),
+        }
+    }
+}
+
+impl From<String> for InputError {
+    fn from(message: String) -> Self {
+        Self::Message(message)
+    }
+}
+
+impl std::fmt::Display for InputError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Diagnostics(diagnostics) => {
+                formatter.write_str(format_diagnostics_human(diagnostics).trim_end())
+            }
+            Self::Message(message) => formatter.write_str(message),
+        }
+    }
+}
 
 pub(crate) fn run_build(args: &[String]) -> ExitCode {
-    let (input, output, analysis_output) = match parse_build_args(args) {
+    let options = match parse_build_args(args) {
         Ok(parsed) => parsed,
         Err(error) => return usage_error(error),
     };
-    let build = match build_input(input) {
+    let BuildOptions {
+        input,
+        output,
+        analysis_output,
+        interfaces,
+    } = options;
+    let build = match build_input(input, &interfaces) {
         Ok(build) => build,
         Err(error) => {
-            eprintln!("{error:?}");
+            error.report();
             return ExitCode::from(1);
         }
     };
@@ -79,19 +131,30 @@ pub(crate) fn run_build(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn build_input(input: &str) -> Result<BuiltArtifact, String> {
-    let compiler = Compiler;
+/// Compile one build input the same way `rss check` checks it.
+///
+/// A package directory carries its own declared interfaces, so `--interface`
+/// is refused there exactly as it is for `rss check <package-directory>`. A
+/// single file is compiled from the shared [`SourceInput`] assembly, which is
+/// what keeps `build`, `run` and `inspect` on the same interfaces as `check`.
+pub(crate) fn build_input(input: &str, interfaces: &[&str]) -> Result<BuiltArtifact, InputError> {
     if is_package_directory(input) {
-        ProjectCompiler::new()
+        if !interfaces.is_empty() {
+            return Err(InputError::Message(PACKAGE_INTERFACE_ERROR.to_string()));
+        }
+        return ProjectCompiler::new()
             .compile_package(Path::new(input))
-            .map_err(|error| error.to_string())
-    } else {
-        let source = read_cli_source(Path::new(input))?;
-        compiler
-            .compile(input, &source)
-            .map_err(|error| error.to_string())
+            .map_err(InputError::from);
     }
+    let source = SourceInput::read(input, interfaces, InterfacePrelude::StandardPackages)?;
+    Compiler
+        .compile_snapshot(&source.snapshot())
+        .map_err(InputError::from)
 }
+
+pub(crate) const PREBUILT_INTERFACE_ERROR: &str = "`--interface` is only valid for source inputs; a prebuilt Artifact already records its resolved interfaces.";
+
+pub(crate) const PACKAGE_INTERFACE_ERROR: &str = "`--interface` is only valid for single-file inputs; a package captures its declared interfaces from the project manifest.";
 
 pub(crate) fn run_verify(args: &[String]) -> ExitCode {
     let [input] = args else {
@@ -148,15 +211,17 @@ pub(crate) fn run_diff(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn bundle_from_input(input: &str) -> Result<ArtifactBundle, String> {
+fn bundle_from_input(input: &str) -> Result<ArtifactBundle, InputError> {
     let path = Path::new(input);
     if path.is_file() {
-        let bytes = fs::read(path).map_err(|error| format!("cannot read {input}: {error}"))?;
+        let bytes = fs::read(path)
+            .map_err(|error| InputError::Message(format!("cannot read {input}: {error}")))?;
         if bytes.starts_with(ARTIFACT_BUNDLE_MAGIC) {
-            return ArtifactBundle::from_bytes(&bytes).map_err(|error| error.to_string());
+            return ArtifactBundle::from_bytes(&bytes)
+                .map_err(|error| InputError::Message(error.to_string()));
         }
     }
-    build_input(input).map(BuiltArtifact::into_bundle)
+    build_input(input, &[]).map(BuiltArtifact::into_bundle)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -194,24 +259,29 @@ fn parse_diff_args(args: &[String]) -> Result<(DiffFormat, &str, &str), String> 
 }
 
 pub(crate) fn run_inspect(args: &[String]) -> ExitCode {
-    let (view, json_output, input) = match parse_inspect_args(args) {
+    let InspectOptions {
+        view,
+        json_output,
+        input,
+        interfaces,
+    } = match parse_inspect_args(args) {
         Ok(parsed) => parsed,
         Err(error) => return usage_error(error),
     };
     match view {
-        "bytecode" | "imports" => inspect_bytecode(view, json_output, input),
+        "bytecode" | "imports" => inspect_bytecode(view, json_output, input, &interfaces),
         "analysis" | "resources" | "async" | "call-graph" => {
-            inspect_analysis(view, json_output, input)
+            inspect_analysis(view, json_output, input, &interfaces)
         }
         _ => usage_error(format!("unknown inspect view `{view}`")),
     }
 }
 
-fn inspect_bytecode(view: &str, json_output: bool, input: &str) -> ExitCode {
-    let artifact = match load_or_compile(input) {
+fn inspect_bytecode(view: &str, json_output: bool, input: &str, interfaces: &[&str]) -> ExitCode {
+    let artifact = match load_or_compile(input, interfaces) {
         Ok(artifact) => artifact,
         Err(error) => {
-            eprintln!("{error}");
+            error.report();
             return ExitCode::from(1);
         }
     };
@@ -261,14 +331,14 @@ fn inspect_bytecode(view: &str, json_output: bool, input: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn inspect_analysis(view: &str, json_output: bool, input: &str) -> ExitCode {
+fn inspect_analysis(view: &str, json_output: bool, input: &str, interfaces: &[&str]) -> ExitCode {
     if view == "analysis" && Path::new(input).is_file() {
         return inspect_bundle_analysis(input);
     }
-    let build = match build_input(input) {
+    let build = match build_input(input, interfaces) {
         Ok(build) => build,
         Err(error) => {
-            eprintln!("{error}");
+            error.report();
             return ExitCode::from(1);
         }
     };
@@ -383,35 +453,53 @@ fn inspect_bundle_analysis(input: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn load_or_compile(input: &str) -> Result<BytecodeArtifact, String> {
+fn load_or_compile(input: &str, interfaces: &[&str]) -> Result<BytecodeArtifact, InputError> {
     let path = Path::new(input);
     if path.is_file() {
-        let bytes = fs::read(path).map_err(|error| format!("cannot read {input}: {error}"))?;
+        let bytes = fs::read(path)
+            .map_err(|error| InputError::Message(format!("cannot read {input}: {error}")))?;
+        if bytes.starts_with(ARTIFACT_BUNDLE_MAGIC) || bytes.starts_with(BYTECODE_MAGIC) {
+            // A prebuilt Artifact already carries its resolved imports, so an
+            // `--interface` here would silently do nothing.
+            if !interfaces.is_empty() {
+                return Err(InputError::Message(PREBUILT_INTERFACE_ERROR.to_string()));
+            }
+        }
         if bytes.starts_with(ARTIFACT_BUNDLE_MAGIC) {
-            let bundle = ArtifactBundle::from_bytes(&bytes).map_err(|error| error.to_string())?;
+            let bundle = ArtifactBundle::from_bytes(&bytes)
+                .map_err(|error| InputError::Message(error.to_string()))?;
             return ArtifactVerifier
                 .verify_bundle(bundle)
                 .map(|verified| verified.bytecode_artifact().clone())
-                .map_err(|error| error.to_string());
+                .map_err(|error| InputError::Message(error.to_string()));
         }
         if bytes.starts_with(BYTECODE_MAGIC) {
             return BytecodeVerifier::default()
                 .verify(&bytes)
                 .map(|verified| verified.into_artifact())
-                .map_err(|error| error.to_string());
+                .map_err(|error| InputError::Message(error.to_string()));
         }
     }
-    let built = build_input(input)?;
+    let built = build_input(input, interfaces)?;
     ArtifactVerifier
         .verify(built)
         .map(|verified| verified.bytecode_artifact().clone())
-        .map_err(|error| error.to_string())
+        .map_err(|error| InputError::Message(error.to_string()))
 }
 
-fn parse_build_args(args: &[String]) -> Result<(&str, Option<&str>, Option<&str>), String> {
+#[derive(Debug, PartialEq, Eq)]
+struct BuildOptions<'a> {
+    input: &'a str,
+    output: Option<&'a str>,
+    analysis_output: Option<&'a str>,
+    interfaces: Vec<&'a str>,
+}
+
+fn parse_build_args(args: &[String]) -> Result<BuildOptions<'_>, String> {
     let mut input = None;
     let mut output = None;
     let mut analysis_output = None;
+    let mut interfaces = Vec::new();
     let mut index = 0;
     while let Some(argument) = args.get(index) {
         match argument.as_str() {
@@ -431,28 +519,46 @@ fn parse_build_args(args: &[String]) -> Result<(&str, Option<&str>, Option<&str>
                         .as_str(),
                 );
             }
+            "--interface" => {
+                index += 1;
+                interfaces.push(required_flag_value(args, index, "--interface")?);
+            }
             value if value.starts_with("--") => return Err(format!("unknown argument `{value}`")),
             value if input.is_none() => input = Some(value),
             value => return Err(format!("unexpected extra input `{value}`")),
         }
         index += 1;
     }
-    Ok((
-        input.ok_or_else(|| "missing build input".to_string())?,
+    Ok(BuildOptions {
+        input: input.ok_or_else(|| "missing build input".to_string())?,
         output,
         analysis_output,
-    ))
+        interfaces,
+    })
 }
 
-fn parse_inspect_args(args: &[String]) -> Result<(&str, bool, &str), String> {
+#[derive(Debug, PartialEq, Eq)]
+struct InspectOptions<'a> {
+    view: &'a str,
+    json_output: bool,
+    input: &'a str,
+    interfaces: Vec<&'a str>,
+}
+
+fn parse_inspect_args(args: &[String]) -> Result<InspectOptions<'_>, String> {
     let view = args
         .first()
         .ok_or_else(|| "missing inspect view".to_string())?;
     let mut json_output = false;
     let mut input = None;
-    for argument in &args[1..] {
+    let mut interfaces = Vec::new();
+    let mut index = 1;
+    while let Some(argument) = args.get(index) {
         if argument == "--json" {
             json_output = true;
+        } else if argument == "--interface" {
+            index += 1;
+            interfaces.push(required_flag_value(args, index, "--interface")?);
         } else if argument.starts_with("--") {
             return Err(format!("unknown argument `{argument}`"));
         } else if input.is_none() {
@@ -460,12 +566,14 @@ fn parse_inspect_args(args: &[String]) -> Result<(&str, bool, &str), String> {
         } else {
             return Err(format!("unexpected extra input `{argument}`"));
         }
+        index += 1;
     }
-    Ok((
+    Ok(InspectOptions {
         view,
         json_output,
-        input.ok_or_else(|| "missing inspect input".to_string())?,
-    ))
+        input: input.ok_or_else(|| "missing inspect input".to_string())?,
+        interfaces,
+    })
 }
 
 fn default_artifact_path(input: &str) -> PathBuf {
@@ -502,21 +610,37 @@ mod tests {
             "demo.rssbundle",
             "--analysis-out",
             "demo.analysis.json",
+            "--interface",
+            "host.rssi",
         ]);
         assert_eq!(
             parse_build_args(&build).unwrap(),
-            (
-                "demo.rss",
-                Some("demo.rssbundle"),
-                Some("demo.analysis.json")
-            )
+            BuildOptions {
+                input: "demo.rss",
+                output: Some("demo.rssbundle"),
+                analysis_output: Some("demo.analysis.json"),
+                interfaces: vec!["host.rssi"],
+            }
         );
-        let inspect = args(&["imports", "--json", "demo.rssbundle"]);
+        let inspect = args(&[
+            "imports",
+            "--json",
+            "--interface",
+            "host.rssi",
+            "demo.rssbundle",
+        ]);
         assert_eq!(
             parse_inspect_args(&inspect).unwrap(),
-            ("imports", true, "demo.rssbundle")
+            InspectOptions {
+                view: "imports",
+                json_output: true,
+                input: "demo.rssbundle",
+                interfaces: vec!["host.rssi"],
+            }
         );
         assert!(parse_build_args(&args(&["a.rss", "b.rss"])).is_err());
+        assert!(parse_build_args(&args(&["--interface", "--out", "a.rss"])).is_err());
+        assert!(parse_inspect_args(&args(&["imports", "--interface"])).is_err());
         assert_eq!(
             default_analysis_path(Path::new("target/demo.rssbundle")),
             PathBuf::from("target/demo.analysis.json")

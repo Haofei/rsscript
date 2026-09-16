@@ -1,18 +1,13 @@
-use std::fs;
 use std::process::ExitCode;
 
 use rsscript_diagnostics::{
     explain_diagnostic_code, format_diagnostic_explanation, format_diagnostics_human,
     format_diagnostics_json_with_source,
 };
-use rsscript_semantics::{
-    CompilationSession, analyze_source_with_interfaces,
-    analyze_source_with_interfaces_without_core, analyze_source_without_core,
-    standard_package_interfaces,
-};
 use rsscript_syntax::lint_source;
 
-use super::{is_package_directory, print_usage, read_interface_sources, required_flag_value};
+use super::inputs::{InterfacePrelude, SourceInput};
+use super::{is_package_directory, print_usage, required_flag_value};
 #[cfg(feature = "execution")]
 use rsscript_sdk::{compile::CompileError, project::ProjectCompiler};
 
@@ -179,39 +174,27 @@ pub(crate) fn run_check(args: &[String]) -> ExitCode {
         }
     }
 
-    let source = match fs::read_to_string(path) {
-        Ok(source) => source,
-        Err(error) => {
-            eprintln!("failed to read {path}: {error}");
-            return ExitCode::from(2);
-        }
+    let prelude = if options.use_core {
+        InterfacePrelude::StandardPackages
+    } else {
+        InterfacePrelude::None
     };
-
-    let interfaces = match read_interface_sources(&options.interfaces) {
-        Ok(interfaces) => interfaces,
+    let input = match SourceInput::read(path, &options.interfaces, prelude) {
+        Ok(input) => input,
         Err(error) => {
             eprintln!("{error}");
             return ExitCode::from(2);
         }
     };
-    let interface_refs = interfaces
-        .iter()
-        .map(|interface| (interface.path.as_str(), interface.contents.as_str()))
-        .collect::<Vec<_>>();
-    let mut diagnostics = if options.use_core {
-        let mut combined = standard_package_interfaces().to_vec();
-        combined.extend(interface_refs);
-        analyze_source_with_session(path, &source, &combined)
-    } else {
-        analyze_source_without_core_with_session(path, &source, &interface_refs)
-    };
+    let source = input.source();
+    let mut diagnostics = input.analyze();
     if options.lint {
-        diagnostics.extend(lint_source(path, &source));
+        diagnostics.extend(lint_source(path, source));
     }
     if options.json {
         println!(
             "{}",
-            format_diagnostics_json_with_source(&source, &diagnostics)
+            format_diagnostics_json_with_source(source, &diagnostics)
         );
     } else if diagnostics.is_empty() {
         println!("{}: {}", path, if options.lint { "lint ok" } else { "ok" });
@@ -227,69 +210,6 @@ pub(crate) fn run_check(args: &[String]) -> ExitCode {
     } else {
         ExitCode::SUCCESS
     }
-}
-
-/// Route the normal single-file check through the semantic-owned session
-/// query. CLI file I/O stays at this composition boundary, while parse,
-/// resolve, type, HIR, and diagnostic facts share one immutable input snapshot
-/// below it.
-fn analyze_source_with_session(
-    path: &str,
-    source: &str,
-    interfaces: &[(&str, &str)],
-) -> Vec<rsscript_diagnostics::Diagnostic> {
-    // Session files have stable path identities. Preserve the legacy analyzer's
-    // duplicate-interface diagnostics rather than silently replacing one input
-    // buffer when a caller supplied the same logical interface path twice.
-    let unique_paths = interfaces
-        .iter()
-        .map(|(interface_path, _)| *interface_path)
-        .collect::<std::collections::BTreeSet<_>>();
-    if unique_paths.len() != interfaces.len() {
-        return analyze_source_with_interfaces(path, source, interfaces);
-    }
-    let mut session = CompilationSession::default();
-    session
-        .set_file(path, source)
-        .expect("CLI source path must be a valid session path");
-    for (interface_path, interface_source) in interfaces {
-        session
-            .set_interface(*interface_path, *interface_source)
-            .expect("CLI interface path must be a valid session path");
-    }
-    session.workspace_analysis().diagnostics().to_vec()
-}
-
-/// The no-core mode is still a normal immutable source/interface workspace:
-/// it differs only in which interface snapshot the CLI supplies. Keep its
-/// duplicate-input fallback separate so historical diagnostics are preserved
-/// without letting an ordinary no-core check bypass the session query.
-fn analyze_source_without_core_with_session(
-    path: &str,
-    source: &str,
-    interfaces: &[(&str, &str)],
-) -> Vec<rsscript_diagnostics::Diagnostic> {
-    let unique_paths = interfaces
-        .iter()
-        .map(|(interface_path, _)| *interface_path)
-        .collect::<std::collections::BTreeSet<_>>();
-    if unique_paths.len() != interfaces.len() {
-        return if interfaces.is_empty() {
-            analyze_source_without_core(path, source)
-        } else {
-            analyze_source_with_interfaces_without_core(path, source, interfaces)
-        };
-    }
-    let mut session = CompilationSession::without_core();
-    session
-        .set_file(path, source)
-        .expect("CLI source path must be a valid session path");
-    for (interface_path, interface_source) in interfaces {
-        session
-            .set_interface(*interface_path, *interface_source)
-            .expect("CLI interface path must be a valid session path");
-    }
-    session.workspace_analysis().diagnostics().to_vec()
 }
 
 #[cfg(test)]
@@ -328,61 +248,5 @@ mod tests {
             super::package_check_option_error(&options).expect("package check should reject lint");
 
         assert!(error.contains("--lint"));
-    }
-
-    #[test]
-    fn default_core_check_uses_the_session_owned_workspace_analysis() {
-        let diagnostics = super::analyze_source_with_session(
-            "main.rss",
-            "fn main() -> Int { return Host.value() }",
-            &[("host.rssi", "module Host\npub fn value() -> Int\n")],
-        );
-        assert!(
-            diagnostics.is_empty(),
-            "session-owned analysis should retain explicit interface visibility: {diagnostics:#?}"
-        );
-    }
-
-    #[test]
-    fn duplicate_interface_paths_preserve_the_legacy_analysis_behavior() {
-        let source = "fn main() -> Int { return Host.value() }";
-        let interfaces = [
-            ("host.rssi", "module Host\npub fn value() -> Int\n"),
-            ("host.rssi", "module Host\npub fn value() -> String\n"),
-        ];
-        assert_eq!(
-            super::analyze_source_with_session("main.rss", source, &interfaces),
-            rsscript_semantics::analyze_source_with_interfaces("main.rss", source, &interfaces)
-        );
-    }
-
-    #[test]
-    fn no_core_check_uses_the_session_owned_workspace_analysis() {
-        let diagnostics = super::analyze_source_without_core_with_session(
-            "main.rss",
-            "fn main() -> Int { return Host.value() }",
-            &[("host.rssi", "module Host\npub fn value() -> Int\n")],
-        );
-        assert!(
-            diagnostics.is_empty(),
-            "session-owned no-core analysis should retain explicit interfaces: {diagnostics:#?}"
-        );
-    }
-
-    #[test]
-    fn no_core_duplicate_interfaces_preserve_legacy_analysis_behavior() {
-        let source = "fn main() -> Int { return Host.value() }";
-        let interfaces = [
-            ("host.rssi", "module Host\npub fn value() -> Int\n"),
-            ("host.rssi", "module Host\npub fn value() -> String\n"),
-        ];
-        assert_eq!(
-            super::analyze_source_without_core_with_session("main.rss", source, &interfaces),
-            rsscript_semantics::analyze_source_with_interfaces_without_core(
-                "main.rss",
-                source,
-                &interfaces,
-            ),
-        );
     }
 }
