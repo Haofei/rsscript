@@ -1,0 +1,15 @@
+fn apply(values: read List<Int>, f: noescape Fn(Int) -> Int) -> fresh List<Int> {
+    let mut mapped: fresh List<Int> = []
+    let mut i = 0
+    while i < List.len(list: values) {
+        List.push(list: mut mapped, value: f(List.get(list: values, index: i)))
+        i = i + 1
+    }
+    return mapped
+}
+
+fn main() -> Int {
+    let values: fresh List<Int> = [1, 2, 3]
+    let doubled = apply(values: values, f: |x| { return x * 2 })
+    return List.get(list: doubled, index: 2)
+}

@@ -45,12 +45,6 @@ const CANNOT_BUILD_YET: &[(&str, &str)] = &[
          match form.",
     ),
     (
-        "noescape-callback-manage-local.rss",
-        "`function type in direct MIR signature`: a callback parameter typed \
-         `noescape Fn(...)` cannot appear in a direct MIR signature. This is \
-         the known callback-parameter MIR gap.",
-    ),
-    (
         "positional-multifield-nested.rss",
         "`nested checked HIR variant match binding`: a variant pattern that \
          binds through another pattern is not lowered.",

@@ -1,0 +1,15 @@
+fn total(values: read List<Int>, f: noescape Fn(Int) -> Int) -> Int {
+    let mut sum = 0
+    let mut i = 0
+    while i < List.len(list: values) {
+        sum = sum + f(List.get(list: values, index: i))
+        i = i + 1
+    }
+    return sum
+}
+
+fn main() -> Int {
+    let bias = 10
+    let values: fresh List<Int> = [1, 2, 3]
+    return total(values: values, f: |x| { return x + bias })
+}

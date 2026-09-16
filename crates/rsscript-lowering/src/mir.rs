@@ -223,6 +223,11 @@ pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<VerifiedMir, MirLo
                 )
             })
             .collect();
+        // A function-typed parameter is callable inside the body. Its typed
+        // callable contract comes from the declared `Fn(...)` type, so `f(x)`
+        // lowers to `CallClosure` on the parameter register with the same ABI
+        // a `MakeClosure` value carries.
+        let closure_parameters = checked_closure_parameters(&mut types, name, &signature.params)?;
         let output = CheckedHirLowerer::new(
             CheckedHirLowererInput {
                 id: FunctionId::new(index as u32),
@@ -230,6 +235,7 @@ pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<VerifiedMir, MirLo
                 body: block,
                 mir_signature,
                 initial_places: parameter_places,
+                closure_parameters,
                 captures: Vec::new(),
                 targets: targets.clone(),
             },
@@ -924,6 +930,25 @@ fn checked_parameter_modes(signature: &checked::FunctionSig) -> Vec<MirParameter
         .collect()
 }
 
+/// Collect the callable contract of every function-typed parameter of a
+/// checked signature. A callback parameter is not a data value: calling it is
+/// the point, so the callee needs the same parameter types and modes that a
+/// `MakeClosure` in the caller published.
+fn checked_closure_parameters(
+    types: &mut TypeTable,
+    function_name: &str,
+    params: &[checked::ParamSig],
+) -> Result<Vec<(String, ClosureAbi)>, MirLoweringError> {
+    params
+        .iter()
+        .filter(|parameter| matches!(parameter.ty.kind, ResolvedTypeKind::Function { .. }))
+        .map(|parameter| {
+            checked_closure_signature(types, &parameter.ty, function_name)
+                .map(|signature| (parameter.name.clone(), ClosureAbi::from(&signature)))
+        })
+        .collect()
+}
+
 /// Lower a checked structural function value to the typed callable ABI used by
 /// `MakeClosure` and `CallClosure`. This intentionally unwraps only the
 /// function node itself; each parameter and result still passes through the
@@ -1074,6 +1099,9 @@ struct CheckedHirLowererInput<'source> {
     body: &'source checked::HirBlock,
     mir_signature: MirFunctionSignature,
     initial_places: Vec<(String, TypeId)>,
+    /// Parameters whose declared type is `Fn(...)`, paired with the callable
+    /// contract an invocation of them dispatches through.
+    closure_parameters: Vec<(String, ClosureAbi)>,
     captures: Vec<rsscript_mir::MirClosureCapture>,
     targets: CallTargets,
 }
@@ -1157,11 +1185,34 @@ fn checked_type_to_wire(
     function_name: &str,
 ) -> Result<WireType, MirLoweringError> {
     let base = match &ty.kind {
-        ResolvedTypeKind::Function { .. } => {
-            return Err(MirLoweringError::Unsupported {
-                function: function_name.to_owned(),
-                construct: "function type in direct MIR signature",
-            });
+        ResolvedTypeKind::Function {
+            parameters,
+            parameter_effects,
+            return_type,
+        } => {
+            if parameters.len() != parameter_effects.len() {
+                return Err(MirLoweringError::Unsupported {
+                    function: function_name.to_owned(),
+                    construct: "malformed checked HIR function type parameter effects",
+                });
+            }
+            WireType::Function {
+                parameters: parameters
+                    .iter()
+                    .map(|parameter| checked_type_to_wire(parameter, function_name))
+                    .collect::<Result<Vec<_>, _>>()?,
+                parameter_effects: parameter_effects
+                    .iter()
+                    .map(|effect| resolved_effect_to_wire(*effect))
+                    .collect(),
+                result: Box::new(
+                    return_type
+                        .as_deref()
+                        .map(|result| checked_type_to_wire(result, function_name))
+                        .transpose()?
+                        .unwrap_or(WireType::Unit),
+                ),
+            }
         }
         ResolvedTypeKind::Named { name, arguments } => {
             let arguments = arguments
@@ -1213,6 +1264,16 @@ fn checked_type_to_wire(
         }
     };
     Ok(apply_checked_qualifiers(ty, base))
+}
+
+/// Project a checked closure parameter effect onto the wire data effect.
+/// An unannotated position is `read`, exactly as the checker binds it.
+fn resolved_effect_to_wire(effect: Option<rsscript_semantics::ResolvedParamEffect>) -> DataEffect {
+    match effect.unwrap_or(rsscript_semantics::ResolvedParamEffect::Read) {
+        rsscript_semantics::ResolvedParamEffect::Read => DataEffect::Read,
+        rsscript_semantics::ResolvedParamEffect::Mut => DataEffect::Mut,
+        rsscript_semantics::ResolvedParamEffect::Take => DataEffect::Take,
+    }
 }
 
 /// Convert an external call contract using both the resolved type and the HIR
@@ -1423,21 +1484,62 @@ mod checked_type_tests {
         );
     }
 
+    /// A callback parameter is a real ABI position, not an opaque handle.
+    ///
+    /// Arity, per-parameter effects, and the result type are all written down
+    /// in `noescape Fn(Int) -> Int`, so the wire model carries them: a consumer
+    /// that reads the signature knows how many arguments a `CallClosure` on
+    /// this parameter passes and how each one is borrowed.
     #[test]
-    fn checked_function_type_fails_closed_until_the_wire_abi_supports_it() {
-        let ty = ResolvedType::function(
+    fn a_checked_function_type_lowers_to_the_wire_function_type() {
+        let mut ty = ResolvedType::function(
             [ResolvedType::named("Int", [])],
             [None],
             Some(ResolvedType::named("Int", [])),
             TypeQualifiers::default(),
         );
-        assert!(matches!(
-            checked_type_to_wire(&ty, "main"),
-            Err(MirLoweringError::Unsupported {
-                construct: "function type in direct MIR signature",
-                ..
-            })
-        ));
+        ty.qualifiers = TypeQualifiers {
+            fresh: false,
+            noescape: true,
+            owned: false,
+        };
+
+        let wire =
+            checked_type_to_wire(&ty, "main").expect("a function type is wire-representable");
+        assert_eq!(
+            wire,
+            WireType::Qualified {
+                qualifier: WireQualifier::NoEscape,
+                value: Box::new(WireType::Function {
+                    parameters: vec![WireType::Int {
+                        bits: 64,
+                        signed: true,
+                    }],
+                    parameter_effects: vec![DataEffect::Read],
+                    result: Box::new(WireType::Int {
+                        bits: 64,
+                        signed: true,
+                    }),
+                }),
+            }
+        );
+        assert!(wire.is_resolved());
+    }
+
+    /// An unannotated closure parameter proves nothing, and the function type
+    /// built from it must not claim otherwise: the typed executable facts drop
+    /// an unresolved type rather than publishing `?` as a nominal type.
+    #[test]
+    fn a_function_type_with_an_unproved_parameter_stays_unresolved() {
+        let ty = ResolvedType::function(
+            [ResolvedType::named(WireType::UNRESOLVED, [])],
+            [None],
+            Some(ResolvedType::named("Int", [])),
+            TypeQualifiers::default(),
+        );
+        let wire =
+            checked_type_to_wire(&ty, "main").expect("a function type is wire-representable");
+        assert!(!wire.is_resolved());
     }
 
     #[test]

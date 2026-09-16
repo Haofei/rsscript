@@ -1682,6 +1682,297 @@ fn a_closure_call_site_reports_no_parameter_type_it_cannot_prove() {
     );
 }
 
+/// A function-typed parameter builds, verifies, and runs.
+///
+/// `noescape Fn(...)` callbacks are a headline language feature, but a callback
+/// *parameter* used to check clean and then die in lowering with "function type
+/// in direct MIR signature": closure values lowered, and a closure handed to a
+/// core intrinsic lowered, while a user function that took one did not. The
+/// parameter is now an ordinary MIR ABI position carrying the wire function
+/// type, and calling it inside the callee is a `CallClosure` on the parameter
+/// register — so this covers build, Artifact verification, and execution rather
+/// than the checker alone.
+#[test]
+fn callback_parameter_programs_verify_and_run() {
+    // The headline shape: a callback invoked once per loop iteration.
+    const CALLED_IN_A_LOOP: &str = r#"
+fn apply(values: read List<Int>, f: noescape Fn(Int) -> Int) -> fresh List<Int> {
+    let mut mapped: fresh List<Int> = []
+    let mut i = 0
+    while i < List.len(list: values) {
+        List.push(list: mut mapped, value: f(List.get(list: values, index: i)))
+        i = i + 1
+    }
+    return mapped
+}
+
+fn main() -> Int {
+    let values: fresh List<Int> = [1, 2, 3]
+    let doubled = apply(values: values, f: |x| { return x * 2 })
+    return List.get(list: doubled, index: 2)
+}
+"#;
+
+    // Two parameters, one of them a borrowed string: the callback ABI has to
+    // carry per-position modes, not just an arity.
+    const TWO_PARAMETERS: &str = r#"
+fn label_all(
+    values: read List<String>,
+    f: noescape Fn(read String, Int) -> String,
+) -> fresh String {
+    let mut labelled = ""
+    let mut i = 0
+    while i < List.len(list: values) {
+        labelled = String.concat(
+            left: labelled,
+            right: f(List.get(list: values, index: i), i),
+        )
+        i = i + 1
+    }
+    return labelled
+}
+
+fn main() -> String {
+    let values: fresh List<String> = ["a", "b"]
+    return label_all(values: values, f: |name, index| {
+        return String.concat(left: name, right: String.from_int(value: index))
+    })
+}
+"#;
+
+    // The callback closes over a local of the *caller*, so the captures travel
+    // with the closure value across the call boundary.
+    const CAPTURES_A_CALLER_LOCAL: &str = r#"
+fn total(values: read List<Int>, f: noescape Fn(Int) -> Int) -> Int {
+    let mut sum = 0
+    let mut i = 0
+    while i < List.len(list: values) {
+        sum = sum + f(List.get(list: values, index: i))
+        i = i + 1
+    }
+    return sum
+}
+
+fn main() -> Int {
+    let bias = 10
+    let values: fresh List<Int> = [1, 2, 3]
+    return total(values: values, f: |x| { return x + bias })
+}
+"#;
+
+    // A named user `fn` passed where a callback is expected.
+    const NAMED_FUNCTION: &str = r#"
+fn double(x: Int) -> Int {
+    return x * 2
+}
+
+fn apply(value: Int, f: noescape Fn(Int) -> Int) -> Int {
+    return f(value)
+}
+
+fn main() -> Int {
+    return apply(value: 21, f: double)
+}
+"#;
+
+    // A callback whose own body hands a second callback to another function,
+    // and a callee that forwards its callback parameter onward unchanged.
+    const NESTED: &str = r#"
+fn twice(value: Int, f: noescape Fn(Int) -> Int) -> Int {
+    return f(f(value))
+}
+
+fn forward(value: Int, f: noescape Fn(Int) -> Int) -> Int {
+    return twice(value: value, f: f)
+}
+
+fn each(values: read List<Int>, f: noescape Fn(Int) -> Int) -> Int {
+    let mut sum = 0
+    let mut i = 0
+    while i < List.len(list: values) {
+        sum = sum + f(List.get(list: values, index: i))
+        i = i + 1
+    }
+    return sum
+}
+
+fn main() -> Int {
+    let values: fresh List<Int> = [1, 2, 3]
+    return each(values: values, f: |x| {
+        return forward(value: x, f: |y| { return y * 2 })
+    })
+}
+"#;
+
+    // A function that *returns* a callback. Nothing was built for this shape,
+    // but a binding whose own inferred type is `Fn(...)` carries the same
+    // callable contract as an inline closure literal, so it runs too.
+    const RETURNS_A_CALLBACK: &str = r#"
+fn increment() -> Fn(Int) -> Int {
+    return |x| { return x + 1 }
+}
+
+fn main() -> Int {
+    local step = increment()
+    return step(41)
+}
+"#;
+
+    for (file, source, expected) in [
+        ("callback-called-in-a-loop.rss", CALLED_IN_A_LOOP, "6"),
+        ("callback-two-parameters.rss", TWO_PARAMETERS, "a0b1"),
+        (
+            "callback-captures-a-caller-local.rss",
+            CAPTURES_A_CALLER_LOCAL,
+            "36",
+        ),
+        ("named-function-as-callback.rss", NAMED_FUNCTION, "42"),
+        ("nested-callback-parameters.rss", NESTED, "24"),
+        ("callback-returned-by-value.rss", RETURNS_A_CALLBACK, "42"),
+    ] {
+        let built = Compiler
+            .compile(file, source)
+            .unwrap_or_else(|error| panic!("{file} compiles: {error}"));
+        let admitted = ArtifactVerifier
+            .verify(built)
+            .unwrap_or_else(|error| panic!("{file} verifies: {error}"))
+            .admit_trusted_input();
+        let report = Runtime::default()
+            .link(&admitted)
+            .unwrap_or_else(|error| panic!("{file} links: {error}"))
+            .execute(ExecutionRequest::default());
+
+        assert_eq!(
+            report.termination_reason(),
+            TerminationReason::Completed,
+            "{file} runs to completion"
+        );
+        assert_eq!(report.value(), Some(expected), "{file} result");
+    }
+}
+
+/// A declared callback contract is a proved fact, and the typed facts say so.
+///
+/// An unannotated `|x| { ... }` proves nothing about its parameter, so its call
+/// site stays `Unknown`. `noescape Fn(read String, Int) -> String` is written
+/// down: arity, each parameter's type and data effect, and the result are all
+/// known, so the parameter register carries the whole function type rather than
+/// an opaque handle, and the `CallClosure` through it publishes the same types.
+#[test]
+fn a_callback_parameter_publishes_its_declared_contract() {
+    let built = Compiler
+        .compile(
+            "callback-facts.rss",
+            "fn apply(tag: read String, f: noescape Fn(read String, Int) -> String) -> String \
+             { return f(tag, 1) } \
+             fn main() -> String { return apply(tag: \"x\", f: |s, n| \
+             { return String.concat(left: s, right: String.from_int(value: n)) }) }",
+        )
+        .expect("callback program compiles");
+    let artifact = artifact::BytecodeArtifact::from_bytes(built.artifact_bytes())
+        .expect("the built artifact decodes");
+    let bytes = artifact
+        .typed_executable_facts
+        .clone()
+        .expect("the build carries typed executable facts");
+    let bound = rsscript_bytecode::TypedExecutableFactsVerifierV1::new(
+        rsscript_bytecode::BytecodeLimits::default().into(),
+    )
+    .verify(&bytes, &artifact)
+    .expect("the typed facts verify against their executable");
+
+    let callback = provider::WireType::Function {
+        parameters: vec![
+            provider::WireType::String,
+            provider::WireType::Int {
+                bits: 64,
+                signed: true,
+            },
+        ],
+        parameter_effects: vec![DataEffect::Read, DataEffect::Read],
+        result: Box::new(provider::WireType::String),
+    };
+
+    let parameter = bound
+        .facts()
+        .functions
+        .iter()
+        .flat_map(|function| &function.registers)
+        .find(|register| match &register.ty {
+            rsscript_bytecode::TypedFactTypeV1::Known(ty) => {
+                matches!(ty, provider::WireType::Qualified { value, .. } if value.as_ref() == &callback)
+            }
+            rsscript_bytecode::TypedFactTypeV1::Unknown => false,
+        })
+        .expect("the callback parameter register carries its declared function type");
+    assert_eq!(
+        parameter.ownership,
+        rsscript_bytecode::TypedValueOwnershipV1::ReadBorrow,
+        "a `noescape` callback is borrowed, never owned, by the callee"
+    );
+
+    let call = bound
+        .facts()
+        .functions
+        .iter()
+        .flat_map(|function| &function.call_sites)
+        .find(|call| call.target == rsscript_bytecode::TypedCallTargetV1::Closure)
+        .expect("the closure call site is published");
+    assert_eq!(
+        call.parameters,
+        vec![
+            rsscript_bytecode::TypedFactTypeV1::Known(provider::WireType::String),
+            rsscript_bytecode::TypedFactTypeV1::Known(provider::WireType::Int {
+                bits: 64,
+                signed: true,
+            }),
+        ],
+        "a declared callback contract proves the types its call site passes"
+    );
+    assert_eq!(
+        call.parameter_effects,
+        vec![
+            rsscript_bytecode::TypedDataEffectV1::Read,
+            rsscript_bytecode::TypedDataEffectV1::Read
+        ]
+    );
+}
+
+/// A callback field read as a call (`holder.f(1)`) is a checker error.
+///
+/// Calling through a struct field is not part of the callable surface the
+/// checker resolves, and `RS0206` says so at `rss check` time. Pinning it here
+/// keeps that failure in the checker rather than letting it become a build
+/// failure on a file the checker called clean.
+#[test]
+fn calling_a_callback_struct_field_directly_is_a_check_error() {
+    const SOURCE: &str = r#"
+struct Holder {
+    f: Fn(Int) -> Int
+}
+
+fn main() -> Int {
+    let holder = Holder(f: |x| { return x + 1 })
+    return holder.f(41)
+}
+"#;
+
+    let error = Compiler
+        .compile("callback-field-call.rss", SOURCE)
+        .expect_err("calling a struct field does not compile");
+    let CompileError::Diagnostics(diagnostics) = &error else {
+        panic!("expected checker diagnostics, got {error}");
+    };
+    let codes = diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.code.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        codes.contains(&"RS0206"),
+        "expected RS0206 at the unresolved callee, got {codes:?}"
+    );
+}
+
 /// A payload-free enum case written as a bare name builds, verifies, and runs.
 ///
 /// `None`, and a user `sum` case declared without fields, are constructions,

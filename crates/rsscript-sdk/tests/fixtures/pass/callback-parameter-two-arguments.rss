@@ -1,0 +1,22 @@
+fn label_all(
+    values: read List<String>,
+    f: noescape Fn(read String, Int) -> String,
+) -> fresh String {
+    let mut labelled = ""
+    let mut i = 0
+    while i < List.len(list: values) {
+        labelled = String.concat(
+            left: labelled,
+            right: f(List.get(list: values, index: i), i),
+        )
+        i = i + 1
+    }
+    return labelled
+}
+
+fn main() -> String {
+    let values: fresh List<String> = ["a", "b"]
+    return label_all(values: values, f: |name, index| {
+        return String.concat(left: name, right: String.from_int(value: index))
+    })
+}

@@ -1,0 +1,11 @@
+fn double(x: Int) -> Int {
+    return x * 2
+}
+
+fn apply(value: Int, f: noescape Fn(Int) -> Int) -> Int {
+    return f(value)
+}
+
+fn main() -> Int {
+    return apply(value: 21, f: double)
+}

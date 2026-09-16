@@ -18,6 +18,7 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
             body,
             mir_signature,
             initial_places,
+            closure_parameters,
             captures,
             targets,
         } = input;
@@ -45,6 +46,9 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
         };
         for (name, ty) in initial_places {
             lowerer.place_with_type(&name, ty);
+        }
+        for (name, abi) in closure_parameters {
+            lowerer.closure_abis.insert(name, abi);
         }
         lowerer
     }
@@ -107,8 +111,19 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 ..
             } => {
                 let place = self.place(name);
-                if let Some(checked::HirExpr::Closure { ty: Some(ty), .. }) = value {
-                    let signature = checked_closure_signature(self.types, ty, &self.function_name)?;
+                // A binding holds a callable when its own inferred type says so
+                // — an inline closure literal, but equally the result of a call
+                // that returns `Fn(...)`. Either way the callable contract is
+                // what a later `name(...)` dispatches through.
+                let closure_contract = match value {
+                    Some(checked::HirExpr::Closure { ty: Some(ty), .. }) => Some(ty),
+                    _ => ty
+                        .as_ref()
+                        .filter(|ty| matches!(ty.kind, ResolvedTypeKind::Function { .. })),
+                };
+                if let Some(contract) = closure_contract {
+                    let signature =
+                        checked_closure_signature(self.types, contract, &self.function_name)?;
                     self.closure_abis
                         .insert(name.clone(), ClosureAbi::from(&signature));
                 }
@@ -450,6 +465,13 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
         if signature.parameter_types().len() != params.len() {
             return self.unsupported("checked HIR closure parameter/contract arity mismatch");
         }
+        let ResolvedTypeKind::Function {
+            parameters: contract_parameters,
+            ..
+        } = &ty.kind
+        else {
+            return self.unsupported("non-function checked HIR closure contract");
+        };
 
         let mut initial_places = Vec::with_capacity(captures.len() + params.len());
         let mut mir_captures = Vec::with_capacity(captures.len());
@@ -481,6 +503,19 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
             initial_places.push((name, ty));
         }
 
+        // A closure may itself take a callback. Its own parameter contract is
+        // the only place that fact survives, so project it the same way a
+        // named function's parameters are projected.
+        let closure_parameters = params
+            .iter()
+            .zip(contract_parameters.iter())
+            .filter(|(_, parameter)| matches!(parameter.kind, ResolvedTypeKind::Function { .. }))
+            .map(|(name, parameter)| {
+                checked_closure_signature(self.types, parameter, &self.function_name)
+                    .map(|signature| (name.clone(), ClosureAbi::from(&signature)))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
         let id = self.closure_registry.allocate();
         let closure_name = format!("{}::<closure:{}>", self.function_name, id.index());
         let output = CheckedHirLowerer::new(
@@ -490,6 +525,7 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 body,
                 mir_signature: signature,
                 initial_places,
+                closure_parameters,
                 captures: mir_captures,
                 targets: self.targets.clone(),
             },

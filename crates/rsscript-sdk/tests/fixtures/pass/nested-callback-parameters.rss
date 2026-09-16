@@ -1,0 +1,24 @@
+fn twice(value: Int, f: noescape Fn(Int) -> Int) -> Int {
+    return f(f(value))
+}
+
+fn forward(value: Int, f: noescape Fn(Int) -> Int) -> Int {
+    return twice(value: value, f: f)
+}
+
+fn each(values: read List<Int>, f: noescape Fn(Int) -> Int) -> Int {
+    let mut sum = 0
+    let mut i = 0
+    while i < List.len(list: values) {
+        sum = sum + f(List.get(list: values, index: i))
+        i = i + 1
+    }
+    return sum
+}
+
+fn main() -> Int {
+    let values: fresh List<Int> = [1, 2, 3]
+    return each(values: values, f: |x| {
+        return forward(value: x, f: |y| { return y * 2 })
+    })
+}

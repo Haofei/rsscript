@@ -2118,3 +2118,103 @@ fn the_rewritten_osr_cases_reach_generated_code_outside_whole_function_entry() {
         );
     }
 }
+
+/// A loop that calls a *callback parameter* runs identically on both engines.
+///
+/// The closure a `CallClosure` dispatches through is a value the caller chose,
+/// and for a callback parameter its `MakeClosure` is in another frame entirely,
+/// so the native tier cannot prove which body it enters. It must therefore
+/// fail closed at that call rather than speculate, and the interpreter stays
+/// the accounting oracle: the outcome and `steps_consumed` must agree at every
+/// step boundary, including the budgets that stop mid-callback.
+#[test]
+fn a_callback_parameter_loop_matches_the_interpreter_under_a_step_budget() {
+    const SOURCE: &str = r#"
+fn fold(values: read List<Int>, f: noescape Fn(Int) -> Int) -> Int {
+    let mut total = 0
+    let mut i = 0
+    while i < List.len(list: values) {
+        total = total + f(List.get(list: values, index: i))
+        i = i + 1
+    }
+    return total
+}
+
+fn main() -> Int {
+    let values: fresh List<Int> = [1, 2, 3, 4, 5, 6, 7, 8]
+    let bias = 3
+    return fold(values: values, f: |x| { return x * 2 + bias })
+}
+"#;
+
+    let built = Compiler
+        .compile("callback-parameter-loop.rss", SOURCE)
+        .expect("callback parameter source compiles");
+    let admitted = ArtifactVerifier
+        .verify(built)
+        .expect("callback parameter artifact verifies")
+        .admit_trusted_input();
+    let linked = Runtime::new(ProviderRegistry::default())
+        .link(&admitted)
+        .expect("callback parameter artifact links");
+
+    let options = || NativeJitOptions {
+        cost_model: NativeCostModel::Off,
+        collect_telemetry: true,
+        eager_osr: true,
+        ..NativeJitOptions::default()
+    };
+
+    let completed = linked.execute(ExecutionRequest::default());
+    assert_eq!(completed.termination_reason(), TerminationReason::Completed);
+    assert_eq!(completed.value(), Some("96"));
+
+    for budget in 0..=completed.usage.steps_consumed.saturating_add(1) {
+        let limits = RunLimits::unbounded_for_trusted_host().with_step_budget(budget);
+        let interpreter = linked.execute(ExecutionRequest::default().limits(limits.clone()));
+        let native = linked.execute(
+            ExecutionRequest::default()
+                .limits(limits)
+                .native_jit(options()),
+        );
+        assert_eq!(
+            native.termination_reason(),
+            interpreter.termination_reason(),
+            "termination at step budget {budget}"
+        );
+        assert_eq!(
+            native.outcome(),
+            interpreter.outcome(),
+            "outcome at {budget}"
+        );
+        assert_eq!(
+            native.usage.steps_consumed, interpreter.usage.steps_consumed,
+            "steps at budget {budget}"
+        );
+    }
+
+    // Fail-closed, not silently-wrong: an unproved callee behind `CallClosure`
+    // must leave the region to the VM. Whichever way the tier decides, the
+    // assertions above already pin that the decision changes no observable.
+    let native = linked.execute(
+        ExecutionRequest::default()
+            .limits(RunLimits::unbounded_for_trusted_host())
+            .native_jit(options()),
+    );
+    let &NativeExecutionEngineTelemetry {
+        compiled,
+        native_calls,
+        osr_entries,
+        continuation_entries,
+        rejected_resident_bytes,
+        ..
+    } = native_telemetry(&native);
+    assert_eq!(
+        (compiled, native_calls, osr_entries, continuation_entries),
+        (0, 0, 0, 0),
+        "a `CallClosure` on a parameter has no provable callee, so every region \
+         containing it must be declined rather than speculated on"
+    );
+    assert_eq!(rejected_resident_bytes, 0);
+    assert_eq!(native.value(), completed.value());
+}
