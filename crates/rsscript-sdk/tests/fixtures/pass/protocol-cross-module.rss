@@ -1,0 +1,49 @@
+// source: ../modules/shapes.rss
+
+// A protocol declared in another module: `use` binds nothing new because the
+// name is already global, and the protocol is usable as a generic bound, as
+// `Dyn<P>`, and as the target of an `impl` for this module's own type.
+
+module app
+
+use shapes.Sized
+use shapes.Square
+
+pub struct Rect {
+    width: Int
+    height: Int
+}
+
+pub fn Rect.area(self: read Rect) -> Int {
+    return self.width * self.height
+}
+
+impl Sized for Rect {
+    area = Rect.area
+}
+
+fn measure<T: Sized>(shape: read T) -> Int {
+    return Sized.area(self: shape)
+}
+
+fn measure_dyn(shape: read Dyn<Sized>) -> Int {
+    return Sized.area(self: shape)
+}
+
+fn local_rect(width: Int) -> Int {
+    let rect = Rect(width: width, height: 2)
+    return measure<Rect>(shape: read rect)
+}
+
+fn imported_square(side: Int) -> Int {
+    let square = Square(side: side)
+    return measure<Square>(shape: read square)
+}
+
+// `Dyn.from` proves the bound through the cross-module `impl`, which only
+// resolves if the `impl` header's protocol name survived isolation unmangled.
+fn boxed(width: Int) -> Int {
+    local rect = Rect(width: width, height: 3)
+    let dynamic = Dyn.from<Sized, Rect>(value: take rect)
+    return measure_dyn(shape: read dynamic)
+}

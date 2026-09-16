@@ -355,6 +355,17 @@ struct Resolver {
     /// host contract whose visibility is governed by the package contract
     /// (`RS1301`), not by this rule.
     module_private: HashMap<String, HashSet<String>>,
+    /// Every `protocol` name declared anywhere in the module graph, sources and
+    /// interfaces alike. Protocol names are **global** (§7.1): a `protocol`
+    /// carries no visibility, is not reached through a module path, and keeps
+    /// the one name it was declared with whatever module its file declares.
+    /// Isolation therefore has to know these names so it can leave them — and
+    /// the `Protocol.method` namespace built from them — alone. Mangling them
+    /// renamed a protocol method to `app__Sized.area`, whose namespace no longer
+    /// matched the protocol name that exempts a bodyless protocol method from
+    /// `RS0015`, so every method of a protocol declared inside a module was
+    /// rejected and its `impl` reported `RS1301`.
+    protocol_names: HashSet<String>,
     /// Privacy violations found while resolving. Collected during the rewrite
     /// because that is where a reference's module, target, and span are all in
     /// hand; `cross_module_privacy_diagnostics` harvests them.
@@ -575,8 +586,27 @@ impl Resolver {
             external_functions,
             file_imports,
             module_private,
+            protocol_names: program
+                .protocols
+                .iter()
+                .map(|decl| decl.name.clone())
+                .collect(),
             privacy: RefCell::new(privacy),
         }
+    }
+
+    /// Whether `name` is a declared protocol, and so a global name isolation
+    /// must not touch.
+    fn is_protocol(&self, name: &str) -> bool {
+        self.protocol_names.contains(name)
+    }
+
+    /// Whether `name` is a `Protocol.method` spelling — the namespace of a
+    /// protocol method declaration, of an `impl` mapping's protocol side, and of
+    /// every `Protocol.method(...)` dispatch.
+    fn is_protocol_member(&self, name: &str) -> bool {
+        name.split_once('.')
+            .is_some_and(|(namespace, _)| self.is_protocol(namespace))
     }
 
     /// Record a module-qualified reference to another module's private
@@ -669,6 +699,14 @@ impl Resolver {
     /// module-scoped type. The real name differs from `name` when `name` is a
     /// `use … as` alias.
     fn resolve_type_module(&self, file: &str, name: &str) -> Option<(String, String)> {
+        // A protocol is global, so it is never a module-scoped type: `Dyn<P>`,
+        // a `T: P` bound, an `impl P for T` header, and a `P.method(...)`
+        // dispatch all keep the name they were written with. Checked before the
+        // tables so a module-scoped type can never shadow a protocol name into
+        // a mangling the declaration side does not follow.
+        if self.is_protocol(name) {
+            return None;
+        }
         if let Some(prefix) = self.file_module.get(file)
             && self
                 .module_types
@@ -719,8 +757,11 @@ impl Resolver {
     }
 
     fn rewrite_function(&self, function: &mut FunctionDecl, file: &str, in_module: bool) {
-        // The executable entry point keeps its global `main` symbol.
-        if in_module && function.name != "main" {
+        // The executable entry point keeps its global `main` symbol, and so does
+        // a protocol's method: `protocol P { fn m(...) }` contributes `P.m`, and
+        // `P` is global, so `P.m` is the symbol every dispatch and every `impl`
+        // mapping names from any module.
+        if in_module && function.name != "main" && !self.is_protocol_member(&function.name) {
             function.name = if function.has_body {
                 self.mangle_decl_name(file, &function.name)
             } else {
@@ -1441,7 +1482,7 @@ fn item_file(item: &Item) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rsscript_syntax::ast::merge_programs;
+    use rsscript_syntax::ast::{GenericBound, merge_programs};
     use rsscript_syntax::parse_source;
 
     fn function_names(program: &Program) -> Vec<String> {
@@ -1815,5 +1856,101 @@ mod tests {
             body.contains("lib__id<lib__Item>"),
             "qualified generic module call should mangle root and type args: {body}"
         );
+    }
+
+    const SHAPES: &str = "module shapes\n\nprotocol Sized {\n    fn area(self: read Self) -> Int\n}\n\npub struct Square {\n    side: Int\n}\n\npub fn Square.area(self: read Square) -> Int {\n    return self.side * self.side\n}\n\nimpl Sized for Square {\n    area = Square.area\n}\n";
+
+    #[test]
+    fn a_protocol_declared_in_a_module_keeps_its_global_name() {
+        let mut program = parse_source("shapes.rss", SHAPES);
+        isolate_module_namespaces(&mut program);
+
+        // The protocol's own method keeps `Sized.area`. It is the namespace
+        // match against this name that exempts a bodyless protocol method from
+        // `RS0015`, and that the `impl` check reads to find the declared method.
+        let names = function_names(&program);
+        assert!(names.contains(&"Sized.area".to_string()), "{names:?}");
+        // The implementing type is module-scoped and is still mangled.
+        assert!(
+            names.contains(&"shapes__Square.area".to_string()),
+            "{names:?}"
+        );
+        assert!(
+            !names.iter().any(|name| name.contains("__Sized")),
+            "{names:?}"
+        );
+
+        let implementation = program
+            .protocol_impls
+            .first()
+            .expect("the impl survives isolation");
+        assert_eq!(implementation.protocol, "Sized");
+        assert_eq!(implementation.type_name, "shapes__Square");
+        assert_eq!(implementation.mappings[0].target, "shapes__Square.area");
+    }
+
+    #[test]
+    fn another_module_reaches_a_protocol_by_its_declared_name() {
+        let app = parse_source(
+            "app.rss",
+            "module app\n\nuse shapes.Sized\n\nfn measure<T: Sized>(shape: read T) -> Int {\n    return Sized.area(self: shape)\n}\n\nfn measure_dyn(shape: read Dyn<Sized>) -> Int {\n    return Sized.area(self: shape)\n}\n",
+        );
+        let mut program = merge_programs([parse_source("shapes.rss", SHAPES), app]);
+        isolate_module_namespaces(&mut program);
+
+        // The bound, the `Dyn<P>` parameter, and the dispatch all name `Sized`:
+        // nothing about crossing a module boundary renames a global.
+        let measure = program
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Function(function) if function.name == "app__measure" => Some(function),
+                _ => None,
+            })
+            .expect("app.measure present");
+        assert_eq!(
+            measure.type_params[0].bound,
+            Some(GenericBound::Protocol("Sized".to_string()))
+        );
+        let dispatch = body_of(&program, "app__measure");
+        assert!(
+            dispatch.contains("Qualified { namespace: \"Sized\", name: \"area\" }"),
+            "{dispatch}"
+        );
+
+        let dyn_param = format!(
+            "{:?}",
+            program
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Item::Function(function) if function.name == "app__measure_dyn" =>
+                        Some(&function.params),
+                    _ => None,
+                })
+                .expect("app.measure_dyn present")
+        );
+        assert!(dyn_param.contains("Sized"), "{dyn_param}");
+        assert!(!dyn_param.contains("__Sized"), "{dyn_param}");
+    }
+
+    #[test]
+    fn another_module_may_implement_a_protocol_declared_elsewhere() {
+        let app = parse_source(
+            "app.rss",
+            "module app\n\nuse shapes.Sized\n\npub struct Rect {\n    width: Int\n}\n\npub fn Rect.area(self: read Rect) -> Int {\n    return self.width\n}\n\nimpl Sized for Rect {\n    area = Rect.area\n}\n",
+        );
+        let mut program = merge_programs([parse_source("shapes.rss", SHAPES), app]);
+        // A protocol carries no visibility, so importing one is never `RS0019`.
+        assert!(cross_module_privacy_diagnostics(&program, &[]).is_empty());
+        isolate_module_namespaces(&mut program);
+
+        let rect_impl = program
+            .protocol_impls
+            .iter()
+            .find(|implementation| implementation.type_name == "app__Rect")
+            .expect("the cross-module impl survives isolation");
+        assert_eq!(rect_impl.protocol, "Sized");
+        assert_eq!(rect_impl.mappings[0].target, "app__Rect.area");
     }
 }

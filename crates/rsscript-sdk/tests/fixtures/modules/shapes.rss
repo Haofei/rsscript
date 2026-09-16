@@ -1,0 +1,20 @@
+module shapes
+
+// A `protocol` carries no visibility and its name is global (§7.1), so this
+// declaration is reachable from every module without `pub` and without a
+// module-qualified path.
+protocol Sized {
+    fn area(self: read Self) -> Int
+}
+
+pub struct Square {
+    side: Int
+}
+
+pub fn Square.area(self: read Square) -> Int {
+    return self.side * self.side
+}
+
+impl Sized for Square {
+    area = Square.area
+}

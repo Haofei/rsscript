@@ -1,0 +1,45 @@
+// A protocol declared inside a module, implemented in that same module, and
+// dispatched through a generic bound and through `Dyn<P>`.
+//
+// Module isolation mangles a module's declarations to a globally unique symbol.
+// Protocol names are global and are exempt: mangling `Sized.area` to
+// `app__Sized.area` used to break the namespace match that exempts a bodyless
+// protocol method from `RS0015`, so every method was rejected and the `impl`
+// reported `RS1301`.
+
+module app
+
+protocol Sized {
+    fn area(self: read Self) -> Int
+}
+
+pub struct Square {
+    side: Int
+}
+
+pub fn Square.area(self: read Square) -> Int {
+    return self.side * self.side
+}
+
+impl Sized for Square {
+    area = Square.area
+}
+
+fn measure<T: Sized>(shape: read T) -> Int {
+    return Sized.area(self: shape)
+}
+
+fn measure_dyn(shape: read Dyn<Sized>) -> Int {
+    return Sized.area(self: shape)
+}
+
+fn twice(side: Int) -> Int {
+    let square = Square(side: side)
+    return measure<Square>(shape: read square)
+}
+
+fn boxed(side: Int) -> Int {
+    local square = Square(side: side)
+    let dynamic = Dyn.from<Sized, Square>(value: take square)
+    return measure_dyn(shape: read dynamic)
+}

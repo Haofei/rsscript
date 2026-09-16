@@ -305,6 +305,13 @@ Additional facts of the pass:
 * Sum-type variant names are global: they resolve through their sum type and
   need no import. A qualified `module.Variant` reference rewrites to the bare
   variant.
+* **Protocol names are global and are exempt**, like `main`. A `protocol P`
+  declared in a module file keeps the name `P`; so do its contributed
+  `P.method` functions, the protocol side of an `impl P for T` header, a
+  `Dyn<P>`, a `<T: P>` bound, and a `P.method(...)` dispatch. The implementing
+  type and the concrete functions an `impl` maps to are mangled as usual, so
+  `impl P for Square` inside `module app` becomes `impl P for app__Square` with
+  the mapping target `app__Square.area` (§7.1).
 * `isolate_sources_with_interfaces` merges the source program and its interface
   programs into one module graph, isolates them together (so imports may cross
   the source/interface boundary), and then splits them back apart by file so HIR
@@ -329,7 +336,9 @@ only the module's `pub` names. Declarations supplied by an `.rssi`, the prelude
 interfaces, and `main` are exempt.
 
 Protocols carry no visibility at all and are not module-scoped, so neither `pub`
-nor `RS0019` applies to a protocol name. The rule is stated in §7.1.
+nor `RS0019` applies to a protocol name, and module mangling leaves it alone
+(§1.5). A protocol declared inside a module is reachable from every other module
+with or without a `use`. The rule is stated in §7.1.
 
 ### 1.7 Reserved names
 
@@ -3379,8 +3388,55 @@ reach.
 Protocol *methods* are a separate matter. A protocol declaration contributes one
 bodyless `Protocol.method` function per method, and an `impl` maps each of those
 to a concrete function whose own `pub`-ness is the ordinary declaration rule
-(§1.6). A protocol declared in a file that also declares a `module` does not
-currently work at all — see §12.2.
+(§1.6).
+
+**Global survives module mangling.** Module isolation renames a module's
+declarations to globally unique symbols (§1.5), and a global name is exempt from
+that renaming exactly as `main` is. `module_isolation.rs::Resolver` knows every
+declared protocol name and leaves four things alone:
+
+| Form | Under `module app` |
+| --- | --- |
+| the protocol method `Sized.area` | stays `Sized.area` |
+| the `impl Sized for Square` header | `Sized` stays; `Square` becomes `app__Square` |
+| a `Dyn<Sized>` type, a `<T: Sized>` bound | `Sized` stays |
+| a `Sized.area(self: …)` dispatch | stays `Sized.area` |
+
+The implementing type, the concrete functions an `impl` maps to, and every other
+module declaration are mangled as usual, so a protocol declared in one module and
+implemented in another resolves from both sides. Because the name is already
+global, a `use other.Sized` binds nothing new; it is accepted (a protocol is
+never private, so it is never `RS0019`) and is not required.
+
+**Accepted** — declared, implemented, and dispatched inside a module
+
+```rsscript
+module app
+
+protocol Sized {
+    fn area(self: read Self) -> Int
+}
+
+pub struct Square {
+    side: Int
+}
+
+pub fn Square.area(self: read Square) -> Int {
+    return self.side * self.side
+}
+
+impl Sized for Square {
+    area = Square.area
+}
+
+fn measure<T: Sized>(shape: read T) -> Int {
+    return Sized.area(self: shape)
+}
+
+fn measure_dyn(shape: read Dyn<Sized>) -> Int {
+    return Sized.area(self: shape)
+}
+```
 
 ### 7.2 Declaring conformance
 
@@ -4783,19 +4839,6 @@ These are findings for the maintainer, not features.
   takes. The form is reachable from the parser and from
   `match_pattern_binding_types`, which types it, so this is an unimplemented
   case rather than a deliberate rejection.
-* **A protocol cannot be declared inside a module.** A protocol's methods are
-  contributed as bodyless `Protocol.method` functions, and
-  `source_rules.rs` exempts them from `RS0015` ("bodyless source function") by
-  matching the function's namespace against the declared protocol names. In a
-  file that also declares a `module`, the module mangling has already renamed
-  the method to `app__Sized.area`, whose namespace `app__Sized` is not the
-  protocol name `Sized`, so the exemption misses and every method of the
-  protocol is rejected. The `impl` then reports `RS1301` ("`Sized` does not
-  declare method `area`") and each dispatch reports `RS0206`. Protocols
-  therefore work only in a module-less `.rss` or in an `.rssi`, which is why
-  every shipped protocol is declared in one of those. The rule in §7.1 — that
-  protocol names are global — is what the name resolution does; this is a
-  mangling that the exemption does not follow.
 * **A used binding with an open generic position is trusted.** `RS0034` fires
   only when the binding is never used (§3.3). `let xs = []` followed by pushes
   of mixed element types, or a bare `let v = Ok(1)` that is later returned, keeps
