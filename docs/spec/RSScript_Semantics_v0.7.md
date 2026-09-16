@@ -3137,8 +3137,15 @@ A block diverges when it ends in `return`, `break`, `continue`, or a `loop` with
 no `break` that targets it. Divergence is judged by the same analysis as
 function fall-through (§4.7, `RS0208`), so the two rules cannot disagree: a
 trailing `if` diverges only when it has an `else` and both arms diverge, and a
-trailing `match` only when every arm does. Closure bodies are not analysed, as
-in §6.12.
+trailing `match` only when every arm does.
+
+The rule applies wherever the statement is written. Both the syntax-side and the
+HIR-side walk descend into the blocks an expression carries — a closure body,
+and the arms of a `match` or `if` used as a value — because the question is
+local to the block: a `let … else` inside a closure binds a name the statements
+after it read, and falling out of its `else` reaches them unbound whatever
+region the block belongs to. A closure body may of course diverge with its own
+`return`, which returns from the closure.
 
 **Accepted**
 
@@ -3307,8 +3314,13 @@ rule is:
   or a loop body that may run zero times. The analysis is therefore *optimistic
   about paths*.
 * A later `let` of the same name with an initializer also marks it assigned.
-* Closure bodies are not walked: a closure runs at a time the check does not
-  model.
+* A **closure body is its own region**, and it is walked. Its own deferred
+  declarations are locals of that body and a read of one before it is assigned
+  is `RS0017` there, exactly as in a function body. The enclosing function's
+  deferred bindings are captures, so an assignment inside a closure does not
+  mark one assigned and a read inside one is not reported: a closure runs at a
+  time this check does not model. The blocks of a `match` or an `if` used as a
+  *value* run in place and share the enclosing state, and are walked too.
 * `let … else` bindings are not deferred declarations. They lower to a `let`
   with no value in HIR, so the deferred set is read off the *syntax* tree to
   keep the two apart exactly.
@@ -4830,6 +4842,19 @@ explicit note and offers a `_` arm rather than implying a missing case
 ### 12.2 Gaps — rules the design implies but the checker does not enforce
 
 These are findings for the maintainer, not features.
+
+Three gaps listed here in earlier drafts are closed and are now stated
+normatively where they belong, so a reader of an older draft can find what
+changed:
+
+* an `if` whose condition is a comparison, and a comparison or `&&`/`||` as a
+  `match` scrutinee — the HIR binary node carries its inferred type (§3.2, §6.2);
+* a `protocol` declared inside a `module` — protocol names are global and are
+  exempt from module mangling (§1.5, §7.1);
+* `RS0017` and `RS0020` inside a closure body — both walks descend into the
+  blocks an expression carries (§6.9, §6.12).
+
+What is left:
 
 * **A `match` arm cannot bind the whole scrutinee.** `ast.rs::MatchPattern`
   has a `Binding` form and §6.4 lists it, but no scrutinee type accepts it:

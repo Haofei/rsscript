@@ -1,0 +1,13 @@
+// expect: RS0017
+
+// The read is inside a closure body. Both definite-assignment walks used to
+// stop at the first expression boundary, so this checked clean and was then
+// rejected by bytecode verification ("`Move` reads uninitialized register").
+
+fn main() -> Int {
+    local compute = || {
+        let n: Int
+        return n
+    }
+    return compute()
+}

@@ -1,0 +1,17 @@
+// expect: RS0020
+
+// The `let … else` is inside a closure body. `first` is unbound when the
+// `else` block falls through, and the closure's `return first` then reads
+// uninitialized storage — the failure RS0020 exists to catch, wherever the
+// statement is written.
+
+fn main() -> Int {
+    let values: List<Int> = [1, 2]
+    local head = || {
+        let Some(first) = List.first(list: values) else {
+            let fallback = 0
+        }
+        return first
+    }
+    return head()
+}

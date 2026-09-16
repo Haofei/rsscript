@@ -3,7 +3,7 @@
 use crate::hir::{Hir, HirBlock, HirExpr, HirMatchArm, HirStmt, number_literal_type_name};
 use rsscript_diagnostics::{Diagnostic, Span, code};
 use rsscript_syntax::ast::{
-    Block, DataEffect, FunctionDecl, Item, MatchLiteral, Program, Stmt, TypeRef,
+    Block, Callee, DataEffect, Expr, FunctionDecl, Item, MatchLiteral, Program, Stmt, TypeRef,
 };
 use std::collections::HashSet;
 
@@ -287,8 +287,13 @@ fn collect_loop_control_flow_expr(
 ///   zero times — marks it assigned from then on. The analysis is therefore
 ///   optimistic about paths and only reports a read that *no* path assigns.
 /// * A later `let` of the same name with an initializer also marks it assigned.
-/// * Closure bodies are not walked at all: a closure runs at a time this check
-///   does not model.
+/// * A closure body is analysed as **its own region**: its own deferred
+///   declarations are ordinary locals of that body and are reported there, and
+///   the walk enters it with a clean slate. The enclosing function's deferred
+///   bindings are captures, so an assignment inside a closure does not mark
+///   one assigned and a read inside one does not report it — a closure runs at
+///   a time this check does not model. The same holds for a `match` (or `if`)
+///   used as a value, except that those run in place and so share the state.
 ///
 /// Consequence: every read this reports is wrong on every path, so there are no
 /// false positives from branch merging — at the cost of missing reads that are
@@ -322,45 +327,160 @@ struct DefiniteAssignment {
 /// `match`), and that binding is always assigned; keying on the syntax
 /// declaration keeps the two apart exactly rather than by heuristic.
 fn collect_deferred_let_spans(block: &Block, spans: &mut HashSet<Span>) {
-    for statement in &block.statements {
-        match statement {
-            Stmt::Let(stmt) if stmt.value.is_none() => {
+    for_each_nested_block(block, &mut |block| {
+        for statement in &block.statements {
+            if let Stmt::Let(stmt) = statement
+                && stmt.value.is_none()
+            {
                 spans.insert(stmt.span.clone());
             }
-            Stmt::If(stmt) => {
-                collect_deferred_let_spans(&stmt.then_body, spans);
-                if let Some(else_body) = &stmt.else_body {
-                    collect_deferred_let_spans(else_body, spans);
-                }
-            }
-            Stmt::Loop(stmt) => collect_deferred_let_spans(&stmt.body, spans),
-            Stmt::For(stmt) => collect_deferred_let_spans(&stmt.body, spans),
-            Stmt::With(stmt) => collect_deferred_let_spans(&stmt.body, spans),
-            Stmt::TaskGroup(stmt) => collect_deferred_let_spans(&stmt.body, spans),
-            Stmt::LetElse(stmt) => collect_deferred_let_spans(&stmt.else_body, spans),
-            Stmt::Match(stmt) => {
-                for arm in &stmt.arms {
-                    collect_deferred_let_spans(&arm.body, spans);
-                }
-            }
-            Stmt::Select(stmt) => {
-                for arm in &stmt.arms {
-                    collect_deferred_let_spans(&arm.body, spans);
-                }
-            }
-            Stmt::Let(_)
-            | Stmt::Return(_)
-            | Stmt::Assign(_)
-            | Stmt::Expr(_)
-            | Stmt::Break(_)
-            | Stmt::Continue(_)
-            | Stmt::MalformedWith(_)
-            | Stmt::MalformedIf(_)
-            | Stmt::MalformedLoop(_)
-            | Stmt::MalformedFor(_)
-            | Stmt::MalformedMatch(_)
-            | Stmt::Unknown(_) => {}
         }
+    });
+}
+
+/// Visit `block` and every block nested inside it, statement bodies and the
+/// blocks an *expression* carries alike: a closure body, and the arms of a
+/// `match` — or of an `if` — used as a value.
+///
+/// Both syntax-side collectors that feed the two analyses below key on
+/// statement spans, and both used to walk statements only. A rule therefore
+/// stopped at the first expression boundary: a deferred `let` or a
+/// `let … else` written inside a closure body was invisible, so the program
+/// checked clean and was then rejected by bytecode verification — the one
+/// failure shape these rules exist to prevent. The HIR-side walks descend into
+/// the same places, so the two sides cannot see different statements.
+fn for_each_nested_block(block: &Block, visit: &mut impl FnMut(&Block)) {
+    visit(block);
+    for statement in &block.statements {
+        for_each_stmt_nested_block(statement, visit);
+    }
+}
+
+fn for_each_stmt_nested_block(statement: &Stmt, visit: &mut impl FnMut(&Block)) {
+    match statement {
+        Stmt::Let(stmt) => {
+            if let Some(value) = &stmt.value {
+                for_each_expr_nested_block(value, visit);
+            }
+        }
+        Stmt::Return(stmt) => {
+            if let Some(value) = &stmt.value {
+                for_each_expr_nested_block(value, visit);
+            }
+        }
+        Stmt::Assign(stmt) => {
+            for_each_expr_nested_block(&stmt.target, visit);
+            for_each_expr_nested_block(&stmt.value, visit);
+        }
+        Stmt::Expr(expr) => for_each_expr_nested_block(expr, visit),
+        Stmt::With(stmt) => {
+            for_each_expr_nested_block(&stmt.resource, visit);
+            for_each_nested_block(&stmt.body, visit);
+        }
+        Stmt::If(stmt) => {
+            for_each_expr_nested_block(&stmt.condition, visit);
+            for_each_nested_block(&stmt.then_body, visit);
+            if let Some(else_body) = &stmt.else_body {
+                for_each_nested_block(else_body, visit);
+            }
+        }
+        Stmt::Loop(stmt) => {
+            if let Some(condition) = &stmt.condition {
+                for_each_expr_nested_block(condition, visit);
+            }
+            for_each_nested_block(&stmt.body, visit);
+        }
+        Stmt::For(stmt) => {
+            for_each_expr_nested_block(&stmt.iterable, visit);
+            for_each_nested_block(&stmt.body, visit);
+        }
+        Stmt::TaskGroup(stmt) => for_each_nested_block(&stmt.body, visit),
+        Stmt::LetElse(stmt) => {
+            for_each_expr_nested_block(&stmt.value, visit);
+            for_each_nested_block(&stmt.else_body, visit);
+        }
+        Stmt::Match(stmt) => {
+            for_each_expr_nested_block(&stmt.value, visit);
+            for arm in &stmt.arms {
+                if let Some(guard) = &arm.guard {
+                    for_each_expr_nested_block(guard, visit);
+                }
+                for_each_nested_block(&arm.body, visit);
+            }
+        }
+        Stmt::Select(stmt) => {
+            for arm in &stmt.arms {
+                for_each_expr_nested_block(&arm.operation, visit);
+                for_each_nested_block(&arm.body, visit);
+            }
+        }
+        Stmt::Break(_)
+        | Stmt::Continue(_)
+        | Stmt::MalformedWith(_)
+        | Stmt::MalformedIf(_)
+        | Stmt::MalformedLoop(_)
+        | Stmt::MalformedFor(_)
+        | Stmt::MalformedMatch(_)
+        | Stmt::Unknown(_) => {}
+    }
+}
+
+fn for_each_expr_nested_block(expr: &Expr, visit: &mut impl FnMut(&Block)) {
+    match expr {
+        Expr::Closure { body, .. } => for_each_nested_block(body, visit),
+        Expr::Match { value, arms, .. } => {
+            for_each_expr_nested_block(value, visit);
+            for arm in arms {
+                if let Some(guard) = &arm.guard {
+                    for_each_expr_nested_block(guard, visit);
+                }
+                for_each_nested_block(&arm.body, visit);
+            }
+        }
+        Expr::Call { callee, args, .. } => {
+            if let Callee::ReceiverCall { receiver, .. } = callee {
+                for_each_expr_nested_block(receiver, visit);
+            }
+            for arg in args {
+                for_each_expr_nested_block(&arg.value, visit);
+            }
+        }
+        Expr::Binary { left, right, .. } => {
+            for_each_expr_nested_block(left, visit);
+            for_each_expr_nested_block(right, visit);
+        }
+        Expr::Index { base, index, .. } => {
+            for_each_expr_nested_block(base, visit);
+            for_each_expr_nested_block(index, visit);
+        }
+        Expr::Field { base: value, .. }
+        | Expr::Effect { value, .. }
+        | Expr::Manage { value, .. }
+        | Expr::Spawn { value, .. }
+        | Expr::Await { value, .. }
+        | Expr::Try { value, .. } => for_each_expr_nested_block(value, visit),
+        Expr::ArrayLiteral { items, .. } => {
+            for item in items {
+                for_each_expr_nested_block(item, visit);
+            }
+        }
+        Expr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                for_each_expr_nested_block(&entry.key, visit);
+                for_each_expr_nested_block(&entry.value, visit);
+            }
+        }
+        Expr::ObjectLiteral { fields, .. } => {
+            for field in fields {
+                for_each_expr_nested_block(&field.value, visit);
+            }
+        }
+        Expr::Ident(..)
+        | Expr::Number(..)
+        | Expr::String(..)
+        | Expr::CharLiteral(..)
+        | Expr::MultilineString(..)
+        | Expr::Unknown(_) => {}
     }
 }
 
@@ -380,8 +500,11 @@ fn collect_deferred_let_spans(block: &Block, spans: &mut HashSet<Span>) {
 /// through `block_may_fall_through`, the analysis RS0208 uses for function
 /// fall-through. The two rules therefore cannot disagree about what diverges.
 ///
-/// Closure bodies are not analysed, matching `RS0017`: a closure runs at a time
-/// this walk does not model.
+/// Both walks descend into the blocks an expression carries — a closure body,
+/// and the arms of a `match` or `if` used as a value — because the question is
+/// local to the block: a `let … else` inside a closure binds a name the
+/// statements after it read, and falling out of its `else` reaches them unbound
+/// whatever region the block belongs to.
 pub fn let_else_divergence_diagnostics(body: &Block, block: &HirBlock) -> Vec<Diagnostic> {
     let mut spans = HashSet::new();
     collect_let_else_spans(body, &mut spans);
@@ -393,48 +516,16 @@ pub fn let_else_divergence_diagnostics(body: &Block, block: &HirBlock) -> Vec<Di
     diagnostics
 }
 
-/// Collect the spans of `let … else` statements in one function body.
+/// Collect the spans of `let … else` statements in one function body, closure
+/// bodies and value-position `match`/`if` arms included.
 fn collect_let_else_spans(block: &Block, spans: &mut HashSet<Span>) {
-    for statement in &block.statements {
-        match statement {
-            Stmt::LetElse(stmt) => {
+    for_each_nested_block(block, &mut |block| {
+        for statement in &block.statements {
+            if let Stmt::LetElse(stmt) = statement {
                 spans.insert(stmt.span.clone());
-                collect_let_else_spans(&stmt.else_body, spans);
             }
-            Stmt::If(stmt) => {
-                collect_let_else_spans(&stmt.then_body, spans);
-                if let Some(else_body) = &stmt.else_body {
-                    collect_let_else_spans(else_body, spans);
-                }
-            }
-            Stmt::Loop(stmt) => collect_let_else_spans(&stmt.body, spans),
-            Stmt::For(stmt) => collect_let_else_spans(&stmt.body, spans),
-            Stmt::With(stmt) => collect_let_else_spans(&stmt.body, spans),
-            Stmt::TaskGroup(stmt) => collect_let_else_spans(&stmt.body, spans),
-            Stmt::Match(stmt) => {
-                for arm in &stmt.arms {
-                    collect_let_else_spans(&arm.body, spans);
-                }
-            }
-            Stmt::Select(stmt) => {
-                for arm in &stmt.arms {
-                    collect_let_else_spans(&arm.body, spans);
-                }
-            }
-            Stmt::Let(_)
-            | Stmt::Return(_)
-            | Stmt::Assign(_)
-            | Stmt::Expr(_)
-            | Stmt::Break(_)
-            | Stmt::Continue(_)
-            | Stmt::MalformedWith(_)
-            | Stmt::MalformedIf(_)
-            | Stmt::MalformedLoop(_)
-            | Stmt::MalformedFor(_)
-            | Stmt::MalformedMatch(_)
-            | Stmt::Unknown(_) => {}
         }
-    }
+    });
 }
 
 fn collect_let_else_divergence(
@@ -454,36 +545,130 @@ fn collect_let_else_divergence(
         }
         match statement {
             HirStmt::If {
+                condition,
                 then_body,
                 else_body,
                 ..
             } => {
+                collect_let_else_divergence_expr(condition, spans, diagnostics);
                 collect_let_else_divergence(then_body, spans, diagnostics);
                 if let Some(else_body) = else_body {
                     collect_let_else_divergence(else_body, spans, diagnostics);
                 }
             }
-            HirStmt::Loop { body, .. } | HirStmt::For { body, .. } | HirStmt::With { body, .. } => {
+            HirStmt::Loop {
+                condition, body, ..
+            } => {
+                if let Some(condition) = condition {
+                    collect_let_else_divergence_expr(condition, spans, diagnostics);
+                }
                 collect_let_else_divergence(body, spans, diagnostics);
             }
-            HirStmt::Match { arms, .. } => {
+            HirStmt::For { iterable, body, .. } => {
+                collect_let_else_divergence_expr(iterable, spans, diagnostics);
+                collect_let_else_divergence(body, spans, diagnostics);
+            }
+            HirStmt::With { resource, body, .. } => {
+                collect_let_else_divergence_expr(resource, spans, diagnostics);
+                collect_let_else_divergence(body, spans, diagnostics);
+            }
+            HirStmt::Match { value, arms, .. } => {
+                collect_let_else_divergence_expr(value, spans, diagnostics);
                 for arm in arms {
+                    if let Some(guard) = &arm.guard {
+                        collect_let_else_divergence_expr(guard, spans, diagnostics);
+                    }
                     collect_let_else_divergence(&arm.body, spans, diagnostics);
                 }
             }
             HirStmt::Select { arms, .. } => {
                 for arm in arms {
+                    collect_let_else_divergence_expr(&arm.operation, spans, diagnostics);
                     collect_let_else_divergence(&arm.body, spans, diagnostics);
                 }
             }
-            HirStmt::Let { .. }
-            | HirStmt::Return { .. }
-            | HirStmt::Assign { .. }
-            | HirStmt::Expr(_)
-            | HirStmt::Break(_)
-            | HirStmt::Continue(_)
-            | HirStmt::Unknown(_) => {}
+            HirStmt::Let { value, .. } | HirStmt::Return { value, .. } => {
+                if let Some(value) = value {
+                    collect_let_else_divergence_expr(value, spans, diagnostics);
+                }
+            }
+            HirStmt::Assign { target, value, .. } => {
+                collect_let_else_divergence_expr(target, spans, diagnostics);
+                collect_let_else_divergence_expr(value, spans, diagnostics);
+            }
+            HirStmt::Expr(expr) => collect_let_else_divergence_expr(expr, spans, diagnostics),
+            HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => {}
         }
+    }
+}
+
+/// Walk into the blocks an expression carries. A closure body is its own
+/// control-flow region, but the question this rule asks — can this `else` block
+/// fall through — is local to the block, so a closure body is analysed exactly
+/// like any other: a `let … else` inside one binds a name the statements after
+/// it read, and falling out of the `else` reaches them unbound whichever region
+/// the block belongs to.
+fn collect_let_else_divergence_expr(
+    expr: &HirExpr,
+    spans: &HashSet<Span>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    match expr {
+        HirExpr::Closure { body, .. } => collect_let_else_divergence(body, spans, diagnostics),
+        HirExpr::Match { value, arms, .. } => {
+            collect_let_else_divergence_expr(value, spans, diagnostics);
+            for arm in arms {
+                if let Some(guard) = &arm.guard {
+                    collect_let_else_divergence_expr(guard, spans, diagnostics);
+                }
+                collect_let_else_divergence(&arm.body, spans, diagnostics);
+            }
+        }
+        HirExpr::Call { args, receiver, .. } => {
+            if let Some(receiver) = receiver {
+                collect_let_else_divergence_expr(&receiver.value, spans, diagnostics);
+            }
+            for arg in args {
+                collect_let_else_divergence_expr(&arg.value, spans, diagnostics);
+            }
+        }
+        HirExpr::Binary { left, right, .. } => {
+            collect_let_else_divergence_expr(left, spans, diagnostics);
+            collect_let_else_divergence_expr(right, spans, diagnostics);
+        }
+        HirExpr::Index { base, index, .. } => {
+            collect_let_else_divergence_expr(base, spans, diagnostics);
+            collect_let_else_divergence_expr(index, spans, diagnostics);
+        }
+        HirExpr::Effect { value, .. }
+        | HirExpr::Manage { value, .. }
+        | HirExpr::Spawn { value, .. }
+        | HirExpr::Await { value, .. }
+        | HirExpr::Try { value, .. }
+        | HirExpr::Field { base: value, .. } => {
+            collect_let_else_divergence_expr(value, spans, diagnostics);
+        }
+        HirExpr::ArrayLiteral { items, .. } => {
+            for item in items {
+                collect_let_else_divergence_expr(item, spans, diagnostics);
+            }
+        }
+        HirExpr::MapLiteral { entries, .. } => {
+            for entry in entries {
+                collect_let_else_divergence_expr(&entry.key, spans, diagnostics);
+                collect_let_else_divergence_expr(&entry.value, spans, diagnostics);
+            }
+        }
+        HirExpr::ObjectLiteral { fields, .. } => {
+            for field in fields {
+                collect_let_else_divergence_expr(&field.value, spans, diagnostics);
+            }
+        }
+        HirExpr::Ident { .. }
+        | HirExpr::Number { .. }
+        | HirExpr::String { .. }
+        | HirExpr::Char { .. }
+        | HirExpr::Unknown(_) => {}
     }
 }
 
@@ -636,8 +821,18 @@ fn collect_assignment_reads(
                 state.unassigned.remove(name);
             }
         }
-        // A closure runs at a time this check does not model.
-        HirExpr::Closure { .. } => {}
+        // A closure body is its own region: the enclosing function's deferred
+        // bindings are captures, and a closure runs at a time this check does
+        // not model, so they stay out of the walk. The closure's *own* deferred
+        // bindings are ordinary locals of that body, and a read of one before
+        // it is assigned lowers to a read of uninitialized storage exactly as it
+        // does in a function body — which bytecode verification rejects after
+        // the checker has already said the program is fine.
+        HirExpr::Closure { body, .. } => {
+            let enclosing = std::mem::take(&mut state.unassigned);
+            collect_definite_assignment(body, state, diagnostics);
+            state.unassigned = enclosing;
+        }
         HirExpr::Call { args, receiver, .. } => {
             if let Some(receiver) = receiver {
                 collect_assignment_reads(&receiver.value, state, diagnostics);
@@ -1488,6 +1683,52 @@ mod tests {
     }
 
     #[test]
+    fn a_read_before_assignment_inside_a_closure_body_is_reported() {
+        // Both walks used to stop at the first expression boundary, so a
+        // closure body could read uninitialized storage while the file checked
+        // clean and then failed bytecode verification.
+        assert_eq!(
+            definite_assignment_codes(
+                "fn check() -> Int {\n    local f = || {\n        let n: Int\n        return n\n    }\n    return f()\n}"
+            ),
+            [code::READ_BEFORE_ASSIGNMENT]
+        );
+    }
+
+    #[test]
+    fn a_closure_body_that_assigns_before_it_reads_is_accepted() {
+        assert!(
+            definite_assignment_codes(
+                "fn check() -> Int {\n    local f = || {\n        let mut n: Int\n        n = 1\n        return n\n    }\n    return f()\n}"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_closure_body_is_its_own_definite_assignment_region() {
+        // The enclosing function's deferred binding is a capture, not a local of
+        // the closure: walking into the body must not start reporting it, and
+        // the closure's assignment must not silence the outer read either.
+        assert_eq!(
+            definite_assignment_codes(
+                "fn check(out: mut List<Int>) -> Unit {\n    let mut x: Int\n    local f = || {\n        x = 1\n        return Unit\n    }\n    List.push(self: mut out, value: x)\n}"
+            ),
+            [code::READ_BEFORE_ASSIGNMENT]
+        );
+    }
+
+    #[test]
+    fn a_deferred_binding_inside_a_value_position_match_arm_is_analysed() {
+        assert_eq!(
+            definite_assignment_codes(
+                "fn check(flag: Bool, out: mut List<Int>) -> Unit {\n    let value = if flag {\n        let n: Int\n        n\n    } else {\n        0\n    }\n    List.push(self: mut out, value: value)\n}"
+            ),
+            [code::READ_BEFORE_ASSIGNMENT]
+        );
+    }
+
+    #[test]
     fn derives_non_exhaustive_match_diagnostics_from_resolved_facts() {
         let span = Span {
             file: "match.rss".to_owned(),
@@ -1874,6 +2115,33 @@ mod tests {
                 "`{block}` diverges"
             );
         }
+    }
+
+    #[test]
+    fn a_let_else_inside_a_closure_body_is_analysed() {
+        assert_eq!(
+            let_else_codes(
+                "fn check(value: Option<Int>) -> Int {\n    local f = || {\n        let Some(n) = value else {\n            let fallback = 0\n        }\n        return n\n    }\n    return f()\n}"
+            ),
+            [code::LET_ELSE_MUST_DIVERGE]
+        );
+        assert!(
+            let_else_codes(
+                "fn check(value: Option<Int>) -> Int {\n    local f = || {\n        let Some(n) = value else {\n            return 0\n        }\n        return n\n    }\n    return f()\n}"
+            )
+            .is_empty(),
+            "a closure body may diverge with its own `return`"
+        );
+    }
+
+    #[test]
+    fn a_let_else_inside_a_value_position_match_arm_is_analysed() {
+        assert_eq!(
+            let_else_codes(
+                "fn check(flag: Bool, value: Option<Int>) -> Int {\n    let result = if flag {\n        let Some(n) = value else {\n            let fallback = 0\n        }\n        n\n    } else {\n        0\n    }\n    return result\n}"
+            ),
+            [code::LET_ELSE_MUST_DIVERGE]
+        );
     }
 
     #[test]
