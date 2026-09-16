@@ -1,0 +1,32 @@
+// A comparison and a logical operator are `Bool`, so `true`/`false` arms close
+// the match with no `_` — and an `if` used for a value is that same match.
+
+fn pick(n: Int) -> Int {
+    let value = if n > 10 { 1 } else { 2 }
+    return value
+}
+
+fn compare(a: Int, b: Int) -> Int {
+    match a < b {
+        true => { return 1 }
+        false => { return 0 }
+    }
+}
+
+fn both(a: Bool, b: Bool) -> Int {
+    match a && b {
+        true => { return 1 }
+        false => { return 0 }
+    }
+}
+
+fn either(a: Bool, b: Bool) -> Int {
+    match a || b {
+        true => { return 1 }
+        false => { return 0 }
+    }
+}
+
+fn main() -> Int {
+    return pick(n: 12) + compare(a: 1, b: 2) + both(a: true, b: true) + either(a: false, b: true)
+}

@@ -1101,7 +1101,7 @@ checks *skip* rather than report.
 | `await e` | the `Task` payload of `e` if it has one, else the type of `e` |
 | `spawn e` | `Task<typeof e>` |
 | `match e { … }` | the type its arms agree on (see below) |
-| `if c { … } else { … }` | the same rule: an `if` expression is a `match` over `true`/`false` (§6.2), but see the exhaustiveness limit in §12.2 |
+| `if c { … } else { … }` | the same rule: an `if` expression is a `match` over `true`/`false` (§6.2) |
 | closure | *not inferred* (`None`) — see §3.5 |
 
 A block used as a value takes its type from its last statement, and that
@@ -2643,8 +2643,11 @@ expression's typing and lowering — the `true` and `false` literal arms cover
 `Bool`, so the desugared match is exhaustive (§6.7).
 
 In expression position the condition must be one the checker can *type* as
-`Bool`, and a comparison is not: see §12.2. `if flag { … } else { … }` is a
-value; `if n > 10 { … } else { … }` is `RS0021`.
+`Bool`, and a comparison is one: `HirExpr::Binary` carries the result type
+`hir/infer.rs::infer_binary_type` proves for the operator, so `if n > 10 { … }
+else { … }` closes its desugared match exactly as `if flag { … } else { … }`
+does. The same type makes a comparison — and a `&&`/`||` — a usable `match`
+scrutinee with `true` and `false` arms and no `_`.
 
 **Accepted**
 
@@ -2654,8 +2657,22 @@ fn pick(flag: Bool) -> Int {
     return value
 }
 
+fn threshold(n: Int) -> Int {
+    let value = if n > 10 { 1 } else { 2 }
+    return value
+}
+
+fn compare(a: Int, b: Int) -> Int {
+    match a < b {
+        true => { return 1 }
+        false => { return 0 }
+    }
+}
+
 fn main() -> Unit {
     Output.write(message: Int.to_string(value: pick(flag: true)))
+    Output.write(message: Int.to_string(value: threshold(n: 12)))
+    Output.write(message: Int.to_string(value: compare(a: 1, b: 2)))
     return Unit
 }
 ```
@@ -4758,17 +4775,6 @@ explicit note and offers a `_` arm rather than implying a missing case
 
 These are findings for the maintainer, not features.
 
-* **An `if` expression whose condition is a comparison is `RS0021`.** An `if`
-  used for a value desugars to a `match` over `true`/`false` literal arms, which
-  §6.7 says covers `Bool` — but the coverage rule needs the scrutinee's *type*,
-  and `analyzer.rs::hir_expr_type_name` returns `None` for `HirExpr::Binary`
-  because the node carries no type at all. `let value = if flag { 1 } else { 2 }`
-  therefore checks clean while `let value = if n > 10 { 1 } else { 2 }` is
-  "match expression is not exhaustive". Inference types the operator fine
-  (`infer_binary_type` gives `Bool`); it is the HIR node that drops the answer
-  on the floor, so every consumer reading types off the HIR rather than
-  re-inferring sees a comparison as untyped. The same gap makes a comparison an
-  unusable `match` scrutinee.
 * **A `match` arm cannot bind the whole scrutinee.** `ast.rs::MatchPattern`
   has a `Binding` form and §6.4 lists it, but no scrutinee type accepts it:
   `match n { other => … }` is `RS0209` ("match pattern `other` cannot match

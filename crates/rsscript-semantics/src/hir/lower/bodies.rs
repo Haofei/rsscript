@@ -873,6 +873,7 @@ pub(super) fn lower_hir_expr(
             op: *op,
             left: Box::new(lower_hir_expr(hir, function_name, left, value_types)),
             right: Box::new(lower_hir_expr(hir, function_name, right, value_types)),
+            type_name: infer_hir_expr_type(hir, expr, value_types).map(|ty| ty.to_string()),
             span: span.clone(),
         },
         Expr::Field { base, name, span } => {

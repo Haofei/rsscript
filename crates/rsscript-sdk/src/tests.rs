@@ -458,6 +458,77 @@ fn stable_facade_exposes_scalar_results_as_canonical_wire_values() {
     assert_eq!(report.display_value(), Some("42"));
 }
 
+/// Build, verify, and run one self-contained program, returning its report.
+///
+/// The three tests below are end-to-end on purpose: each shape they cover used
+/// to be rejected by the checker, so "it checks" is only half the claim. The
+/// other half is that it lowers, verifies, and produces the expected value.
+fn run_to_completion(file: &str, source: &str) -> ExecutionReport {
+    let built = Compiler
+        .compile(file, source)
+        .unwrap_or_else(|error| panic!("compile {file}: {error}"));
+    let admitted = ArtifactVerifier
+        .verify(built)
+        .unwrap_or_else(|error| panic!("verify {file}: {error}"))
+        .admit_trusted_input();
+    Runtime::default()
+        .link(&admitted)
+        .unwrap_or_else(|error| panic!("link {file}: {error}"))
+        .execute(ExecutionRequest::default())
+}
+
+/// An `if` whose condition is a comparison, used for a value.
+///
+/// An `if` expression desugars to a `match` over `true`/`false` literal arms,
+/// and the coverage rule needs the scrutinee's type to see those two arms as
+/// covering `Bool`. While `HirExpr::Binary` carried no type, this program was
+/// `RS0021` "match expression is not exhaustive" — a comparison was unusable
+/// in the one position a comparison is written most often.
+#[test]
+fn a_comparison_is_a_usable_if_expression_condition() {
+    let report = run_to_completion(
+        "main.rss",
+        "fn pick(n: Int) -> Int { let value = if n > 10 { 1 } else { 2 }; return value }\n         fn main() -> Int { return pick(n: 12) * 10 + pick(n: 3) }",
+    );
+
+    assert_eq!(report.termination_reason(), TerminationReason::Completed);
+    assert_eq!(
+        report.wire_value(),
+        Some(&provider::WireValue::Int { value: 12 })
+    );
+}
+
+/// A comparison as a `match` scrutinee, with `true`/`false` arms and no `_`.
+#[test]
+fn a_comparison_is_a_usable_match_scrutinee() {
+    let report = run_to_completion(
+        "main.rss",
+        "fn describe(a: Int, b: Int) -> Int { match a < b { true => { return 1 } false => { return 0 } } }\n         fn main() -> Int { return describe(a: 1, b: 2) * 10 + describe(a: 5, b: 2) }",
+    );
+
+    assert_eq!(report.termination_reason(), TerminationReason::Completed);
+    assert_eq!(
+        report.wire_value(),
+        Some(&provider::WireValue::Int { value: 10 })
+    );
+}
+
+/// A logical operator as a `match` scrutinee. `&&` and `||` yield `Bool` by the
+/// same rule comparisons do, so they close the same match.
+#[test]
+fn a_logical_operator_is_a_usable_match_scrutinee() {
+    let report = run_to_completion(
+        "main.rss",
+        "fn both(a: Bool, b: Bool) -> Int { match a && b { true => { return 1 } false => { return 0 } } }\n         fn either(a: Bool, b: Bool) -> Int { match a || b { true => { return 1 } false => { return 0 } } }\n         fn main() -> Int { return both(a: true, b: false) * 10 + either(a: true, b: false) }",
+    );
+
+    assert_eq!(report.termination_reason(), TerminationReason::Completed);
+    assert_eq!(
+        report.wire_value(),
+        Some(&provider::WireValue::Int { value: 1 })
+    );
+}
+
 #[test]
 fn stable_facade_exposes_v1_record_results_as_canonical_wire_values() {
     let built = Compiler

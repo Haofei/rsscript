@@ -1,0 +1,13 @@
+// expect: RS0021
+
+// A comparison scrutinee is `Bool`, and `Bool` has two cases: a match that
+// covers only `true` is not exhaustive, exactly as it is for a `Bool` binding.
+
+fn main() -> Unit {
+    let a = 1
+    let b = 2
+    match a < b {
+        true => { return Unit }
+    }
+    return Unit
+}

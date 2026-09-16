@@ -375,6 +375,14 @@ pub enum HirExpr {
         op: BinaryOp,
         left: Box<HirExpr>,
         right: Box<HirExpr>,
+        /// Result type of the operator, proved by `infer::infer_binary_type`
+        /// at construction: `Bool` for every comparison and logical operator,
+        /// the shared operand type for a well-typed arithmetic or bitwise
+        /// pair, and `None` for the pairs `operators.rs` already rejects.
+        /// Consumers that read types off the HIR — exhaustiveness above all,
+        /// which needs `Bool` to see `if a > b { … } else { … }` as a covered
+        /// `match` — read this instead of re-inferring or giving up.
+        type_name: Option<String>,
         span: Span,
     },
     Field {

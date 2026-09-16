@@ -1141,12 +1141,13 @@ fn hir_expr_type_name(expr: &HirExpr) -> Option<&str> {
         | HirExpr::Await { type_name, .. }
         | HirExpr::Try { type_name, .. }
         | HirExpr::Match { type_name, .. }
+        | HirExpr::Binary { type_name, .. }
         | HirExpr::MapLiteral { type_name, .. } => type_name.as_deref(),
         HirExpr::Field { access, .. } => access.type_name.as_deref(),
         HirExpr::Number { value, .. } => Some(crate::hir::number_literal_type_name(value)),
         HirExpr::String { .. } => Some("String"),
         HirExpr::Char { .. } => Some("Char"),
-        HirExpr::Binary { .. } | HirExpr::Index { .. } => None,
+        HirExpr::Index { .. } => None,
         HirExpr::ObjectLiteral { .. }
         | HirExpr::ArrayLiteral { .. }
         | HirExpr::Closure { .. }

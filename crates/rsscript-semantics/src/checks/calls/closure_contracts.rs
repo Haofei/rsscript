@@ -899,6 +899,7 @@ pub(super) fn check_callback_operator_operand_types(
             left,
             right,
             span,
+            ..
         } => {
             check_callback_operator_operand_types(analyzer, left, contract);
             check_callback_operator_operand_types(analyzer, right, contract);

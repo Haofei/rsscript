@@ -100,6 +100,7 @@ fn collect_expr_operator_diagnostics(hir: &Hir, expr: &HirExpr, diagnostics: &mu
             left,
             right,
             span,
+            ..
         } => {
             collect_expr_operator_diagnostics(hir, left, diagnostics);
             collect_expr_operator_diagnostics(hir, right, diagnostics);
