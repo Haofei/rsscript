@@ -27,7 +27,18 @@ pub(crate) fn run_build(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let bytes = match build.bundle_bytes() {
+    // `rss build` promises verified bytecode, so the Artifact verifier runs
+    // here rather than only in `rss run`/`rss inspect`. It runs before any
+    // filesystem effect: a bundle the verifier rejects leaves no file behind,
+    // not even a truncated one, because nothing has been created yet.
+    let verified = match ArtifactVerifier.verify(build) {
+        Ok(verified) => verified,
+        Err(error) => {
+            eprintln!("verification failed: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let bytes = match verified.bundle().to_bytes() {
         Ok(bytes) => bytes,
         Err(error) => {
             eprintln!("{error:?}");
@@ -56,8 +67,9 @@ pub(crate) fn run_build(args: &[String]) -> ExitCode {
             eprintln!("cannot create {}: {error}", parent.display());
             return ExitCode::from(2);
         }
-        let analysis = serde_json::to_string_pretty(build.analysis_envelope().payload())
-            .expect("Artifact Bundle analysis must serialize");
+        let analysis =
+            serde_json::to_string_pretty(verified.bundle().analysis_envelope().payload())
+                .expect("Artifact Bundle analysis must serialize");
         if let Err(error) = fs::write(&analysis_output, format!("{analysis}\n")) {
             eprintln!("cannot write {}: {error}", analysis_output.display());
             return ExitCode::from(2);

@@ -515,6 +515,91 @@ fn artifact_bundle_verify_run_and_semantic_diff_form_one_cli_workflow() {
     assert_ne!(diff["old"]["module_digest"], diff["new"]["module_digest"]);
 }
 
+/// `rss build` is documented as emitting verified bytecode, so it must run the
+/// Artifact verifier itself rather than leaning on `rss run` re-verifying later.
+///
+/// The refused program is a `let ... else` whose else block does not diverge.
+/// The checker accepts it today (a separate gap), MIR lowering accepts it, and
+/// the emitted function reads the pattern binding on an edge that never wrote
+/// it — exactly the class of input this gate exists for. A build that the
+/// verifier rejects must leave no file behind at all.
+#[cfg(feature = "execution")]
+#[test]
+fn build_refuses_a_bundle_the_artifact_verifier_rejects() {
+    let bin = env!("CARGO_BIN_EXE_rss");
+    let temp = tempfile::tempdir().expect("temp dir");
+    let source = temp.path().join("main.rss");
+    let bundle = temp.path().join("main.rssbundle");
+    fs::write(
+        &source,
+        "fn unwrap(value: Option<String>) -> String {\n    let Some(inner) = value else {\n        let fallback = \"x\"\n    }\n    return inner\n}\n\nfn main() -> String {\n    return unwrap(value: Some(\"hi\"))\n}\n",
+    )
+    .expect("write fixture");
+
+    let checked = Command::new(bin)
+        .args(["check"])
+        .arg(&source)
+        .output()
+        .expect("rss check should run");
+    assert!(
+        checked.status.success(),
+        "the checker still accepts this program: {}",
+        String::from_utf8_lossy(&checked.stdout)
+    );
+
+    let built = Command::new(bin)
+        .args(["build", "--out", bundle.to_str().unwrap()])
+        .arg(&source)
+        .output()
+        .expect("rss build should run");
+    assert_eq!(built.status.code(), Some(1), "{built:?}");
+    let stderr = String::from_utf8_lossy(&built.stderr);
+    assert!(
+        stderr.contains("`Move` reads uninitialized register"),
+        "build must fail with the verifier's own diagnostic: {stderr}"
+    );
+    assert!(
+        !bundle.exists(),
+        "a refused build must not leave a bundle behind"
+    );
+}
+
+/// The other half of the same promise: what `rss build` does write is a bundle
+/// `rss verify` accepts.
+#[cfg(feature = "execution")]
+#[test]
+fn build_writes_a_bundle_that_verify_accepts() {
+    let bin = env!("CARGO_BIN_EXE_rss");
+    let temp = tempfile::tempdir().expect("temp dir");
+    let source = temp.path().join("main.rss");
+    let bundle = temp.path().join("main.rssbundle");
+    fs::write(
+        &source,
+        "fn unwrap(value: Option<String>) -> String {\n    let Some(inner) = value else {\n        return \"default\"\n    }\n    return inner\n}\n\nfn main() -> String {\n    return unwrap(value: None)\n}\n",
+    )
+    .expect("write fixture");
+
+    let built = Command::new(bin)
+        .args(["build", "--out", bundle.to_str().unwrap()])
+        .arg(&source)
+        .output()
+        .expect("rss build should run");
+    assert!(
+        built.status.success(),
+        "{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let verified = Command::new(bin)
+        .args(["verify", bundle.to_str().unwrap()])
+        .output()
+        .expect("rss verify should run");
+    assert!(
+        verified.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verified.stderr)
+    );
+}
+
 /// Check `source` end to end through the real `rss check --json` entry point and
 /// return the diagnostic codes it reports, in order.
 fn check_diagnostic_codes(source: &str) -> Vec<String> {
