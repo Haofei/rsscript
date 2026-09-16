@@ -155,10 +155,14 @@ const CASES: &[(&str, &str)] = &[
         include_str!("../../../benchmarks/vm-jit/kernels/native_closure_sinking.rss"),
     ),
     // A `Bool` match whose scrutinee is a comparison, plus an `if` expression
-    // used for a value. Both reach generated code as the same two-way branch on
-    // a compare result, so the native engine must reproduce the interpreter's
-    // arm selection; before `HirExpr::Binary` carried its result type the
-    // checker rejected both shapes and neither could be in this corpus.
+    // used for a value. Before `HirExpr::Binary` carried its result type the
+    // checker rejected both shapes, so neither could be in this corpus at all.
+    // Whole-function native lowering still declines both — an `if` used for a
+    // value lowers to a `match`, and a `match` is outside the stable native
+    // subset, unlike the `if` *statement* in `branches.rss` — so today this is
+    // a parity gate over the interpreted arms and the native continuations
+    // around them, and it starts covering generated arm selection for free when
+    // the subset grows.
     (
         "bool-match-comparison.rss",
         "fn classify(a: Int, b: Int) -> Int { match a < b { true => { return 1 } false => { return 0 } } } fn pick(n: Int) -> Int { let value = if n % 3 == 0 { 5 } else { 7 }; return value } fn main() -> Int { let mut i = 0; let mut total = 0; while i < 5000 { total = total + classify(a: i % 7, b: 3) + pick(n: i); i = i + 1 }; return total }",
