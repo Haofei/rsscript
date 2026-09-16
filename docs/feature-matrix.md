@@ -52,3 +52,19 @@ backend, or reorder the Cargo workspace.
 Parser acceptance alone never marks a language area supported. Core promotion
 requires semantic validation, verified-VM conformance, diagnostics, LSP behavior,
 and regression coverage together.
+
+## Support boundary
+
+Execution limits, cancellation, deadlines, output caps, and child-process
+limits are supported availability controls; none of them, and neither the
+in-process VM, the JIT, nor a Provider, is a security sandbox. Untrusted,
+third-party, or machine-generated scripts require the isolated runner;
+successful validation is not authorization to execute in the host process.
+
+Official host Providers remain Experimental and fail closed where their stated
+authority boundary cannot be implemented: the rooted filesystem Provider
+requires the descriptor-relative, no-follow Unix implementation and rejects
+construction elsewhere rather than falling back to canonicalize-then-open. The
+reference runner remains Experimental until its platform isolation matrix is
+complete. Rust AOT, REIR, and self-hosting are archived on the
+`archive/experiments-2026-09` branch and are not supported surfaces.

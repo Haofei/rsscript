@@ -80,9 +80,12 @@ oracle for every other tier. The Cranelift JIT is an explicit trusted-host
 performance feature of the VM and a required part of the product for CPU-bound
 embedded workloads: it consumes the same verified bytecode, is selected by the
 host rather than by source or by an Artifact, and leaves language validity
-untouched. Bounded and isolated execution stay on the interpreter until native
-execution provides the same deterministic accounting; closing that gap is
-roadmap work, as recorded in
+untouched. Native regions report the interpreter's exact step and
+intrinsic-call counts and stop for the same budget, cancellation, and deadline
+reasons, so in-process execution can select the JIT under the standard runner
+limit profile. The isolated runner stays on the interpreter until allocation
+controls admit call-bearing regions and the runner profile exposes native
+selection; closing that gap is roadmap work, as recorded in
 [ADR 0233](architecture/adr/0233-jit-is-a-product-owned-vm-tier.md). Native
 plugins remain an optional Experimental surface. Rust AOT, REIR, and
 self-hosting are archived on the `archive/experiments-2026-09` branch.

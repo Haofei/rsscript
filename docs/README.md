@@ -14,8 +14,11 @@ archive for superseded plans, review reports, and remediation logs.
 
 When documents disagree, use this order:
 
-1. [Language specification](spec/RSScript_v0.7_Spec.md)
-2. [Execution specification](spec/RSScript_Execution_Spec_v0.1.md)
+1. [Language specification](spec/RSScript_v0.7_Spec.md) for the invariants and
+   [RSScript Semantics v0.7](spec/RSScript_Semantics_v0.7.md) for every rule as
+   implemented, with its diagnostic code and file citation
+2. [Execution specification](spec/RSScript_Execution_Spec_v0.1.md) and the
+   [native JIT contract](spec/native-jit-contract.md)
 3. Current code, tests, `rss --help`, and the root [README](../README.md)
 4. The references and roadmap below
 
@@ -25,21 +28,23 @@ When documents disagree, use this order:
 | --- | --- |
 | [product.md](product.md) | Product users, Core workflow, and invariants |
 | [threat-model.md](threat-model.md) | Trust, isolation, provider, and untrusted-input boundaries |
-| [feature-matrix.md](feature-matrix.md) | Core, Experimental, Integration, and Research maturity |
-| [support.md](support.md) | Supported and unsupported execution surfaces |
+| [feature-matrix.md](feature-matrix.md) | Maturity of every surface, language conformance, and the support boundary |
 | [roadmap.md](roadmap.md) | Prioritized future work and explicit freezes |
 | [releasing.md](releasing.md) | Multi-platform binaries, dry-run, provenance, and SDK distribution |
-| [package.md](package.md) | Implemented package artifacts, commands, review model, and trust boundary |
-| [architecture/ARCHITECTURE.md](architecture/ARCHITECTURE.md) | Module ownership and dependency rules |
+| [provider-sdk.md](provider-sdk.md) | Writing a Provider: contract layers, lifecycle, replay, conformance, packages, and bindings |
+| [runner.md](runner.md) | The reference isolated runner: protocol, re-verification, profiles, and process limits |
+| [compatibility.md](compatibility.md) | Versioned contracts and their compatibility rules |
+| [architecture/ARCHITECTURE.md](architecture/ARCHITECTURE.md) | Code map: what each crate owns, its entry points, the invariants, and where to add things |
 | [architecture/workspace-tiers.toml](architecture/workspace-tiers.toml) | Machine-checked package maturity and CI ownership |
 | [architecture/contracts.toml](architecture/contracts.toml) | Machine-checked public contract identifiers and owning constants |
 | [architecture/runner-platforms.toml](architecture/runner-platforms.toml) | Machine-readable isolation controls and platform limitations |
 | [architecture/experimental-retention.toml](architecture/experimental-retention.toml) | Evidence, retention clocks, and product ownership for surfaces outside Core |
 | [development/DEVELOPMENT.md](development/DEVELOPMENT.md) | Local development and verification |
 | [development/DOCKER.md](development/DOCKER.md) | Containerized development |
-| [self-hosting.md](self-hosting.md) | Where the archived self-hosting research lives and why it is not a product goal |
 | [generated/language-card.md](generated/language-card.md) | Generated keyword, diagnostic, and core-interface quick reference |
-| [generated/language-card.json](generated/language-card.json), [grammar.json](generated/grammar.json), [diagnostic-catalog.json](generated/diagnostic-catalog.json), [core-interfaces.json](generated/core-interfaces.json) | Machine-readable generated language-reference catalogs |
+| [generated/language-card.json](generated/language-card.json), [grammar.json](generated/grammar.json), [diagnostic-catalog.json](generated/diagnostic-catalog.json), [core-interfaces.json](generated/core-interfaces.json), [signatures.md](generated/signatures.md) | Machine-readable generated language-reference catalogs and the core signature index |
+| [planning/2026-09-model-failure-modes.md](planning/2026-09-model-failure-modes.md) | Measured model failure classes and the oracle changes they justified |
+| [architecture/adr/](architecture/adr/README.md) | Decision records; live from 0226, older ones archived |
 
 ## Specifications
 

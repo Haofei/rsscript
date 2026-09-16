@@ -168,3 +168,35 @@ on an owned worker while the Provider polls the token; cancellation is reported
 promptly and a late worker result is discarded. The underlying transport remains
 bounded by its timeout and size ceiling—this is cooperative cancellation, not an
 OS/network sandbox or a guarantee that the remote peer stops work.
+
+## Packages, bindings, and analysis
+
+A package separates source implementations (`.rss`), interface declarations
+(`.rssi`), and provider bindings. Interface declarations are ordinary bodyless
+functions; their implementation technology is not part of RSScript syntax.
+Host services are explicit package dependencies. Binding files use
+`rsscript.bindings.v1`, map a symbol to a provider and entry point, and may
+include optional review metadata. Missing or duplicate bindings and ABI
+mismatches are link errors, never language errors.
+
+The compiler captures a `WorkspaceSnapshot` once and derives analysis and
+bytecode from that immutable source/interface graph. It emits
+`rsscript.package_analysis.v1`: the shared `snapshot_digest`, the executable
+`module_digest` when built, diagnostics, exports, semantic summaries, and
+external symbols, with no permission grants. `rss build --analysis-out
+<analysis.json> <package-directory>` writes the Bundle and extracts the
+analysis; `rss inspect analysis --json <package-directory>` prints it.
+
+Provider loading uses `rsscript-abi-model` types and the `rsscript-provider-api`
+registry. Semantic signatures are hashed from parameter names,
+`read`/`mut`/`take`, canonical structured `WireType` values, retention, result
+type, and sync/async mode; a mismatch fails before a callable can be resolved.
+
+`BytecodeVerifier::verify(bytes)` owns envelope validation and returns a
+`VerifiedBytecode` phase value; the VM decodes typed instructions only after
+that phase succeeds and exposes no half-verified constructor. The
+`rsscript.bytecode.v1` envelope is canonical sectioned CBOR with an explicit
+length and SHA-256 digest per section, so equivalent content has one accepted
+encoding and non-canonical encodings fail verification before deserialization.
+Snapshots, hashes, bounded file reads, and atomic artifact writes are
+integrity controls; they do not grant authority.

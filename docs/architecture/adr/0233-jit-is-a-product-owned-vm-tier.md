@@ -4,7 +4,7 @@
 
 Accepted. Supersedes the "no JIT feature work" clauses of ADR 0230, ADR 0231,
 and ADR 0232, and the JIT freeze in
-[`docs/planning/2026q4-experimental-decision.md`](../../planning/2026q4-experimental-decision.md).
+`docs/planning/2026q4-experimental-decision.md` (the 2026 Q4 experimental-decision log, removed on 2026-09-15; see git history).
 
 ## Problem
 
