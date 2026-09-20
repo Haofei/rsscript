@@ -1,0 +1,33 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 11375,
+    "check_ok": false,
+    "codes": [
+      "RS0306"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0306",
+        "severity": "error",
+        "summary": "class binding `log` cannot be local.",
+        "line": 23,
+        "label": "class bound as local",
+        "causes": [
+          "Classes are managed identity objects; their constructors produce managed handles."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `log` with `let` instead of `local`.",
+            "applicability": "machine-applicable",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

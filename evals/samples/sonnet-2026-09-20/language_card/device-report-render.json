@@ -1,0 +1,12 @@
+{
+  "schema": "rsscript.eval.candidate.v1",
+  "task_id": "device-report-render",
+  "source": "device-report-render/candidate.rss",
+  "mode": "language_card",
+  "model": "sonnet",
+  "model_version": "unknown",
+  "temperature": null,
+  "attempt": 1,
+  "generation_duration_ms": 14028,
+  "repair_turns": 0
+}

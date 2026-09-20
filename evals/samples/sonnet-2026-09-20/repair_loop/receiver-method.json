@@ -1,0 +1,12 @@
+{
+  "schema": "rsscript.eval.candidate.v1",
+  "task_id": "receiver-method",
+  "source": "receiver-method/candidate.rss",
+  "mode": "repair_loop",
+  "model": "sonnet",
+  "model_version": "unknown",
+  "temperature": null,
+  "attempt": 1,
+  "generation_duration_ms": 21145,
+  "repair_turns": 0
+}

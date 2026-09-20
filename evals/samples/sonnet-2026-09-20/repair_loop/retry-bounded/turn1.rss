@@ -1,0 +1,34 @@
+fn attempt_push(id: read String, amount: Int, attempt: Int, max_attempts: Int) -> Result<Int, String> {
+    match Sync.push(id: id, amount: amount) {
+        Ok(value) => {
+            Metrics.record(name: "sync.attempts", value: attempt)
+            return Ok(value)
+        }
+        Err(error) => {
+            if attempt < max_attempts {
+                if Sync.is_retryable(error: error) {
+                    return attempt_push(id: id, amount: amount, attempt: attempt + 1, max_attempts: max_attempts)
+                }
+            }
+            return Err(SyncError.message(error: error))
+        }
+    }
+}
+
+fn push_with_retry(id: read String, amount: Int, max_attempts: Int) -> Result<Int, String> {
+    if max_attempts < 1 {
+        return Err("no attempts were made")
+    }
+    return attempt_push(id: id, amount: amount, attempt: 1, max_attempts: max_attempts)
+}
+
+fn main() -> Unit {
+    match push_with_retry(id: "order-1", amount: 10, max_attempts: 3) {
+        Ok(total) => {
+            Output.write(message: String.concat(left: "pushed ", right: String.from_int(value: total)))
+        }
+        Err(message) => {
+            Output.write(message: String.concat(left: "failed: ", right: message))
+        }
+    }
+}

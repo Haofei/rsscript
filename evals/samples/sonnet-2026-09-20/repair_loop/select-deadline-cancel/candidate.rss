@@ -1,0 +1,69 @@
+async fn send_work(sender: Sender<Int>) -> Unit {
+    local value = 42
+    let sent = await Sender.send(sender: sender, value: take value)
+    match sent {
+        Ok(_) => {
+            Output.write(message: "work result sent")
+        }
+        Err(error) => {
+            Output.error(message: ChannelError.message(error: error))
+        }
+    }
+}
+
+async fn send_deadline(sender: Sender<Int>) -> Unit {
+    local marker = 1
+    let sent = await Sender.send(sender: sender, value: take marker)
+    match sent {
+        Ok(_) => {
+            Output.write(message: "deadline marker sent")
+        }
+        Err(error) => {
+            Output.error(message: ChannelError.message(error: error))
+        }
+    }
+}
+
+fn race() -> Result<Int, ChannelError> {
+    local work_channel = Channel.bounded<Int>(capacity: 1)?
+    local deadline_channel = Channel.bounded<Int>(capacity: 1)?
+    let work_tx = Channel.sender(channel: work_channel)
+    let work_rx = Channel.receiver(channel: mut work_channel)?
+    let deadline_tx = Channel.sender(channel: deadline_channel)
+    let deadline_rx = Channel.receiver(channel: mut deadline_channel)?
+    local source = CancellationSource.new()
+    let mut outcome: Int = 0
+
+    task_group {
+        async let work_handle = send_work(sender: work_tx)
+        async let deadline_handle = send_deadline(sender: deadline_tx)
+
+        select {
+            await Receiver.recv(receiver: work_rx) => {
+                Output.write(message: "work finished first")
+                outcome = 1
+            }
+            await Receiver.recv(receiver: deadline_rx) => {
+                Output.write(message: "deadline fired")
+                CancellationSource.cancel(source: mut source)
+                outcome = 2
+            }
+        }
+
+        await work_handle
+        await deadline_handle
+    }
+
+    return Ok(outcome)
+}
+
+fn main() -> Unit {
+    match race() {
+        Ok(outcome) => {
+            Output.write(message: String.concat(left: "race outcome: ", right: String.from_int(value: outcome)))
+        }
+        Err(error) => {
+            Output.error(message: ChannelError.message(error: error))
+        }
+    }
+}

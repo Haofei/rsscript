@@ -1,0 +1,93 @@
+async fn publish(sender: Sender<Int>, samples: read List<Int>, token: CancellationToken) -> Result<Int, ChannelError> {
+    let mut sent: Int = 0
+    for sample in samples {
+        if CancellationToken.is_cancelled(token: token) {
+            return Ok(sent)
+        }
+        local item = sample
+        let outcome = await Sender.send_cancellable(sender: sender, value: take item, token: token)
+        match outcome {
+            Ok(_) => {
+                sent = sent + 1
+            }
+            Err(error) => {
+                return Err(error)
+            }
+        }
+    }
+    return Ok(sent)
+}
+
+async fn collect(receiver: Receiver<Int>, limit: Int, token: CancellationToken) -> Result<Int, ChannelError> {
+    let mut total: Int = 0
+    let mut seen: Int = 0
+    while seen < limit {
+        let outcome = await Receiver.recv_cancellable(receiver: receiver, token: token)
+        match outcome {
+            Ok(item) => {
+                match item {
+                    Some(value) => {
+                        total = total + value
+                        seen = seen + 1
+                    }
+                    None => {
+                        return Ok(total)
+                    }
+                }
+            }
+            Err(error) => {
+                return Err(error)
+            }
+        }
+    }
+    return Ok(total)
+}
+
+fn report(label: String, outcome: Result<Int, ChannelError>) -> Unit {
+    match outcome {
+        Ok(count) => {
+            Output.write(message: String.concat(left: label, right: String.from_int(value: count)))
+        }
+        Err(error) => {
+            Output.error(message: ChannelError.message(error: error))
+        }
+    }
+}
+
+async fn main() -> Unit {
+    let mut samples: List<Int> = List.new<Int>()
+    List.push(list: mut samples, value: 10)
+    List.push(list: mut samples, value: 20)
+    List.push(list: mut samples, value: 30)
+    List.push(list: mut samples, value: 40)
+    List.push(list: mut samples, value: 50)
+
+    let mut source = CancellationSource.new()
+    let token = CancellationSource.token(source: source)
+
+    match Channel.bounded<Int>(capacity: 2) {
+        Ok(created) => {
+            let mut channel = created
+            let sender = Channel.sender<Int>(channel: channel)
+            match Channel.receiver<Int>(channel: mut channel) {
+                Ok(receiver) => {
+                    task_group {
+                        async let produced = publish(sender: sender, samples: samples, token: token)
+                        async let consumed = collect(receiver: receiver, limit: 5, token: token)
+                        let consumer_result = await consumed
+                        CancellationSource.cancel(source: mut source)
+                        let producer_result = await produced
+                        report(label: "consumed total: ", outcome: consumer_result)
+                        report(label: "published count: ", outcome: producer_result)
+                    }
+                }
+                Err(error) => {
+                    Output.error(message: ChannelError.message(error: error))
+                }
+            }
+        }
+        Err(error) => {
+            Output.error(message: ChannelError.message(error: error))
+        }
+    }
+}

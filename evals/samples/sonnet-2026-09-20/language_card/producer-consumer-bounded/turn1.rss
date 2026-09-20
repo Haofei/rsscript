@@ -1,0 +1,67 @@
+async fn produce(sender: Sender<Int>, token: CancellationToken) -> Unit {
+    let mut next: Int = 0
+    let mut running: Bool = true
+    while running {
+        if next >= 4 {
+            running = false
+        } else {
+            if CancellationToken.is_cancelled(token: token) {
+                running = false
+            } else {
+                local value = next
+                let sent = await Sender.send(sender: sender, value: take value)
+                if Result.is_err(value: sent) {
+                    running = false
+                } else {
+                    next = next + 1
+                }
+            }
+        }
+    }
+}
+
+async fn consume(receiver: Receiver<Int>, token: CancellationToken) -> Int {
+    let mut seen: Int = 0
+    let mut open: Bool = true
+    while open {
+        if seen >= 4 {
+            open = false
+        } else {
+            let result = await Receiver.recv_cancellable(receiver: receiver, token: token)
+            match result {
+                Ok(item) => {
+                    match item {
+                        Some(_) => {
+                            seen = seen + 1
+                        }
+                        None => {
+                            open = false
+                        }
+                    }
+                }
+                Err(_) => {
+                    open = false
+                }
+            }
+        }
+    }
+    return seen
+}
+
+async fn main() -> Unit {
+    let Ok(mut channel) = Channel.bounded<Int>(capacity: 2) else {
+        return
+    }
+    let Ok(receiver) = Channel.receiver<Int>(channel: mut channel) else {
+        return
+    }
+    let sender = Channel.sender<Int>(channel: channel)
+    task_group {
+        let token = Task.cancellation_token()
+        let producer = spawn produce(sender: sender, token: token)
+        let consumer = spawn consume(receiver: receiver, token: token)
+        await producer
+        let count = await consumer
+        Output.write(message: String.from_int(value: count))
+    }
+}

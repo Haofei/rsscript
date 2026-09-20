@@ -1,0 +1,44 @@
+async fn feed_left(sender: Sender<Int>) -> Result<Unit, ChannelError> {
+    local value = 1
+    return await Sender.send(sender: sender, value: take value)
+}
+
+async fn feed_right(sender: Sender<Int>) -> Result<Unit, ChannelError> {
+    local value = 2
+    return await Sender.send(sender: sender, value: take value)
+}
+
+async fn race() -> Result<Unit, ChannelError> {
+    let mut left_channel = Channel.bounded<Int>(capacity: 1)?
+    let mut right_channel = Channel.bounded<Int>(capacity: 1)?
+
+    let left_tx = Channel.sender<Int>(channel: left_channel)
+    let left_rx = Channel.receiver<Int>(channel: mut left_channel)?
+    let right_tx = Channel.sender<Int>(channel: right_channel)
+    let right_rx = Channel.receiver<Int>(channel: mut right_channel)?
+
+    let mut source = CancellationSource.new()
+
+    task_group {
+        async let left_feed = feed_left(sender: left_tx)
+        async let right_feed = feed_right(sender: right_tx)
+
+        select {
+            let left_message = await Receiver.recv(receiver: left_rx) => {
+                Output.write(message: "left won")
+                CancellationSource.cancel(source: mut source)
+            }
+            let right_message = await Receiver.recv(receiver: right_rx) => {
+                Output.write(message: "right won")
+                CancellationSource.cancel(source: mut source)
+            }
+        }
+
+        let left_result = await left_feed
+        let right_result = await right_feed
+        left_result?
+        right_result?
+    }
+
+    return Ok(Unit)
+}

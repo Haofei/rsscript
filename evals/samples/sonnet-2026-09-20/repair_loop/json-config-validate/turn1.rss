@@ -1,0 +1,73 @@
+struct ServiceConfig {
+    name: String
+    port: Int
+    enabled: Bool
+}
+
+fn json_failure(context: String, error: JsonError) -> fresh String {
+    return String.concat(left: context, right: JsonError.message(error: error))
+}
+
+fn read_enabled(root: JsonValue, name: String, port: Int) -> Result<fresh ServiceConfig, String> {
+    match Json.field_optional_bool(value: root, name: "enabled") {
+        Ok(flag) => {
+            let enabled = Option.unwrap_or(value: flag, default: true)
+            local copy = String.copy(value: name)
+            return Ok(ServiceConfig(name: take copy, port: port, enabled: enabled))
+        }
+        Err(error) => {
+            return Err(json_failure(context: "invalid field `enabled`: ", error: error))
+        }
+    }
+}
+
+fn read_port(root: JsonValue, name: String) -> Result<fresh ServiceConfig, String> {
+    match Json.field_int(value: root, name: "port") {
+        Ok(port) => {
+            if port < 1 {
+                return Err(String.concat(left: "port must be at least 1, got ", right: Int.to_string(value: port)))
+            }
+            if port > 65535 {
+                return Err(String.concat(left: "port must be at most 65535, got ", right: Int.to_string(value: port)))
+            }
+            return read_enabled(root: root, name: name, port: port)
+        }
+        Err(error) => {
+            return Err(json_failure(context: "invalid field `port`: ", error: error))
+        }
+    }
+}
+
+fn read_config(root: JsonValue) -> Result<fresh ServiceConfig, String> {
+    match Json.field_string(value: root, name: "name") {
+        Ok(name) => {
+            return read_port(root: root, name: name)
+        }
+        Err(error) => {
+            return Err(json_failure(context: "invalid field `name`: ", error: error))
+        }
+    }
+}
+
+fn load_config(text: String) -> Result<fresh ServiceConfig, String> {
+    match Json.parse(text: text) {
+        Ok(root) => {
+            return read_config(root: root)
+        }
+        Err(error) => {
+            return Err(json_failure(context: "invalid JSON: ", error: error))
+        }
+    }
+}
+
+fn main() -> Unit {
+    let text = "{\"name\": \"api\", \"port\": 8080, \"enabled\": true}"
+    match load_config(text: text) {
+        Ok(config) => {
+            Output.write(message: config.name)
+        }
+        Err(message) => {
+            Output.write(message: message)
+        }
+    }
+}

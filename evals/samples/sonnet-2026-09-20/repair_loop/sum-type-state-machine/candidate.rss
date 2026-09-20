@@ -1,0 +1,50 @@
+sum JobState {
+    Queued
+    Running(worker: String)
+    Done(code: Int)
+    Failed(reason: String)
+}
+
+fn advance(state: read JobState, worker: read String) -> fresh JobState {
+    match state {
+        Queued => {
+            local name = String.copy(value: worker)
+            return Running(worker: take name)
+        }
+        Running(current) => {
+            return Done(code: 0)
+        }
+        Done(code) => {
+            return Done(code: code)
+        }
+        Failed(reason) => {
+            local kept = String.copy(value: reason)
+            return Failed(reason: take kept)
+        }
+    }
+}
+
+fn describe(state: read JobState) -> fresh String {
+    match state {
+        Queued => {
+            return String.copy(value: "queued")
+        }
+        Running(worker) => {
+            return String.concat(left: "running on ", right: worker)
+        }
+        Done(code) => {
+            return String.concat(left: "done with code ", right: String.from_int(value: code))
+        }
+        Failed(reason) => {
+            return String.concat(left: "failed: ", right: reason)
+        }
+    }
+}
+
+fn main() -> Unit {
+    let job = Queued
+    let started = advance(state: job, worker: "worker-1")
+    let finished = advance(state: started, worker: "worker-1")
+    let text = describe(state: finished)
+    Output.write(message: text)
+}

@@ -1,0 +1,33 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 47915,
+    "check_ok": false,
+    "codes": [
+      "RS0031"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0031",
+        "severity": "error",
+        "summary": "local value `source` cannot live across `await`.",
+        "line": 64,
+        "label": "value live across await",
+        "causes": [
+          "Suspending an RSScript async frame may keep managed handles and Copy snapshots, but local values, resources, and runtime guards must not be retained across suspension."
+        ],
+        "fixes": [
+          {
+            "title": "End the lifetime of `source` before this `await`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

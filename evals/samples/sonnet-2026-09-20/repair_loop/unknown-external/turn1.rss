@@ -1,0 +1,4 @@
+fn main() -> Unit {
+    let value = String.concat(left: "acct-7", right: ": ledger unavailable")
+    Output.write(message: value)
+}

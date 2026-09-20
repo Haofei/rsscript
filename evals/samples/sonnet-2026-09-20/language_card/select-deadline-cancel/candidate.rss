@@ -1,0 +1,51 @@
+async fn send_work(sender: Sender<Int>) -> Result<Unit, ChannelError> {
+    local value = 1
+    return await Sender.send(sender: sender, value: take value)
+}
+
+async fn send_deadline(sender: Sender<Int>) -> Result<Unit, ChannelError> {
+    local value = 2
+    return await Sender.send(sender: sender, value: take value)
+}
+
+async fn race() -> Result<Int, ChannelError> {
+    local work_channel = Channel.bounded<Int>(capacity: 1)?
+    local deadline_channel = Channel.bounded<Int>(capacity: 1)?
+    let work_sender = Channel.sender(channel: work_channel)
+    let work_receiver = Channel.receiver(channel: mut work_channel)?
+    let deadline_sender = Channel.sender(channel: deadline_channel)
+    let deadline_receiver = Channel.receiver(channel: mut deadline_channel)?
+    local source = CancellationSource.new()
+    let mut winner: Int = 0
+
+    task_group {
+        async let work = send_work(sender: work_sender)
+        async let deadline = send_deadline(sender: deadline_sender)
+        select {
+            work_result = await Receiver.recv(receiver: work_receiver) => {
+                Output.write(message: "work finished before the deadline")
+                winner = 1
+            }
+            deadline_result = await Receiver.recv(receiver: deadline_receiver) => {
+                Output.write(message: "deadline fired")
+                CancellationSource.cancel(source: mut source)
+                winner = 2
+            }
+        }
+        await work
+        await deadline
+    }
+
+    return Ok(winner)
+}
+
+fn main() -> Unit {
+    match race() {
+        Ok(winner) => {
+            Output.write(message: String.concat(left: "race outcome code: ", right: String.from_int(value: winner)))
+        }
+        Err(error) => {
+            Output.error(message: ChannelError.message(error: error))
+        }
+    }
+}

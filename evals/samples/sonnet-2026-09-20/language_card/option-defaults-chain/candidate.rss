@@ -1,0 +1,66 @@
+struct Settings {
+    region: String
+    retries: Int
+}
+
+fn lookup_at(keys: read List<String>, values: read List<String>, key: read String, index: Int) -> Option<String> {
+    if index >= List.len(list: keys) {
+        return None
+    }
+    if index >= List.len(list: values) {
+        return None
+    }
+    let current = List.get(list: keys, index: index)
+    if current == key {
+        return Some(List.get(list: values, index: index))
+    }
+    return lookup_at(keys: keys, values: values, key: key, index: index + 1)
+}
+
+fn lookup(keys: read List<String>, values: read List<String>, key: read String) -> Option<String> {
+    return lookup_at(keys: keys, values: values, key: key, index: 0)
+}
+
+fn settings_from(keys: read List<String>, values: read List<String>) -> fresh Settings {
+    let mut region: String = "us-east"
+    match lookup(keys: keys, values: values, key: "region") {
+        Some(found) => {
+            region = found
+        }
+        None => {
+            region = "us-east"
+        }
+    }
+
+    let mut retries: Int = 3
+    match lookup(keys: keys, values: values, key: "retries") {
+        Some(text) => {
+            match String.parse_int(value: text) {
+                Some(parsed) => {
+                    retries = parsed
+                }
+                None => {
+                    retries = 3
+                }
+            }
+        }
+        None => {
+            retries = 3
+        }
+    }
+
+    return Settings(region: String.copy(value: region), retries: retries)
+}
+
+fn main() -> Unit {
+    let mut keys: List<String> = List.new<String>()
+    let mut values: List<String> = List.new<String>()
+    List.push(list: mut keys, value: "region")
+    List.push(list: mut values, value: "eu-west")
+    List.push(list: mut keys, value: "retries")
+    List.push(list: mut values, value: "5")
+
+    let settings = settings_from(keys: keys, values: values)
+    Output.write(message: String.concat(left: "region: ", right: settings.region))
+    Output.write(message: String.concat(left: "retries: ", right: String.from_int(value: settings.retries)))
+}

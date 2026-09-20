@@ -1,0 +1,33 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 44723,
+    "check_ok": false,
+    "codes": [
+      "RS0022"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0022",
+        "severity": "error",
+        "summary": "async call `race` must be awaited.",
+        "line": 43,
+        "label": "async call must be awaited",
+        "causes": [
+          "Async calls introduce suspension boundaries that must be visible in source; `spawn` is reserved but not executable in v0.7."
+        ],
+        "fixes": [
+          {
+            "title": "Write `await race(...)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

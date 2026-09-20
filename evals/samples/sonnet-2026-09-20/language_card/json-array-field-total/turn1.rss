@@ -1,0 +1,26 @@
+fn total_readings(text: read String) -> Result<Int, JsonError> {
+    let document = Json.parse(text: text)?
+    let readings = Json.field(value: document, name: "readings")?
+    let count = Json.array_len(value: readings)?
+    let mut total: Int = 0
+    let mut index: Int = 0
+    while index < count {
+        let item = Json.array_get(value: readings, index: index)?
+        let reading = Json.field_int(value: item, name: "value")?
+        total = total + reading
+        index = index + 1
+    }
+    return Ok(total)
+}
+
+fn main() -> Unit {
+    let document = "{\"readings\": [{\"value\": 12}, {\"value\": 30}]}"
+    match total_readings(text: document) {
+        Ok(total) => {
+            Output.write(message: String.from_int(value: total))
+        }
+        Err(error) => {
+            Output.write(message: JsonError.message(error: error))
+        }
+    }
+}

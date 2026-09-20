@@ -1,0 +1,53 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 13243,
+    "check_ok": false,
+    "codes": [
+      "RS0501"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0501",
+        "severity": "error",
+        "summary": "retaining API `List.push` cannot retain local value `first`.",
+        "line": 20,
+        "label": "local value retained",
+        "causes": [
+          "`List.push` declares `retains(value)`."
+        ],
+        "fixes": [
+          {
+            "title": "Pass `value` through `manage first` before retaining it.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0501",
+        "severity": "error",
+        "summary": "retaining API `List.push` cannot retain local value `second`.",
+        "line": 21,
+        "label": "local value retained",
+        "causes": [
+          "`List.push` declares `retains(value)`."
+        ],
+        "fixes": [
+          {
+            "title": "Pass `value` through `manage second` before retaining it.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

@@ -1,0 +1,72 @@
+struct ServiceConfig {
+    name: String
+    port: Int
+    enabled: Bool
+}
+
+fn describe(error: JsonError) -> fresh String {
+    return String.concat(left: "invalid config: ", right: JsonError.message(error: error))
+}
+
+fn read_enabled(json: JsonValue) -> Result<Bool, String> {
+    match Json.field_optional_bool(value: json, name: "enabled") {
+        Ok(found) => {
+            return Ok(Option.unwrap_or(value: found, default: true))
+        }
+        Err(error) => {
+            return Err(describe(error: error))
+        }
+    }
+}
+
+fn build_config(json: JsonValue) -> Result<fresh ServiceConfig, String> {
+    match Json.field_string(value: json, name: "name") {
+        Ok(name) => {
+            match Json.field_int(value: json, name: "port") {
+                Ok(port) => {
+                    if port < 1 || port > 65535 {
+                        return Err(String.concat(left: "port must be between 1 and 65535, got ", right: Int.to_string(value: port)))
+                    }
+                    match read_enabled(json: json) {
+                        Ok(enabled) => {
+                            local owned = String.copy(value: name)
+                            return Ok(ServiceConfig(name: take owned, port: port, enabled: enabled))
+                        }
+                        Err(message) => {
+                            return Err(message)
+                        }
+                    }
+                }
+                Err(error) => {
+                    return Err(describe(error: error))
+                }
+            }
+        }
+        Err(error) => {
+            return Err(describe(error: error))
+        }
+    }
+}
+
+fn load_config(text: String) -> Result<fresh ServiceConfig, String> {
+    match Json.parse(text: text) {
+        Ok(json) => {
+            return build_config(json: json)
+        }
+        Err(error) => {
+            return Err(describe(error: error))
+        }
+    }
+}
+
+fn main() -> Unit {
+    let result = load_config(text: "{\"name\": \"api\", \"port\": 8080, \"enabled\": true}")
+    match result {
+        Ok(config) => {
+            Output.write(message: config.name)
+        }
+        Err(message) => {
+            Output.write(message: message)
+        }
+    }
+}

@@ -1,0 +1,32 @@
+fn count_by_level(lines: read List<String>) -> fresh Map<String, Int> {
+    local counts = Map.new<String, Int>()
+    for line in lines {
+        let found = String.before(value: line, delimiter: " ")
+        let level = Option.unwrap_or(value: found, default: "unknown")
+        let current = Map.get_or_default(map: counts, key: level, default: 0)
+        Map.insert(map: mut counts, key: level, value: current + 1)
+    }
+    return counts
+}
+
+fn render_counts(counts: read Map<String, Int>) -> fresh String {
+    local parts = List.new<String>()
+    let keys = Map.keys(map: counts)
+    for key in keys {
+        let count = Map.get_or_default(map: counts, key: key, default: 0)
+        let label = String.concat(left: key, right: "=")
+        let part = String.concat(left: label, right: String.from_int(value: count))
+        List.push(list: mut parts, value: part)
+    }
+    return String.join(parts: parts, separator: ",")
+}
+
+fn main() -> Unit {
+    local lines = List.new<String>()
+    List.push(list: mut lines, value: "INFO service started")
+    List.push(list: mut lines, value: "ERROR disk full")
+    List.push(list: mut lines, value: "INFO request handled")
+    let counts = count_by_level(lines: lines)
+    let text = render_counts(counts: counts)
+    Output.write(message: text)
+}

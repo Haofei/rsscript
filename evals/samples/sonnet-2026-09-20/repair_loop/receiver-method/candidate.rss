@@ -1,0 +1,8 @@
+fn Buffer.inspect(buffer: read Buffer) -> Int {
+    return Buffer.len(buffer: buffer)
+}
+
+fn main() -> Unit {
+    local buffer = Buffer.new(size: 8)
+    let size = Buffer.inspect(buffer: buffer)
+}

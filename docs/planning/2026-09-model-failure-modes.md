@@ -1067,3 +1067,210 @@ Candidates, per-turn sources and per-turn transcripts for all 350 samples are
 committed, so every count above is re-derivable without model access. The
 `analysis.json` files the analyzer writes are not committed: they are pure
 derivation and 2.2 MB of it.
+
+## After inline signatures and surface forms (2026-09-20)
+
+Three changes were made against the ranking above, in the order the counts put
+them, and then sonnet's `language_card` and `repair_loop` were re-collected over
+all fifty tasks.
+
+1. **The card carries the signatures instead of linking them.** Implication 1
+   was the largest class in all four prompted cells and the only class large in
+   both models, and the card's answer to it was a link to a 450-signature index.
+   All 450 are now in the card itself, grouped by namespace and then by
+   interface file, generated from the interface sources. The card went from 67
+   lines to 823.
+2. **Six more canonical surface forms**, each a right/wrong pair with the
+   accepted spelling run through `rss check` and `rss fmt` and the rejected one
+   run through `rss check` to confirm which code it produces: the closure
+   literal (implication 2), the explicit-capture closure, `with … as`
+   (implication 5), `impl P for T` and `Dyn.from<P, T>` (implication 6), and
+   `let … else`. Four of those are a shape rather than a line, so the section
+   also carries a worked program showing them together, verified by the
+   generator's tests to check clean and to be a `rss fmt` fixpoint.
+3. **`RS0206` names the call and `RS0207` carries an edit.** `RS0206`'s help
+   now renders the best candidate's whole signature rather than its name.
+   `RS0207` (implication 4) gained machine-applicable edits for the two argument
+   shapes whose repair is mechanical — `?` on an unhandled `Result`/`Option`
+   identifier where the enclosing function can propagate under the `RS0013`
+   rules, and `.0` on an `Int` literal where a `Float` is wanted — and advice
+   with no edit for a `String` literal where an `Int` is wanted, because
+   `"twelve"` and `"12"` are the same shape to the checker.
+
+```bash
+python3 tools/collect-model-samples.py --model sonnet \
+  --mode language_card --mode repair_loop --jobs 10 --timeout 400 \
+  --rss <pinned rss> --out evals/samples/sonnet-2026-09-20
+for mode in language_card repair_loop; do
+  cargo run -p rsscript-xtask -- agent-eval --tasks evals/tasks \
+    --candidates "evals/samples/sonnet-2026-09-20/$mode" \
+    --output "evals/samples/sonnet-2026-09-20/$mode/report.v1.json"
+done
+```
+
+One draw per task per mode, `claude -p --output-format text --allowedTools ""`
+from an empty temporary directory, as before. A session limit interrupted the
+first attempt; the sixteen `language_card` and fifty `repair_loop` tasks that
+produced nothing were re-collected after it reset, and every committed candidate
+has a complete transcript with no turn error. **Every candidate in every set
+compared below — including the 2026-09-19 sets — was re-checked with the same
+pinned `rss` binary**, so a difference in a class count is a difference in the
+candidates and not in the checker. As a check on that method, the re-derived
+2026-09-19 `repair_loop` fix-uptake counts (63/55, 54/54, 12/12, 129/121)
+reproduce the published table above exactly.
+
+### Failure classes, before and after
+
+Candidates showing the class at least once, out of 50. The `language_card`
+"before" is the 2026-09-19b draw, which is the immediately preceding card (the
+one with the string-concatenation row); the `repair_loop` "before" is the
+2026-09-19 draw.
+
+| class | `language_card` before | `language_card` after | `repair_loop` before | `repair_loop` after |
+|---|---|---|---|---|
+| RS0206 invents a symbol | **27** | **0** | 3 | 0 |
+| RS0015 hallucinated syntax | 9 | 2 | 3 | 0 |
+| RS0201/RS0203/RS0204 labels | 10 | 0 | 4 | 0 |
+| RS0207 argument type mismatch | 3 | 0 | 1 | 0 |
+| RS0208 return-type mismatch | 6 | 0 | 1 | 0 |
+| RS0209 branch used as a value | 3 | 0 | 1 | 0 |
+| RS0202/RS0308 call-site effect | 4 | 0 | 2 | 0 |
+| RS1001 string `+` | 2 | 0 | 0 | 0 |
+
+RS0206 goes 27 → 0 in the mode whose prompt is the thing that changed. That is
+the largest single move in this report and it is the one the ranking predicted:
+the class was never a reasoning failure, it was a model writing plausible names
+for an API it had been told the size of and not the contents of.
+
+The label classes go with it, 10 → 0, for the reason the card's own text gives —
+argument labels are the callee's own names, and a model that can see
+`String.split(value: String, delimiter: String) -> fresh List<String>` does not
+have to guess `text` and `separator`. RS0208, RS0209 and the effect classes fall
+too, which is the opposite of the pattern every earlier card change produced:
+removing one error used to *unmask* the next one. Here there was no next one,
+because the wrong call was not written.
+
+### Constructs, counted directly
+
+Scanning the candidate sources rather than the diagnostics, over the same fifty
+`language_card` candidates:
+
+| construct | 2026-09-19 | 2026-09-19b | 2026-09-20 |
+|---|---|---|---|
+| closure written `fn(x: T) -> U { }` | 1 | 1 | **0** |
+| closure written `\|x\| { }` | 0 | 0 | **1** |
+| `with X = producer {` | 3 | 3 | **0** |
+| `impl P for T` with a method body | 1 | 1 | **0** |
+| `Dyn.from<P, T>` used | 0 | 0 | **2** |
+| `let … else` used | 1 | 1 | **9** |
+| string `+` concatenation | 0 | 0 | 0 |
+| Rust `::` path | 0 | 0 | 0 |
+
+Every row behaves the way every named row in this report has behaved: the wrong
+spelling disappears and the named one appears. `let … else` going 1 → 9 is the
+clearest of them — RS0020 never fired in 300 candidates not because the form was
+easy but because nobody was writing it.
+
+### Pass rates
+
+| set | old20 | new20 | repair10 | overall | compiles | canonical spelling |
+|---|---|---|---|---|---|---|
+| `language_card` before (2026-09-19b) | 5/20 | 2/20 | 9/10 | 16/50 | 16/50 | 16 |
+| `language_card` after (2026-09-20) | **16/20** | **18/20** | 9/10 | **43/50** | 44/50 | 23 |
+| `repair_loop` before (2026-09-19) | 15/20 | 11/20 | 10/10 | 36/50 | 37/50 | 18 |
+| `repair_loop` after (2026-09-20) | **20/20** | **20/20** | 10/10 | **50/50** | 50/50 | 26 |
+
+Three things in that table, and one caveat that applies to all of them.
+
+**The first attempt moved.** This is the first measurement in this report where
+it did. `prompt_only` has been 0/20 on the September generation set in four
+consecutive draws and every gain the project has recorded has been in the repair
+loop; `language_card` itself went 3/20 → 5/20 on old20 across the last two
+draws. It is now 16/20, and 18/20 on the harder new twenty. The change that did
+it is not a compiler change: it is the difference between telling a model that
+450 signatures exist and showing it the 450 signatures.
+
+**The repair loop has nothing left to repair on this corpus.** 50/50, and 46 of
+the 50 compiled on the first turn. The four that did not — `async-stream-consume`
+and `task-group-select` (RS0015), `producer-consumer-bounded` (RS0015 with
+RS0030) and `retains-declaration` (RS0306) — were all clean on turn 2. The
+thirteen tasks the 2026-09-19 section listed as failing for **both** models in
+**every** mode now pass 13/13 in `repair_loop` and 9/13 on the first attempt.
+
+**Canonical spelling still lags the pass rate**, 23 and 26 of 50. A candidate
+can compile and pass its invariants while spelling something the way `rss fmt`
+would rewrite it. That is the gap the surface-forms table addresses one row at a
+time, and it is now the largest remaining measurable difference between what
+models write and what the language prints.
+
+**The caveat is the same one this report has applied throughout: n = 1 per task
+per mode, and these are different draws of a non-deterministic model.** A move
+of one or two candidates is not a result. 27 → 0 on a single named class, and
+16/50 → 43/50 on the mode whose prompt is the only thing that changed, are large
+enough to attribute. Whether 43/50 is *the* rate for this card, rather than a
+draw around it, needs a second sample this measurement did not take. None of the
+candidates resembles its reference solution — the highest token-level similarity
+among the forty generation tasks is 0.93, and the three above 0.94 are all
+repair/review tasks whose seed is shown in the prompt by construction.
+
+### Were the fixes offered at turn N taken at turn N+1?
+
+The question nearly stopped applying. Across the whole `repair_loop` set, only
+four candidates reached a second turn, and the diagnostics they carried into it
+offered exactly one machine-applicable fix between them:
+
+| | offered before a following turn | present in the next turn |
+|---|---|---|
+| 2026-09-19 `repair_loop` | 129 (RS0206 63, RS0203 54, RS0202 12) | 121 (94%) |
+| 2026-09-20 `repair_loop` | **1** (RS0306) | see below |
+
+The one offer is a defect worth recording. `RS0306` ("class binding `log` cannot
+be local") marks its fix `machine-applicable` and carries **no edit** — the
+`replacement` field is null — so there is no text to look for in the next turn.
+The model took the advice anyway: `local log` became `let log` and the candidate
+was clean. That diagnostic is outside the scope of this round's work, but by this
+report's own rule an applicability of `machine-applicable` with no edit is a
+contract violation and should either grow the edit or be downgraded.
+
+Per-class repair outcomes over the four repairing candidates are correspondingly
+small: RS0015 cleared 3, RS0030 cleared 1, RS0306 cleared 1, and nothing
+persisted or was introduced. Compare the 2026-09-19 column, where RS0203 and
+RS0204 were each *introduced* three times and RS0206 persisted three times.
+
+### What is left
+
+The seven `language_card` failures are all in one place, and it is not the one
+the card just fixed:
+
+| task | codes |
+|---|---|
+| `async-stream-consume` | RS0015 |
+| `noescape-filter-callback` | RS0501 |
+| `producer-consumer-bounded` | RS0015, RS0026, RS0030, RS0301 |
+| `retains-declaration` | RS0306 |
+| `select-deadline-cancel` | RS0022 |
+| `telemetry-cancel-pipeline` | RS0031 |
+| `task-group-cancel` | compiles; fails the `Task.cancellation_token()` invariant |
+
+Six of the seven are structured concurrency and resource lifetime — `await`
+placement, cancellation, a value held across an `await`, a class binding made
+`local`. None of them is a naming failure, and none of them is addressed by a
+signature list. Implication 3 of the 2026-09-19 ranking stands and is now the
+whole of the remaining first-attempt surface: the card's one row still says
+`task_group`, `with` and `select` are statements, and shows no `select` arm, no
+`async let`, and nothing about which channel operation takes a `take`. That is
+where the next round's rows belong.
+
+### Reproducing
+
+```bash
+for mode in language_card repair_loop; do
+  cargo run -p rsscript-xtask -- agent-eval --tasks evals/tasks \
+    --candidates "evals/samples/sonnet-2026-09-20/$mode" \
+    --output "evals/samples/sonnet-2026-09-20/$mode/report.v1.json"
+done
+python3 tools/analyze-model-samples.py --model sonnet-2026-09-20 --rss ./target/debug/rss
+```
+
+Candidates, per-turn sources and per-turn transcripts for all 100 samples are
+committed (1.8 MB), so every count above is re-derivable without model access.

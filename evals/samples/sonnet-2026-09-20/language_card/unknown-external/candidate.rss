@@ -1,0 +1,4 @@
+fn main() -> Unit {
+    let value = String.from_int(value: 7)
+    Output.write(message: value)
+}

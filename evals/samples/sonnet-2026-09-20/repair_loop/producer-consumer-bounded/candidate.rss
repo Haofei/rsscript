@@ -1,0 +1,63 @@
+async fn produce(sender: Sender<Int>, token: CancellationToken) -> Unit {
+    let mut next: Int = 0
+    let mut running: Bool = true
+    while running && next < 4 {
+        if CancellationToken.is_cancelled(token: token) {
+            running = false
+        } else {
+            local value = next * 10
+            let sent = await Sender.send(sender: sender, value: take value)
+            match sent {
+                Ok(done) => {
+                    next = next + 1
+                }
+                Err(error) => {
+                    running = false
+                }
+            }
+        }
+    }
+}
+
+async fn consume(receiver: Receiver<Int>) -> Int {
+    let mut seen: Int = 0
+    let mut open: Bool = true
+    while open && seen < 4 {
+        let received = await Receiver.recv(receiver: receiver)
+        match received {
+            Ok(item) => {
+                match item {
+                    Some(value) => {
+                        seen = seen + 1
+                    }
+                    None => {
+                        open = false
+                    }
+                }
+            }
+            Err(error) => {
+                open = false
+            }
+        }
+    }
+    return seen
+}
+
+async fn main() -> Unit {
+    let Ok(made) = Channel.bounded<Int>(capacity: 2) else {
+        return
+    }
+    local channel = made
+    let Ok(receiver) = Channel.receiver(channel: mut channel) else {
+        return
+    }
+    let sender = Channel.sender(channel: channel)
+    task_group {
+        let token = Task.cancellation_token()
+        async let producer = produce(sender: sender, token: token)
+        async let consumer = consume(receiver: receiver)
+        await producer
+        let seen = await consumer
+        Output.write(message: String.from_int(value: seen))
+    }
+}

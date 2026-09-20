@@ -1,0 +1,35 @@
+struct Reading {
+    sensor: String
+    value: Int
+}
+
+fn format_reading(reading: read Reading) -> fresh String {
+    let head = String.concat(left: reading.sensor, right: "=")
+    let number = String.from_int(value: reading.value)
+    return String.concat(left: head, right: number)
+}
+
+fn render_report(title: read String, readings: read List<Reading>) -> fresh String {
+    local lines = List.new<String>()
+    let title_line = String.copy(value: title)
+    List.push(list: mut lines, value: title_line)
+    for reading in readings {
+        let line = format_reading(reading: reading)
+        List.push(list: mut lines, value: line)
+    }
+    let total = List.len(list: readings)
+    let count_text = String.from_int(value: total)
+    let count_line = String.concat(left: "count=", right: count_text)
+    List.push(list: mut lines, value: count_line)
+    return List.join(list: lines, separator: "\n")
+}
+
+fn main() -> Unit {
+    let first = Reading(sensor: "alpha", value: 10)
+    let second = Reading(sensor: "beta", value: 20)
+    local readings = List.new<Reading>()
+    List.push(list: mut readings, value: first)
+    List.push(list: mut readings, value: second)
+    let report = render_report(title: "Sensor report", readings: readings)
+    Output.write(message: report)
+}
