@@ -111,8 +111,13 @@ struct LanguageCardJson {
     /// The worked example for the forms that are a shape rather than a line:
     /// `protocol`/`impl`, `Dyn.from`, `let … else` and both closure spellings.
     canonical_forms_example: String,
+    /// The worked program for the structured-concurrency and resource forms,
+    /// with the interface file it is checked against.
+    structured_concurrency_example: String,
+    structured_concurrency_interface: String,
     accepted_surface_sugar: Vec<SurfaceSugar>,
     canonical_surface_forms: Vec<CanonicalSurfaceForm>,
+    structured_concurrency_forms: Vec<ConcurrencyForm>,
     signature_count: usize,
     signatures: Vec<InterfaceSignature>,
 }
@@ -128,6 +133,22 @@ struct CanonicalSurfaceForm {
     form: &'static str,
     right: &'static str,
     wrong: &'static str,
+}
+
+/// One structured-concurrency or resource-lifetime form, with the diagnostic
+/// the wrong spelling actually produces.
+///
+/// The code is part of the row on purpose: a model that has just been handed
+/// `RS0031` by the checker can find the row by its code rather than by
+/// recognising the shape it wrote.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ConcurrencyForm {
+    form: &'static str,
+    right: &'static str,
+    wrong: &'static str,
+    /// The diagnostic code (or codes) the `wrong` spelling emits, each one
+    /// confirmed by running that spelling through `rss check`.
+    code: &'static str,
 }
 
 /// One `pub fn` signature from an interface source, as the formatter spells it.
@@ -156,10 +177,15 @@ fn canonical_surface_forms() -> Vec<CanonicalSurfaceForm> {
             right: "Ok(value) => { return value }",
             wrong: "Ok(value) => value,",
         },
+        // The right column used to read `task_group { spawn work() }`, which
+        // is itself `RS0015` — `spawn` is reserved and not executable. The
+        // whole of structured concurrency now has its own section, and this
+        // row does nothing but say that the three forms are statements and
+        // point at it.
         CanonicalSurfaceForm {
-            form: "`task_group`, `with` and `select` are statements",
-            right: "task_group { spawn work() }",
-            wrong: "let results = task_group { spawn work() }",
+            form: "`task_group`, `with` and `select` are statements — see [Structured concurrency and resources](#structured-concurrency-and-resources)",
+            right: "task_group { async let handle = work(id: 1) }",
+            wrong: "let results = task_group { async let handle = work(id: 1) }",
         },
         CanonicalSurfaceForm {
             form: "no tuple destructuring in `for`",
@@ -250,6 +276,131 @@ fn canonical_surface_forms() -> Vec<CanonicalSurfaceForm> {
             form: "bind a pattern or leave the block",
             right: "let Some(inner) = value else { return \"none\" }",
             wrong: "let inner = Option.unwrap(value: value)",
+        },
+    ]
+}
+
+/// The structured-concurrency and resource-lifetime forms, each with the code
+/// its wrong spelling emits.
+///
+/// Measured on 2026-09-20: after the inline signature list took the first
+/// attempt from 16/50 to 43/50, **all seven** remaining first-attempt failures
+/// were here — `RS0015` twice, then `RS0501`, `RS0022`, `RS0030`, `RS0031`,
+/// `RS0301` and `RS0306`. None of them is a naming failure and none of them is
+/// addressed by a signature list. The card's entire coverage of the area was
+/// one row saying that `task_group`, `with` and `select` are statements, whose
+/// own "right" column showed `spawn`, which is `RS0015`.
+///
+/// Every `right` spelling below checks clean and every `wrong` spelling was run
+/// through `rss check` to confirm the code in its last column.
+fn concurrency_forms() -> Vec<ConcurrencyForm> {
+    vec![
+        // `spawn` is reserved and not executable in v0.7; a model that reaches
+        // for it writes a handle the group cannot drain.
+        ConcurrencyForm {
+            form: "a child task is started by `async let`",
+            right: "task_group { async let handle = work(id: 1) }",
+            wrong: "task_group { let handle = spawn work(id: 1) }",
+            code: "RS0015",
+        },
+        ConcurrencyForm {
+            form: "a named handle is awaited in the same group",
+            right: "let value = await handle?",
+            wrong: "let value = handle?",
+            code: "RS0015",
+        },
+        ConcurrencyForm {
+            form: "a background child has no name and no `await`",
+            right: "async let _ = work(id: 1)",
+            wrong: "spawn work(id: 1)",
+            code: "RS0015",
+        },
+        ConcurrencyForm {
+            form: "`await` consumes the call itself, never a binding",
+            right: "let value = await work(id: 1)?",
+            wrong: "let handle = work(id: 1); let value = await handle?",
+            code: "RS0022, RS0030",
+        },
+        ConcurrencyForm {
+            form: "an `async fn` is reached through a task group",
+            right: "task_group { async let h = race(); let v = await h? }",
+            wrong: "let v = race()",
+            code: "RS0022",
+        },
+        // The arm binding is mandatory: without a top-level `=` before the
+        // `=>` the parser silently drops the arm.
+        ConcurrencyForm {
+            form: "a `select` arm is `binding = await op => { body }`",
+            right: "_ = await Receiver.recv(receiver: rx) => { }",
+            wrong: "first = Receiver.recv(receiver: rx) => { }",
+            code: "RS0015, RS0022",
+        },
+        ConcurrencyForm {
+            form: "a `select` arm awaits an operation, never an `async let` handle",
+            right: "_ = await Receiver.recv(receiver: rx) => { }",
+            wrong: "first = await handle => { }",
+            code: "RS0015",
+        },
+        // An `async fn` is lowered at its definition site, so it has no
+        // enclosing group and the token it would read is never cancelled.
+        ConcurrencyForm {
+            form: "the group's token is read inside the group and passed in",
+            right: "task_group { let token = Task.cancellation_token() }",
+            wrong: "async fn work() { let token = Task.cancellation_token() }",
+            code: "RS0412",
+        },
+        ConcurrencyForm {
+            form: "a receiver is taken with `mut`, a sender without",
+            right: "let rx = Channel.receiver(channel: mut channel)?",
+            wrong: "let rx = Channel.receiver(channel: channel)?",
+            code: "RS0202",
+        },
+        ConcurrencyForm {
+            form: "a sent value moves into the channel",
+            right: "local value = sample; await Sender.send(sender: sender, value: take value)?",
+            wrong: "await Sender.send(sender: sender, value: sample)?",
+            code: "RS0202",
+        },
+        // Measured: `local value = next` over a `let mut` counter is what a
+        // producer loop reaches for, and there is no managed-to-local
+        // conversion. A `for` element view is already exclusive.
+        ConcurrencyForm {
+            form: "a `local` is created at its origin, not rebound from a `let`",
+            right: "for sample in samples { local value = sample }",
+            wrong: "let mut next = 0; local value = next",
+            code: "RS0301",
+        },
+        ConcurrencyForm {
+            form: "nothing `local` may live across an `await`",
+            right: "let source = CancellationSource.new()",
+            wrong: "local source = CancellationSource.new()",
+            code: "RS0031",
+        },
+        ConcurrencyForm {
+            form: "a resource scope opens after the group has drained",
+            right: "task_group { }; with Journal.open(name: name)? as journal { }",
+            wrong: "with Journal.open(name: name)? as journal { task_group { } }",
+            code: "RS0031",
+        },
+        ConcurrencyForm {
+            form: "a resource producer is bodyless in an `.rssi`",
+            right: "pub fn Journal.open(name: String) -> Result<Journal, JournalError>",
+            wrong: "fn Journal.open(name: String) -> Journal { return Journal(id: 1) }",
+            code: "RS0702",
+        },
+        ConcurrencyForm {
+            form: "a class instance is bound with `let`",
+            right: "let log = EventLog.new()",
+            wrong: "local log = EventLog.new()",
+            code: "RS0306",
+        },
+        // `List.push` declares `retains(value)`: a clean local passed straight
+        // in would let local ownership escape the call.
+        ConcurrencyForm {
+            form: "an argument the callee retains is managed first",
+            right: "List.push(list: mut alerts, value: manage first)",
+            wrong: "List.push(list: mut alerts, value: first)",
+            code: "RS0501",
         },
     ]
 }
@@ -424,6 +575,7 @@ fn language_card_document() -> String {
     output.push_str("```\n\n");
     output.push_str(ACCEPTED_SUGAR_SECTION);
     output.push_str(&canonical_surface_forms_section());
+    output.push_str(&structured_concurrency_section());
     output.push_str(&core_signatures_section());
     output
 }
@@ -473,6 +625,179 @@ it captures.
 
 ```rsscript
 "#;
+
+/// The structured-concurrency and resource-lifetime section: a right/wrong
+/// table with the emitted code, then one program carrying the whole shape.
+///
+/// This is the section the 2026-09-20 measurement asked for by name. Seven of
+/// seven remaining first-attempt failures were structured concurrency and
+/// resource lifetime, and the card showed no `select` arm, no `async let`, no
+/// channel endpoint and nothing about what may not live across an `await`.
+fn structured_concurrency_section() -> String {
+    let mut output = String::from(
+        "## Structured concurrency and resources\n\nEvery first-attempt failure left in the 2026-09-20 measurement was in this section's material. The right column is what `rss fmt` prints; the last column is the code the wrong spelling actually emits, so a diagnostic can be looked up here by its number.\n\n| Form | Write this | Not this | Emits |\n| --- | --- | --- | --- |\n",
+    );
+    for form in concurrency_forms() {
+        output.push_str(&format!(
+            "| {} | `{}` | `{}` | {} |\n",
+            form.form,
+            table_cell(form.right),
+            table_cell(form.wrong),
+            form.code
+        ));
+    }
+    output.push_str(STRUCTURED_CONCURRENCY_EXAMPLE_INTRO);
+    output.push_str(&structured_concurrency_interface());
+    output.push_str("```\n\n```rsscript\n");
+    output.push_str(&structured_concurrency_example());
+    output.push_str("```\n\n");
+    output
+}
+
+const STRUCTURED_CONCURRENCY_EXAMPLE_INTRO: &str = r#"
+Most of those rows are a line; the thing they add up to is a program. This one
+is checked and printed by the compiler itself — a bounded channel whose producer
+and consumer are `async let` children of one `task_group`, a `select` with two
+arms whose loser is cancelled, and a resource scope that opens only after the
+group has drained, because a resource may not live across an `await`.
+
+A resource producer is bodyless in an interface, so the program is checked as
+`rss check --interface journal.rssi journal.rss` against this file:
+
+```rsscript-interface
+"#;
+
+/// The interface the worked program is checked against.
+///
+/// It exists because §8.2 of the semantics reference means a self-contained
+/// `.rss` file cannot demonstrate `with` at all: a resource is always produced
+/// by a bodyless function declared in an `.rssi`.
+fn structured_concurrency_interface() -> String {
+    r#"pub fn Journal.open(name: String) -> Result<Journal, JournalError>
+
+pub fn Journal.write(journal: mut Journal, line: String) -> Unit
+
+pub fn JournalError.message(error: JournalError) -> fresh String
+"#
+    .to_string()
+}
+
+/// The worked structured-concurrency program.
+///
+/// Verified by [`tests::structured_concurrency_example_is_valid_and_formatted`]
+/// to check clean against the prelude plus [`structured_concurrency_interface`]
+/// and to be an `rss fmt` fixpoint, so the card can never show a task group, a
+/// `select` arm or a `with` scope the compiler would reject.
+fn structured_concurrency_example() -> String {
+    r#"resource Journal {
+    id: Int
+}
+
+struct JournalError {
+    message: String
+}
+
+async fn publish(
+    sender: Sender<Int>,
+    samples: read List<Int>,
+    token: read CancellationToken,
+) -> Result<Int, ChannelError> {
+    let mut sent = 0
+    for sample in samples {
+        if CancellationToken.is_cancelled(token: token) {
+            return Ok(sent)
+        }
+        local value = sample
+        await Sender.send(sender: sender, value: take value)?
+        sent = sent + 1
+    }
+    return Ok(sent)
+}
+
+async fn collect(receiver: Receiver<Int>, limit: Int) -> Result<Int, ChannelError> {
+    let mut total = 0
+    let mut seen = 0
+    while seen < limit {
+        let item = await Receiver.recv(receiver: receiver)?
+        let Some(value) = item else {
+            return Ok(total)
+        }
+        total = total + value
+        seen = seen + 1
+    }
+    return Ok(total)
+}
+
+async fn signal(sender: Sender<Int>, mark: Int) -> Result<Unit, ChannelError> {
+    local value = mark
+    await Sender.send(sender: sender, value: take value)?
+    return Ok(Unit)
+}
+
+fn run(samples: read List<Int>) -> Result<Int, ChannelError> {
+    let mut data = Channel.bounded<Int>(capacity: 2)?
+    let data_tx = Channel.sender(channel: data)
+    let data_rx = Channel.receiver(channel: mut data)?
+    let mut work = Channel.bounded<Int>(capacity: 1)?
+    let work_tx = Channel.sender(channel: work)
+    let work_rx = Channel.receiver(channel: mut work)?
+    let mut deadline = Channel.bounded<Int>(capacity: 1)?
+    let deadline_tx = Channel.sender(channel: deadline)
+    let deadline_rx = Channel.receiver(channel: mut deadline)?
+    let source = CancellationSource.new()
+    let mut total = 0
+    task_group {
+        let token = Task.cancellation_token()
+        async let produced = publish(sender: data_tx, samples: samples, token: token)
+        async let consumed = collect(receiver: data_rx, limit: 2)
+        async let _ = signal(sender: work_tx, mark: 1)
+        async let _ = signal(sender: deadline_tx, mark: 2)
+        select {
+            _ = await Receiver.recv(receiver: work_rx) => {
+                Output.write(message: "work finished first")
+            }
+            _ = await Receiver.recv(receiver: deadline_rx) => {
+                Output.write(message: "deadline fired")
+                CancellationSource.cancel(source: mut source)
+            }
+        }
+        let sent = await produced?
+        total = await consumed?
+    }
+    return Ok(total)
+}
+
+fn record(total: Int) -> Result<Unit, JournalError> {
+    with Journal.open(name: "run")? as journal {
+        Journal.write(journal: mut journal, line: String.from_int(value: total))
+    }
+    return Ok(Unit)
+}
+
+fn main() -> Unit {
+    local samples = List.new<Int>()
+    List.push(list: mut samples, value: 10)
+    List.push(list: mut samples, value: 32)
+    match run(samples: samples) {
+        Ok(total) => {
+            match record(total: total) {
+                Ok(_) => {
+                    Output.write(message: String.from_int(value: total))
+                }
+                Err(error) => {
+                    Output.error(message: JournalError.message(error: error))
+                }
+            }
+        }
+        Err(error) => {
+            Output.error(message: ChannelError.message(error: error))
+        }
+    }
+    return Unit
+}
+"#
+    .to_string()
+}
 
 /// The whole callable surface, inline in the card.
 ///
@@ -756,8 +1081,11 @@ fn language_card_json() -> String {
         diagnostic_fixes: diagnostic_fix_availability(),
         canonical_call_example: canonical_example(),
         canonical_forms_example: canonical_forms_example(),
+        structured_concurrency_example: structured_concurrency_example(),
+        structured_concurrency_interface: structured_concurrency_interface(),
         accepted_surface_sugar: accepted_surface_sugar(),
         canonical_surface_forms: canonical_surface_forms(),
+        structured_concurrency_forms: concurrency_forms(),
         signature_count: interface_signatures().len(),
         signatures: interface_signatures(),
     })
@@ -1376,5 +1704,147 @@ mod tests {
         assert!(canonical_surface_forms_section().contains(&example));
         let card: serde_json::Value = serde_json::from_str(&language_card_json()).unwrap();
         assert_eq!(card["canonical_forms_example"], example);
+    }
+
+    /// The structured-concurrency table is the answer to the 2026-09-20
+    /// measurement, where all seven remaining first-attempt failures were in
+    /// this material. Every row carries the code its wrong spelling emits, and
+    /// each of the seven measured codes has to be covered by some row.
+    #[test]
+    fn structured_concurrency_forms_carry_their_diagnostic_code() {
+        let forms = concurrency_forms();
+        assert_eq!(forms.len(), 16);
+        let section = structured_concurrency_section();
+        assert!(section.starts_with("## Structured concurrency and resources\n"));
+        for form in &forms {
+            assert_ne!(form.right, form.wrong);
+            assert!(
+                form.code.starts_with("RS"),
+                "`{}` must name the code it emits",
+                form.form
+            );
+            assert!(
+                section.contains(&table_cell(form.right)),
+                "missing `{}`",
+                form.right
+            );
+            assert!(
+                section.contains(&table_cell(form.wrong)),
+                "missing `{}`",
+                form.wrong
+            );
+        }
+
+        // The seven codes the measurement left standing, plus the three the
+        // channel and resource rows turn out to emit.
+        for code in [
+            "RS0015", "RS0022", "RS0030", "RS0031", "RS0301", "RS0306", "RS0501", "RS0202",
+            "RS0412", "RS0702",
+        ] {
+            assert!(
+                forms.iter().any(|form| form.code.contains(code)),
+                "no row emits `{code}`"
+            );
+        }
+
+        // The old one-line coverage now points here instead of showing
+        // `spawn`, which is itself RS0015.
+        let statements = canonical_surface_forms()
+            .into_iter()
+            .find(|form| {
+                form.form
+                    .starts_with("`task_group`, `with` and `select` are statements")
+            })
+            .expect("the statements row must survive");
+        assert!(
+            statements
+                .form
+                .contains("(#structured-concurrency-and-resources)"),
+            "the statements row must link the new section: {}",
+            statements.form
+        );
+        assert!(!statements.right.contains("spawn"));
+        assert!(!statements.wrong.contains("spawn"));
+
+        let card: serde_json::Value = serde_json::from_str(&language_card_json()).unwrap();
+        assert_eq!(
+            card["structured_concurrency_forms"]
+                .as_array()
+                .map(Vec::len)
+                .unwrap_or_default(),
+            forms.len()
+        );
+        assert!(language_card_document().contains(&section));
+    }
+
+    /// The worked structured-concurrency program must check clean against the
+    /// prelude plus its own interface, and be what `rss fmt` prints.
+    ///
+    /// A resource producer is bodyless in an `.rssi` (§8.2), so this is the one
+    /// card example that cannot be a single self-contained file.
+    #[test]
+    fn structured_concurrency_example_is_valid_and_formatted() {
+        let example = structured_concurrency_example();
+        let interface = structured_concurrency_interface();
+        // Exactly the interface set `rss check --interface journal.rssi`
+        // assembles: the standard-package prelude, which is where `Channel`,
+        // `Sender`, `Receiver`, `Task` and cancellation live, followed by the
+        // caller's own interface.
+        let mut interfaces = rsscript_semantics::standard_package_interfaces().to_vec();
+        interfaces.push(("journal.rssi", interface.as_str()));
+        let diagnostics = rsscript_semantics::analyze_source_with_interfaces(
+            "language-card.rss",
+            &example,
+            &interfaces,
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| !diagnostic.severity.is_error()),
+            "the structured concurrency example must check clean: {diagnostics:#?}"
+        );
+        assert_eq!(
+            rsscript_syntax::format_source("language-card.rss", &example),
+            example,
+            "`rss fmt` must be a fixpoint on the structured concurrency example"
+        );
+        assert_eq!(
+            rsscript_syntax::format_source("journal.rssi", &interface),
+            interface,
+            "`rss fmt` must be a fixpoint on the example's interface"
+        );
+
+        // Each shape the program exists to show.
+        for shape in [
+            "task_group {",
+            "        async let produced = publish(",
+            "        async let _ = signal(sender: work_tx, mark: 1)",
+            "        select {",
+            "            _ = await Receiver.recv(receiver: work_rx) => {",
+            "                CancellationSource.cancel(source: mut source)",
+            "        let sent = await produced?",
+            "    with Journal.open(name: \"run\")? as journal {",
+            "        local value = sample",
+            "        await Sender.send(sender: sender, value: take value)?",
+            "    let data_rx = Channel.receiver(channel: mut data)?",
+            "    let source = CancellationSource.new()",
+        ] {
+            assert!(example.contains(shape), "the example must show `{shape}`");
+        }
+
+        // The `with` scope opens after the group, never inside it: a resource
+        // may not live across an `await` (RS0031).
+        let group = example.find("task_group {").expect("task group");
+        let scope = example.find("with Journal.open").expect("with scope");
+        assert!(
+            group < scope,
+            "the resource scope must open after the task group has drained"
+        );
+
+        assert!(structured_concurrency_section().contains(&example));
+        assert!(structured_concurrency_section().contains(&interface));
+        let card: serde_json::Value = serde_json::from_str(&language_card_json()).unwrap();
+        assert_eq!(card["structured_concurrency_example"], example);
+        assert_eq!(card["structured_concurrency_interface"], interface);
     }
 }

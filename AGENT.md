@@ -105,6 +105,37 @@ cancellation, and abstract streams for structured concurrency. Do not generate
 ambient timers, files, sockets, or subprocess access unless an explicit package
 interface and binding are present in the task context.
 
+The full right/wrong table, each row carrying the code its wrong spelling
+emits, plus a worked program with a bounded channel, a `select` and a resource
+scope, is the *Structured concurrency and resources* section of the generated
+[language card](docs/generated/language-card.md). The essentials:
+
+- A child task is `async let handle = work(id: 1)`, a direct statement of a
+  `task_group`. `spawn` is reserved and not executable (`RS0015`). Every named
+  handle is consumed by `await handle?` as a direct statement of the same
+  group; an unnamed `async let _ = work(id: 1)` is a background child the group
+  drains before it returns.
+- `await` consumes the call, not a binding: `let value = await work(id: 1)?`,
+  never `let handle = work(id: 1)` followed by `await handle` (`RS0022`,
+  `RS0030`). An `async fn` is only reached from inside a task group.
+- A `select` arm is `binding = await <operation> => { body }`; `_` ignores the
+  result. The arm awaits a direct async operation, never an `async let` handle
+  (`RS0015`), and the losing arms are cancelled.
+- `Task.cancellation_token()` returns the *lexically enclosing* group's token,
+  so it is called inside the `task_group` block and passed into the child as a
+  `read CancellationToken` (`RS0412`). Cancellation itself is an explicit
+  `CancellationSource`.
+- Channels: `Channel.bounded<T>(capacity: n)?`, then
+  `Channel.sender(channel: channel)` and
+  `Channel.receiver(channel: mut channel)?` — the receiver needs `mut`
+  (`RS0202`). `Sender.send` takes `value: take T`, so the value must be a
+  `local` binding created at its origin, not rebound from a `let` (`RS0301`).
+- Nothing `local`, and no resource, may live across an `await` (`RS0031`).
+  Bind cancellation sources and other long-lived values with `let`, and open a
+  `with` resource scope only after the task group has drained.
+- A class instance is bound with `let`, never `local` (`RS0306`), and an
+  argument a `retains(...)` callee stores is passed `manage value` (`RS0501`).
+
 ## Host packages
 
 Filesystem, environment, process, network, time, randomness, logging, CLI

@@ -53,7 +53,7 @@ These are the forms most often written wrong. The right column is what `rss fmt`
 | --- | --- | --- |
 | constructor call | `Report(title: take title, count: 0)` | `Report { title: title, count: 0 }` |
 | match arm | `Ok(value) => { return value }` | `Ok(value) => value,` |
-| `task_group`, `with` and `select` are statements | `task_group { spawn work() }` | `let results = task_group { spawn work() }` |
+| `task_group`, `with` and `select` are statements — see [Structured concurrency and resources](#structured-concurrency-and-resources) | `task_group { async let handle = work(id: 1) }` | `let results = task_group { async let handle = work(id: 1) }` |
 | no tuple destructuring in `for` | `for key in Map.keys(map: counts) { }` | `for (key, value) in counts { }` |
 | mutable binding | `let mut total: Int = 0` | `mut total: Int = 0` |
 | a value you will `take` is bound with `local` | `local title = "daily"` | `let title = "daily"` |
@@ -108,6 +108,155 @@ fn shifted(value: Option<Int>) -> Int {
 
 impl Formatter for Point {
     format = Point.format
+}
+```
+
+## Structured concurrency and resources
+
+Every first-attempt failure left in the 2026-09-20 measurement was in this section's material. The right column is what `rss fmt` prints; the last column is the code the wrong spelling actually emits, so a diagnostic can be looked up here by its number.
+
+| Form | Write this | Not this | Emits |
+| --- | --- | --- | --- |
+| a child task is started by `async let` | `task_group { async let handle = work(id: 1) }` | `task_group { let handle = spawn work(id: 1) }` | RS0015 |
+| a named handle is awaited in the same group | `let value = await handle?` | `let value = handle?` | RS0015 |
+| a background child has no name and no `await` | `async let _ = work(id: 1)` | `spawn work(id: 1)` | RS0015 |
+| `await` consumes the call itself, never a binding | `let value = await work(id: 1)?` | `let handle = work(id: 1); let value = await handle?` | RS0022, RS0030 |
+| an `async fn` is reached through a task group | `task_group { async let h = race(); let v = await h? }` | `let v = race()` | RS0022 |
+| a `select` arm is `binding = await op => { body }` | `_ = await Receiver.recv(receiver: rx) => { }` | `first = Receiver.recv(receiver: rx) => { }` | RS0015, RS0022 |
+| a `select` arm awaits an operation, never an `async let` handle | `_ = await Receiver.recv(receiver: rx) => { }` | `first = await handle => { }` | RS0015 |
+| the group's token is read inside the group and passed in | `task_group { let token = Task.cancellation_token() }` | `async fn work() { let token = Task.cancellation_token() }` | RS0412 |
+| a receiver is taken with `mut`, a sender without | `let rx = Channel.receiver(channel: mut channel)?` | `let rx = Channel.receiver(channel: channel)?` | RS0202 |
+| a sent value moves into the channel | `local value = sample; await Sender.send(sender: sender, value: take value)?` | `await Sender.send(sender: sender, value: sample)?` | RS0202 |
+| a `local` is created at its origin, not rebound from a `let` | `for sample in samples { local value = sample }` | `let mut next = 0; local value = next` | RS0301 |
+| nothing `local` may live across an `await` | `let source = CancellationSource.new()` | `local source = CancellationSource.new()` | RS0031 |
+| a resource scope opens after the group has drained | `task_group { }; with Journal.open(name: name)? as journal { }` | `with Journal.open(name: name)? as journal { task_group { } }` | RS0031 |
+| a resource producer is bodyless in an `.rssi` | `pub fn Journal.open(name: String) -> Result<Journal, JournalError>` | `fn Journal.open(name: String) -> Journal { return Journal(id: 1) }` | RS0702 |
+| a class instance is bound with `let` | `let log = EventLog.new()` | `local log = EventLog.new()` | RS0306 |
+| an argument the callee retains is managed first | `List.push(list: mut alerts, value: manage first)` | `List.push(list: mut alerts, value: first)` | RS0501 |
+
+Most of those rows are a line; the thing they add up to is a program. This one
+is checked and printed by the compiler itself — a bounded channel whose producer
+and consumer are `async let` children of one `task_group`, a `select` with two
+arms whose loser is cancelled, and a resource scope that opens only after the
+group has drained, because a resource may not live across an `await`.
+
+A resource producer is bodyless in an interface, so the program is checked as
+`rss check --interface journal.rssi journal.rss` against this file:
+
+```rsscript-interface
+pub fn Journal.open(name: String) -> Result<Journal, JournalError>
+
+pub fn Journal.write(journal: mut Journal, line: String) -> Unit
+
+pub fn JournalError.message(error: JournalError) -> fresh String
+```
+
+```rsscript
+resource Journal {
+    id: Int
+}
+
+struct JournalError {
+    message: String
+}
+
+async fn publish(
+    sender: Sender<Int>,
+    samples: read List<Int>,
+    token: read CancellationToken,
+) -> Result<Int, ChannelError> {
+    let mut sent = 0
+    for sample in samples {
+        if CancellationToken.is_cancelled(token: token) {
+            return Ok(sent)
+        }
+        local value = sample
+        await Sender.send(sender: sender, value: take value)?
+        sent = sent + 1
+    }
+    return Ok(sent)
+}
+
+async fn collect(receiver: Receiver<Int>, limit: Int) -> Result<Int, ChannelError> {
+    let mut total = 0
+    let mut seen = 0
+    while seen < limit {
+        let item = await Receiver.recv(receiver: receiver)?
+        let Some(value) = item else {
+            return Ok(total)
+        }
+        total = total + value
+        seen = seen + 1
+    }
+    return Ok(total)
+}
+
+async fn signal(sender: Sender<Int>, mark: Int) -> Result<Unit, ChannelError> {
+    local value = mark
+    await Sender.send(sender: sender, value: take value)?
+    return Ok(Unit)
+}
+
+fn run(samples: read List<Int>) -> Result<Int, ChannelError> {
+    let mut data = Channel.bounded<Int>(capacity: 2)?
+    let data_tx = Channel.sender(channel: data)
+    let data_rx = Channel.receiver(channel: mut data)?
+    let mut work = Channel.bounded<Int>(capacity: 1)?
+    let work_tx = Channel.sender(channel: work)
+    let work_rx = Channel.receiver(channel: mut work)?
+    let mut deadline = Channel.bounded<Int>(capacity: 1)?
+    let deadline_tx = Channel.sender(channel: deadline)
+    let deadline_rx = Channel.receiver(channel: mut deadline)?
+    let source = CancellationSource.new()
+    let mut total = 0
+    task_group {
+        let token = Task.cancellation_token()
+        async let produced = publish(sender: data_tx, samples: samples, token: token)
+        async let consumed = collect(receiver: data_rx, limit: 2)
+        async let _ = signal(sender: work_tx, mark: 1)
+        async let _ = signal(sender: deadline_tx, mark: 2)
+        select {
+            _ = await Receiver.recv(receiver: work_rx) => {
+                Output.write(message: "work finished first")
+            }
+            _ = await Receiver.recv(receiver: deadline_rx) => {
+                Output.write(message: "deadline fired")
+                CancellationSource.cancel(source: mut source)
+            }
+        }
+        let sent = await produced?
+        total = await consumed?
+    }
+    return Ok(total)
+}
+
+fn record(total: Int) -> Result<Unit, JournalError> {
+    with Journal.open(name: "run")? as journal {
+        Journal.write(journal: mut journal, line: String.from_int(value: total))
+    }
+    return Ok(Unit)
+}
+
+fn main() -> Unit {
+    local samples = List.new<Int>()
+    List.push(list: mut samples, value: 10)
+    List.push(list: mut samples, value: 32)
+    match run(samples: samples) {
+        Ok(total) => {
+            match record(total: total) {
+                Ok(_) => {
+                    Output.write(message: String.from_int(value: total))
+                }
+                Err(error) => {
+                    Output.error(message: JournalError.message(error: error))
+                }
+            }
+        }
+        Err(error) => {
+            Output.error(message: ChannelError.message(error: error))
+        }
+    }
+    return Unit
 }
 ```
 
