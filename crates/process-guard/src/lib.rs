@@ -1860,61 +1860,11 @@ mod tests {
         assert_eq!(stdout.trim(), "NoNewPrivs:\t1");
     }
 
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    #[test]
-    fn seccomp_filter_is_enforced_or_fails_closed_before_runner_code() {
-        const CHILD: &str = "RSSCRIPT_SECCOMP_FILTER_CHILD";
-        if std::env::var_os(CHILD).is_some() {
-            let requirements = StrictIsolationRequirements::linux_runner()
-                .require(StrictIsolationControl::SeccompFilter);
-            verify_strict_child_context_with(requirements)
-                .expect("strict child must observe installed seccomp filter");
-            // SAFETY: this direct syscall has no pointer arguments. The test
-            // checks the filter's observable deny result without creating a
-            // socket or interacting with the host network.
-            let socket = unsafe { libc::syscall(libc::SYS_socket, libc::AF_INET, 1, 0) };
-            assert_eq!(socket, -1, "seccomp must reject socket creation");
-            assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::EPERM));
-            // SAFETY: `getpid` takes no arguments, returns a plain integer, and
-            // cannot fail, so this FFI call has no memory-safety preconditions.
-            let pid = unsafe { libc::getpid() };
-            assert!(pid > 0, "ordinary syscalls remain available");
-            return;
-        }
-
-        let requirements = StrictIsolationRequirements::linux_runner()
-            .require(StrictIsolationControl::SeccompFilter);
-        let mut command = Command::new(std::env::current_exe().expect("test executable"));
-        command
-            .args([
-                "--exact",
-                "tests::seccomp_filter_is_enforced_or_fails_closed_before_runner_code",
-            ])
-            .env(CHILD, "1");
-        match spawn_guarded_child_strict_with(
-            &mut command,
-            ProcessLimits::generated_program(),
-            requirements,
-        ) {
-            Ok(child) => {
-                assert!(child.wait().expect("seccomp child should exit").success());
-            }
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::Unsupported
-                        | io::ErrorKind::PermissionDenied
-                        // User-mode Linux emulators can reject `prctl` before
-                        // the kernel reaches the filter verifier. That is an
-                        // unavailable boundary, not permission to continue.
-                        | io::ErrorKind::InvalidInput
-                ) =>
-            {
-                eprintln!("seccomp unavailable or denied: {error}");
-            }
-            Err(error) => panic!("seccomp filter must install or fail closed: {error}"),
-        }
-    }
+    // The seccomp filter's end-to-end proof lives in `tests/seccomp_filter.rs`,
+    // a `harness = false` target. The child there is the test binary itself, so
+    // putting the assertion in a libtest unit test would leave the whole
+    // harness between `execve` and the child-side check; the dedicated entry
+    // keeps that gap empty and reports the child's captured output.
 
     #[cfg(target_os = "linux")]
     #[test]
