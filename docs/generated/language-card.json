@@ -73,6 +73,11 @@
       "form": "`take` moves a binding, never a literal",
       "right": "local title = \"daily\"; build(title: take title)",
       "wrong": "build(title: take \"daily\")"
+    },
+    {
+      "form": "strings are joined by a call, never by `+`",
+      "right": "String.concat(left: head, right: tail)",
+      "wrong": "head + tail"
     }
   ],
   "signature_count": 450,

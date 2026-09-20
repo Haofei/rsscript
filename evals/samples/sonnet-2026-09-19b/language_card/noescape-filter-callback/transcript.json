@@ -1,0 +1,296 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 19096,
+    "check_ok": false,
+    "codes": [
+      "RS0015",
+      "RS0203",
+      "RS0204",
+      "RS0206",
+      "RS0501",
+      "RS0802"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 11,
+        "label": "unsupported expression",
+        "causes": [
+          "This expression is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0802",
+        "severity": "error",
+        "summary": "noescape callback `keep` cannot be returned.",
+        "line": 7,
+        "label": "noescape callback escapes",
+        "causes": [
+          "`noescape Fn()` parameters cannot escape the current function through a return value.",
+          "The escaping context starts at 7:12."
+        ],
+        "fixes": [
+          {
+            "title": "Call the callback directly, or change the API to an ordinary managed callback type.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `List.filter` has no argument named `keep`.",
+        "line": 7,
+        "label": "unknown argument",
+        "causes": [
+          "`List.filter` does not declare a parameter named `keep`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `predicate`? Declared: list, predicate.",
+            "applicability": "machine-applicable",
+            "replacement": "predicate",
+            "replace_line": 7,
+            "replace_column": 38,
+            "replace_length": 4
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `List.filter` is missing required argument `predicate`.",
+        "line": 7,
+        "label": "missing argument",
+        "causes": [
+          "`List.filter` requires a named argument `predicate`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `predicate: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0802",
+        "severity": "error",
+        "summary": "noescape callback `keep` cannot be passed to `List.filter` as an ordinary value.",
+        "line": 7,
+        "label": "noescape callback escapes",
+        "causes": [
+          "Forwarding a noescape callback is only allowed when the target parameter is also `noescape Fn()`.",
+          "The escaping context starts at 7:38."
+        ],
+        "fixes": [
+          {
+            "title": "Call the callback directly, or change the API to an ordinary managed callback type.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `List.push` has no argument named `item`.",
+        "line": 20,
+        "label": "unknown argument",
+        "causes": [
+          "`List.push` does not declare a parameter named `item`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `value`? Declared: list, value.",
+            "applicability": "machine-applicable",
+            "replacement": "value",
+            "replace_line": 20,
+            "replace_column": 33,
+            "replace_length": 4
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `List.push` is missing required argument `value`.",
+        "line": 20,
+        "label": "missing argument",
+        "causes": [
+          "`List.push` requires a named argument `value`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `value: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `List.push` has no argument named `item`.",
+        "line": 21,
+        "label": "unknown argument",
+        "causes": [
+          "`List.push` does not declare a parameter named `item`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `value`? Declared: list, value.",
+            "applicability": "machine-applicable",
+            "replacement": "value",
+            "replace_line": 21,
+            "replace_column": 33,
+            "replace_length": 4
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `List.push` is missing required argument `value`.",
+        "line": 21,
+        "label": "missing argument",
+        "causes": [
+          "`List.push` requires a named argument `value`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `value: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Console.write_line` does not resolve.",
+        "line": 23,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 23,
+            "replace_column": 5,
+            "replace_length": 18
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `List.length` does not resolve.",
+        "line": 23,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `List.len`?",
+            "applicability": "machine-applicable",
+            "replacement": "List.len",
+            "replace_line": 23,
+            "replace_column": 53,
+            "replace_length": 11
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0501",
+        "severity": "error",
+        "summary": "retaining API `List.push` cannot retain local value `first`.",
+        "line": 20,
+        "label": "local value retained",
+        "causes": [
+          "`List.push` declares `retains(value)`."
+        ],
+        "fixes": [
+          {
+            "title": "Pass `value` through `manage first` before retaining it.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0501",
+        "severity": "error",
+        "summary": "retaining API `List.push` cannot retain local value `second`.",
+        "line": 21,
+        "label": "local value retained",
+        "causes": [
+          "`List.push` declares `retains(value)`."
+        ],
+        "fixes": [
+          {
+            "title": "Pass `value` through `manage second` before retaining it.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

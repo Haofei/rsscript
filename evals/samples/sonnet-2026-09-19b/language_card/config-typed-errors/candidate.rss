@@ -1,0 +1,54 @@
+struct PumpConfig {
+    name: String,
+    interval_ms: Int,
+    retries: Int,
+}
+
+sum ConfigError {
+    MissingField(field: String),
+    OutOfRange(field: String, value: Int),
+}
+
+fn ConfigError.describe(error: read ConfigError) -> fresh String {
+    match error {
+        MissingField(field) => {
+            return String.concat(left: "missing field: ", right: field)
+        }
+        OutOfRange(field, value) => {
+            let head = String.concat(left: field, right: " out of range: ")
+            return String.concat(left: head, right: Int.to_string(value: value))
+        }
+    }
+}
+
+fn validate(config: read PumpConfig) -> Result<Unit, ConfigError> {
+    if String.length(value: config.name) == 0 {
+        return Err(MissingField(field: "name"))
+    }
+    if config.interval_ms < 100 {
+        return Err(OutOfRange(field: "interval_ms", value: config.interval_ms))
+    }
+    if config.interval_ms > 60000 {
+        return Err(OutOfRange(field: "interval_ms", value: config.interval_ms))
+    }
+    if config.retries < 0 {
+        return Err(OutOfRange(field: "retries", value: config.retries))
+    }
+    if config.retries > 10 {
+        return Err(OutOfRange(field: "retries", value: config.retries))
+    }
+    return Ok(())
+}
+
+fn main() -> Unit {
+    let config = PumpConfig(name: "pump-a", interval_ms: 500, retries: 3)
+    match validate(config: config) {
+        Ok(_) => {
+            Console.write_line(value: config.name)
+        }
+        Err(error) => {
+            let message = ConfigError.describe(error: error)
+            Console.write_line(value: message)
+        }
+    }
+}

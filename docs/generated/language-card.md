@@ -58,6 +58,7 @@ These are the forms most often written wrong. The right column is what `rss fmt`
 | mutable binding | `let mut total: Int = 0` | `mut total: Int = 0` |
 | a value you will `take` is bound with `local` | `local title = "daily"` | `let title = "daily"` |
 | `take` moves a binding, never a literal | `local title = "daily"; build(title: take title)` | `build(title: take "daily")` |
+| strings are joined by a call, never by `+` | `String.concat(left: head, right: tail)` | `head + tail` |
 
 ## Core interface signatures
 

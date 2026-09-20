@@ -1,0 +1,29 @@
+struct Reading {
+    sensor: String
+    value: Int
+}
+
+fn format_reading(reading: read Reading) -> fresh String {
+    let number: String = Int.to_string(value: reading.value)
+    let prefix: String = String.concat(left: reading.sensor, right: "=")
+    return String.concat(left: prefix, right: number)
+}
+
+fn render_report(title: read String, readings: read List<Reading>) -> fresh String {
+    let mut lines: List<String> = List.new()
+    List.push(list: mut lines, value: title)
+    for reading in readings {
+        List.push(list: mut lines, value: format_reading(reading: reading))
+    }
+    let total: String = Int.to_string(value: List.len(list: readings))
+    List.push(list: mut lines, value: String.concat(left: "count=", right: total))
+    return List.join(list: lines, separator: "\n")
+}
+
+fn main() -> Unit {
+    let mut readings: List<Reading> = List.new()
+    List.push(list: mut readings, value: Reading(sensor: "temp", value: 21))
+    List.push(list: mut readings, value: Reading(sensor: "humidity", value: 48))
+    let report: String = render_report(title: "daily", readings: readings)
+    Output.write(text: report)
+}

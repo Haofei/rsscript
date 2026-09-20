@@ -1,0 +1,40 @@
+struct Route {
+    host: String,
+    port: Int,
+}
+
+fn parse_route(raw: read String) -> Option<Route> {
+    let parts: List<String> = String.split(value: raw, delimiter: ":")
+    if List.length(list: parts) != 2 {
+        return None
+    }
+    let Some(host_raw) = List.get(list: parts, index: 0) else {
+        return None
+    }
+    let Some(port_raw) = List.get(list: parts, index: 1) else {
+        return None
+    }
+    local host = String.trim(value: host_raw)
+    let port_text: String = String.trim(value: port_raw)
+    if String.is_empty(value: host) {
+        return None
+    }
+    let Some(port) = Int.parse(value: port_text) else {
+        return None
+    }
+    return Some(Route(host: take host, port: port))
+}
+
+fn describe_route(raw: read String) -> fresh String {
+    let Some(route) = parse_route(raw: raw) else {
+        return "unroutable"
+    }
+    let head: String = String.concat(left: route.host, right: "/")
+    return String.concat(left: head, right: Int.to_string(value: route.port))
+}
+
+fn main() -> Unit {
+    let routable: String = describe_route(raw: "example.com:8080")
+    let unroutable: String = describe_route(raw: "example.com:http")
+    return
+}

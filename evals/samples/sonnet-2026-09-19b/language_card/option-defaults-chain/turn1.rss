@@ -1,0 +1,57 @@
+struct Settings {
+    region: String,
+    retries: Int,
+}
+
+fn lookup_from(keys: read List<String>, values: read List<String>, key: read String, index: read Int) -> Option<String> {
+    match List.get(list: keys, index: index) {
+        None => {
+            return None
+        }
+        Some(candidate) => {
+            if String.equals(left: candidate, right: key) {
+                return List.get(list: values, index: index)
+            }
+            return lookup_from(keys: keys, values: values, key: key, index: index + 1)
+        }
+    }
+}
+
+fn lookup(keys: read List<String>, values: read List<String>, key: read String) -> Option<String> {
+    return lookup_from(keys: keys, values: values, key: key, index: 0)
+}
+
+fn settings_from(keys: read List<String>, values: read List<String>) -> fresh Settings {
+    let region: String = match lookup(keys: keys, values: values, key: "region") {
+        Some(found) => {
+            found
+        }
+        None => {
+            "us-east"
+        }
+    }
+    let retries: Int = match lookup(keys: keys, values: values, key: "retries") {
+        Some(raw) => {
+            match Int.parse(value: raw) {
+                Some(parsed) => {
+                    parsed
+                }
+                None => {
+                    3
+                }
+            }
+        }
+        None => {
+            3
+        }
+    }
+    return Settings(region: region, retries: retries)
+}
+
+fn main() -> Unit {
+    let keys: List<String> = ["region", "retries"]
+    let values: List<String> = ["eu-west", "5"]
+    let settings: Settings = settings_from(keys: keys, values: values)
+    Console.write_line(value: settings.region)
+    Console.write_line(value: Int.to_string(value: settings.retries))
+}

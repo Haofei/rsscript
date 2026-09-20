@@ -184,6 +184,19 @@ fn canonical_surface_forms() -> Vec<CanonicalSurfaceForm> {
             right: "local title = \"daily\"; build(title: take title)",
             wrong: "build(title: take \"daily\")",
         },
+        // Measured on 2026-09-19 as the largest class the card could name and
+        // did not: `RS1001` appears in 26 of the 300 candidates and in 16 of
+        // the 100 written *with* this card in the prompt, 28 instances in the
+        // sonnet `language_card` set alone. Every instance is `+` (or `++`)
+        // between two strings. The table already covers the other forms models
+        // reach for from neighbouring languages; string concatenation was the
+        // one it left silent, and silence is what the RS0206 and RS0308 rows
+        // showed gets filled in with another language's spelling.
+        CanonicalSurfaceForm {
+            form: "strings are joined by a call, never by `+`",
+            right: "String.concat(left: head, right: tail)",
+            wrong: "head + tail",
+        },
     ]
 }
 
@@ -1047,7 +1060,7 @@ mod tests {
     #[test]
     fn canonical_surface_forms_show_a_right_and_wrong_pair() {
         let forms = canonical_surface_forms();
-        assert_eq!(forms.len(), 7);
+        assert_eq!(forms.len(), 8);
         let section = canonical_surface_forms_section();
         for form in &forms {
             assert_ne!(form.right, form.wrong);

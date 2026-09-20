@@ -1,0 +1,24 @@
+struct Alert {
+    level: String
+    message: String
+}
+
+fn select_alerts(alerts: read List<Alert>, keep: noescape Fn(Alert) -> Bool) -> fresh List<Alert> {
+    return List.filter(list: alerts, keep: keep)
+}
+
+fn urgent_only(alerts: read List<Alert>) -> fresh List<Alert> {
+    return select_alerts(alerts: alerts, keep: fn(alert: Alert) -> Bool {
+        return alert.level == "critical"
+    })
+}
+
+fn main() -> Unit {
+    local first = Alert(level: "critical", message: "disk full")
+    local second = Alert(level: "info", message: "backup done")
+    local alerts: List<Alert> = List.new()
+    List.push(list: mut alerts, item: take first)
+    List.push(list: mut alerts, item: take second)
+    let urgent = urgent_only(alerts: alerts)
+    Console.write_line(text: String.from_int(value: List.length(list: urgent)))
+}

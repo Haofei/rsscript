@@ -1006,3 +1006,64 @@ implications below are ranked the way they are.
    appearing.
 9. **RS0016–RS0020 need no work — 0 candidates.** Recorded so the next round
    does not budget for them.
+
+### What was changed here, and what it measured
+
+Only one change, the highest-count one that is a wording change rather than a
+compiler change: **the canonical surface forms table now has a string
+concatenation row** (`String.concat(left: head, right: tail)`, not
+`head + tail`). The card had rows for every other construct models import from
+a neighbouring language and none for this one.
+
+`language_card` was re-collected for sonnet against the new card, one draw,
+same fifty tasks, same pinned checker:
+
+```bash
+python3 tools/collect-model-samples.py --model sonnet --mode language_card \
+  --jobs 10 --timeout 400 --rss <pinned rss> \
+  --out evals/samples/sonnet-2026-09-19b
+```
+
+| sonnet `language_card` | RS1001 candidates | RS1001 instances | candidates writing `+` between strings | scorer pass | compiles |
+|---|---|---|---|---|---|
+| before, with the seven-row table | 14 | 14 | 14 | 15/50 | 15/50 |
+| after, with the string row | **2** | **2** | **0** | 16/50 | 16/50 |
+
+The construct the row names is gone: no candidate in the new draw concatenates
+two strings with `+`. The two remaining RS1001 are a different error wearing the
+same code — `total = total + reading` where `reading` is an unhandled
+`Result<Int, JsonError>`, which is a missing `?`, not a string. Measured on the
+construct the change targets, this is 14 → 0.
+
+The pass rate moves 15/50 to 16/50, which is one candidate at n = 1 and is not
+a result. That is the expected shape and matches every earlier card change in
+this report: naming a form removes the form, and removing a syntax error
+unmasks the semantic error beneath it rather than converting a failure into a
+pass. RS0203/RS0204 rise from 8/9 to 10/10 in the new draw for exactly that
+reason — regions that used to abort on RS1001 now get far enough to have their
+argument labels checked.
+
+The honest caveat is that these are two different draws of a non-deterministic
+model at n = 1 per task. 14 → 0 on a single named construct, in the mode whose
+prompt is the only thing that changed, is a large enough move to attribute; the
+one-candidate pass difference is not.
+
+### Reproducing
+
+```bash
+for model in sonnet haiku; do for mode in prompt_only language_card repair_loop; do
+  cargo run -p rsscript-xtask -- agent-eval --tasks evals/tasks \
+    --candidates "evals/samples/$model-2026-09-19/$mode" \
+    --output "evals/samples/$model-2026-09-19/$mode/report.v1.json"
+done; done
+cargo run -p rsscript-xtask -- agent-eval --tasks evals/tasks \
+  --candidates evals/samples/sonnet-2026-09-19b/language_card \
+  --output evals/samples/sonnet-2026-09-19b/language_card/report.v1.json
+python3 tools/analyze-model-samples.py --model sonnet-2026-09-19 --rss ./target/debug/rss
+python3 tools/analyze-model-samples.py --model haiku-2026-09-19  --rss ./target/debug/rss
+```
+
+Candidates, per-turn sources and per-turn transcripts for all 350 samples are
+committed, so every count above is re-derivable without model access. The
+`analysis.json` files the analyzer writes are not committed: they are pure
+derivation and 2.2 MB of it.

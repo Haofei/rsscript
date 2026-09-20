@@ -1,0 +1,52 @@
+struct ServiceConfig {
+    name: String,
+    port: Int,
+    enabled: Bool,
+}
+
+fn load_config(text: String) -> Result<fresh ServiceConfig, String> {
+    let parsed = Json.parse(text: text)
+    match parsed {
+        Err(error) => {
+            return Err(String.concat(left: "invalid JSON: ", right: Json.error_message(error: error)))
+        }
+        Ok(document) => {
+            let name_result = Json.get_string(value: document, key: "name")
+            match name_result {
+                Err(error) => {
+                    return Err(String.concat(left: "missing or invalid name: ", right: Json.error_message(error: error)))
+                }
+                Ok(name) => {
+                    let port_result = Json.get_int(value: document, key: "port")
+                    match port_result {
+                        Err(error) => {
+                            return Err(String.concat(left: "missing or invalid port: ", right: Json.error_message(error: error)))
+                        }
+                        Ok(port) => {
+                            if port < 1 {
+                                return Err("port must be at least 1")
+                            }
+                            if port > 65535 {
+                                return Err("port must be at most 65535")
+                            }
+                            return Ok(ServiceConfig(name: name, port: port, enabled: true))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn main() -> Unit {
+    let result = load_config(text: "{\"name\": \"gateway\", \"port\": 8080}")
+    match result {
+        Ok(config) => {
+            Output.write(text: config.name)
+        }
+        Err(message) => {
+            Output.write(text: message)
+        }
+    }
+    return
+}

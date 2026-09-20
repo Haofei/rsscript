@@ -1,0 +1,30 @@
+fn ship(sku: read String, count: Int) -> Result<Int, String> {
+    match Inventory.reserve(sku: sku, count: count) {
+        Err(message) => {
+            return Err(message)
+        }
+        Ok(reserved) => {
+            match Sync.push(id: sku, amount: reserved) {
+                Err(error) => {
+                    Inventory.release(sku: sku, count: reserved)
+                    return Err(SyncError.message(error: error))
+                }
+                Ok(accepted) => {
+                    Metrics.record(name: "ship.accepted", value: accepted)
+                    return Ok(accepted)
+                }
+            }
+        }
+    }
+}
+
+fn main() -> Unit {
+    match ship(sku: "sku-1", count: 1) {
+        Ok(accepted) => {
+            Metrics.record(name: "ship.outcome.ok", value: accepted)
+        }
+        Err(_) => {
+            Metrics.record(name: "ship.outcome.failed", value: 0)
+        }
+    }
+}
