@@ -640,7 +640,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::LOCAL_CLASS_BINDING,
         title: "local class binding",
-        explanation: "Classes are managed identity objects in RSScript v0.7. They are created as managed handles and cannot be bound as local exclusive values.",
+        explanation: "Classes are managed identity objects in RSScript v0.7. They are created as managed handles and cannot be bound as local exclusive values. The repair is the binding keyword alone, so the instance fix carries a machine-applicable edit replacing `local` with `let`; a `mut` qualifier and the initializer are untouched.",
     },
     DiagnosticExplanation {
         code: code::INVALID_MANAGE_OPERAND,

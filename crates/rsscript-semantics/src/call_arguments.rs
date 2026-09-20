@@ -107,13 +107,17 @@ pub fn receiver_call_effect_diagnostics(fact: &ReceiverCallEffectFact) -> Vec<Di
     .with_cause(
         "Receiver-call shorthand is only valid when the visible receiver effect exactly matches the resolved method's `self` effect.",
     )
+    // The span names the receiver alone, so an inserted effect keyword would
+    // be correct only when the source spells no effect there — and `read` is
+    // spellable, which this fact cannot distinguish from the implicit default.
+    // The repair is described rather than claimed to be applicable unseen.
     .with_fix(
         "match_receiver_effect",
         format!(
             "Write `{} {}.{}(...)`.",
             expected, fact.receiver_label, fact.method
         ),
-        "machine-applicable",
+        "manual",
     )]
 }
 

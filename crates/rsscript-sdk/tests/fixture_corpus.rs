@@ -54,6 +54,31 @@ fn check(path: &Path, header: &Header) -> BTreeSet<String> {
         .collect()
 }
 
+/// Check one fixture and return the diagnostics themselves, not just codes.
+fn diagnose(path: &Path, header: &Header) -> Vec<rsscript_diagnostics::Diagnostic> {
+    let source = fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("read fixture {}: {error}", path.display()));
+    let interface_sources = companions(path, &header.interfaces, "interface");
+    let companion_sources = companions(path, &header.sources, "source");
+
+    let mut interfaces = standard_package_interfaces().to_vec();
+    interfaces.extend(
+        interface_sources
+            .iter()
+            .map(|(file, contents)| (file.as_str(), contents.as_str())),
+    );
+
+    let file = path.to_string_lossy().into_owned();
+    let mut sources = vec![(file.as_str(), source.as_str())];
+    sources.extend(
+        companion_sources
+            .iter()
+            .map(|(file, contents)| (file.as_str(), contents.as_str())),
+    );
+
+    analyze_sources_with_interfaces(&sources, &interfaces)
+}
+
 #[test]
 fn pass_fixtures_are_diagnostic_free() {
     let directory = fixtures_root().join("pass");
@@ -123,6 +148,70 @@ fn fail_fixtures_emit_exactly_their_expected_codes() {
         failures.len(),
         paths.len(),
         failures.join("\n")
+    );
+}
+
+/// The fix contract, enforced over the whole diagnostic corpus.
+///
+/// `machine-applicable` is a promise to the consumer — an editor, a repair
+/// loop, a model — that the fix can be applied without a person reading it.
+/// A fix making that promise while carrying no edit cannot be applied at all,
+/// so the consumer either drops it or, worse, invents the edit itself. RS0306
+/// was in exactly that state: its fix was marked machine-applicable and its
+/// `replacement` was null.
+///
+/// Anything the compiler cannot derive an edit for is `manual`, which is an
+/// honest answer. This walks every `fail` fixture through the same checker
+/// `rss check --json` runs and asserts the two never come apart again.
+#[test]
+fn machine_applicable_fixes_carry_an_edit() {
+    let directory = fixtures_root().join("fail");
+    let paths = fixture_sources(&directory);
+    assert!(!paths.is_empty(), "the fail corpus should not be empty");
+
+    let mut violations = Vec::new();
+    let mut machine_applicable = 0usize;
+    for path in &paths {
+        let source = fs::read_to_string(path)
+            .unwrap_or_else(|error| panic!("read fixture {}: {error}", path.display()));
+        let header = parse_header(&source);
+        for diagnostic in diagnose(path, &header) {
+            for fix in &diagnostic.fixes {
+                if fix.applicability != "machine-applicable" {
+                    continue;
+                }
+                machine_applicable += 1;
+                let Some(edit) = &fix.edit else {
+                    violations.push(format!(
+                        "{}: {} fix `{}` is machine-applicable but carries no edit",
+                        name(path),
+                        diagnostic.code,
+                        fix.kind
+                    ));
+                    continue;
+                };
+                if edit.replacement.is_empty() && edit.span.length == 0 {
+                    violations.push(format!(
+                        "{}: {} fix `{}` carries an edit that changes nothing",
+                        name(path),
+                        diagnostic.code,
+                        fix.kind
+                    ));
+                }
+            }
+        }
+    }
+
+    assert!(
+        machine_applicable > 0,
+        "the fail corpus should exercise at least one machine-applicable fix"
+    );
+    assert!(
+        violations.is_empty(),
+        "{} machine-applicable fixes of {} carry no applicable edit:\n{}",
+        violations.len(),
+        machine_applicable,
+        violations.join("\n")
     );
 }
 

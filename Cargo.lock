@@ -2029,6 +2029,7 @@ dependencies = [
  "rsscript-bytecode",
  "rsscript-compiler",
  "rsscript-core-types",
+ "rsscript-diagnostics",
  "rsscript-mir",
  "rsscript-project",
  "rsscript-provider-api",

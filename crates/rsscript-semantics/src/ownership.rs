@@ -183,27 +183,53 @@ pub fn resource_producer_missing_try_diagnostic(resource_type: &str, span: Span)
     .with_cause(
         "Resource-producing `Result` values are transient; the successful resource must enter the `with` scope explicitly.",
     )
+    // The span this diagnostic carries is the producer's callee name, not the
+    // producer expression, so there is no position here at which `?` can be
+    // inserted without guessing where the call ends. The applicability says so
+    // rather than promising an edit the fix does not carry.
     .with_fix(
         "add_try_to_resource_producer",
         "Write `with producer(...)? as resource { ... }`.",
-        "machine-applicable",
+        "manual",
     )
 }
 
 /// Diagnose binding a managed class handle as a local value.
+///
+/// The repair is one keyword: the binding's primary span *is* the `local`
+/// keyword, so `let` replaces it and the rest of the line — including a `mut`
+/// qualifier and whatever spacing the author used — is untouched. The fix
+/// therefore carries the edit rather than only describing it, which is what
+/// "machine-applicable" has to mean: a fix claiming that applicability while
+/// carrying no `replacement` is a contract violation, not a convenience.
 pub fn local_class_binding_diagnostic(binding: &str, span: Span) -> Diagnostic {
-    Diagnostic::error(
+    const LOCAL_KEYWORD: &str = "local";
+
+    let title = format!("Declare `{binding}` with `let` instead of `local`.");
+    let diagnostic = Diagnostic::error(
         code::LOCAL_CLASS_BINDING,
         format!("class binding `{binding}` cannot be local."),
-        span,
+        span.clone(),
         "class bound as local",
     )
-    .with_cause("Classes are managed identity objects; their constructors produce managed handles.")
-    .with_fix(
-        "use_managed_class_binding",
-        format!("Declare `{binding}` with `let` instead of `local`."),
-        "machine-applicable",
-    )
+    .with_cause(
+        "Classes are managed identity objects; their constructors produce managed handles.",
+    );
+    // Only the keyword's own span can be rewritten sight-unseen. Any other
+    // extent would be a guess about what the source says there, so the fix
+    // falls back to advice rather than an edit that could corrupt the line.
+    if span.length == LOCAL_KEYWORD.len() {
+        diagnostic.with_fix_edit(
+            "use_managed_class_binding",
+            title,
+            FixEdit {
+                span,
+                replacement: "let".to_string(),
+            },
+        )
+    } else {
+        diagnostic.with_fix("use_managed_class_binding", title, "manual")
+    }
 }
 
 /// Diagnose `manage` applied to a value which is not a local binding or fresh shell.
