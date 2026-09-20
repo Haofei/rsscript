@@ -37,10 +37,16 @@ pub fn same_file_identity(path: &Path, open_file: &File) -> io::Result<bool> {
 
     fn identity(file: &File) -> io::Result<BY_HANDLE_FILE_INFORMATION> {
         let mut info = MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::zeroed();
+        // SAFETY: `file` keeps the handle open for the call, and `info` is a live,
+        // correctly sized and aligned `BY_HANDLE_FILE_INFORMATION` that the kernel
+        // only writes; it is the out-parameter this API requires.
         let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle(), info.as_mut_ptr()) };
         if ok == 0 {
             return Err(io::Error::last_os_error());
         }
+        // SAFETY: the call above returned non-zero, so the kernel fully initialized
+        // `info`; `BY_HANDLE_FILE_INFORMATION` is a plain-old-data struct with no
+        // invalid bit patterns.
         Ok(unsafe { info.assume_init() })
     }
 
@@ -653,6 +659,9 @@ pub fn install_current_process_runner_seccomp_filter() -> io::Result<()> {
         instruction(BPF_RET_K, 0, 0, 0x7fff_0000),
     ];
 
+    // SAFETY: PR_GET_NO_NEW_PRIVS takes only integer arguments (no pointers), so
+    // this prctl FFI call has no memory-safety preconditions; it merely reads the
+    // current no-new-privs bit and cannot violate any Rust invariant.
     let no_new_privileges = unsafe { libc::prctl(libc::PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) };
     if no_new_privileges != 1 {
         return Err(io::Error::new(
@@ -1530,9 +1539,13 @@ mod windows {
         job: HANDLE,
     }
 
-    // HANDLE ownership is unique and Windows kernel handles may be transferred
-    // between threads.
+    // SAFETY: `PlatformGuard` uniquely owns its job-object `HANDLE`; nothing else
+    // holds a copy, and it is closed exactly once in `Drop`. Windows kernel handles
+    // are process-wide values that may be moved between threads.
     unsafe impl Send for PlatformGuard {}
+    // SAFETY: the only operations on the shared `HANDLE` are `TerminateJobObject`
+    // and `AssignProcessToJobObject`, which the Win32 API makes thread-safe; the
+    // guard exposes no interior mutability of its own.
     unsafe impl Sync for PlatformGuard {}
 
     impl Drop for PlatformGuard {
@@ -1862,10 +1875,10 @@ mod tests {
             let socket = unsafe { libc::syscall(libc::SYS_socket, libc::AF_INET, 1, 0) };
             assert_eq!(socket, -1, "seccomp must reject socket creation");
             assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::EPERM));
-            assert!(
-                unsafe { libc::getpid() } > 0,
-                "ordinary syscalls remain available"
-            );
+            // SAFETY: `getpid` takes no arguments, returns a plain integer, and
+            // cannot fail, so this FFI call has no memory-safety preconditions.
+            let pid = unsafe { libc::getpid() };
+            assert!(pid > 0, "ordinary syscalls remain available");
             return;
         }
 
