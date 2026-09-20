@@ -34,6 +34,11 @@ services:
       # The workspace target lives in a volume; point every nested build at it
       # too so generated-package builds share one warm cache.
       CARGO_HOME: /usr/local/cargo
+    # No `user:` here on purpose. The entrypoint has to start as root so it can
+    # chown the three named-volume roots that Docker creates root-owned, and it
+    # then drops to RSSCRIPT_UID:RSSCRIPT_GID with gosu for the actual command.
+    # Setting `user:` would make that chown fail and abort the container.
+    #
     # Keep an interactive TTY for `docker compose run dev bash`.
     tty: true
     stdin_open: true
