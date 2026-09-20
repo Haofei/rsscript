@@ -72,7 +72,7 @@
     {
       "code": "RS0015",
       "title": "unsupported syntax",
-      "explanation": "The frontend parser could not lower this source construct into the supported RSScript AST. The checker reports this before Rust lowering so unsupported source does not become generated Rust `todo!()` code."
+      "explanation": "The frontend parser could not lower this source construct into the supported RSScript AST. The checker reports this before Rust lowering so unsupported source does not become generated Rust `todo!()` code. The same code also carries the structured-concurrency contract, where the label says which rule was broken. The shape those labels are asking for is one spelling: a child task is `async let handle = work(id: 1)` as a direct statement of `task_group { ... }`, not `spawn`, which is reserved and not executable; every named handle is consumed exactly once by `await handle?`, also a direct statement of the same group and after the `async let`; a child with no result is `async let _ = work(id: 1)`, which the group drains before returning; and a `select` arm is `binding = await <operation> => { body }`, awaiting an operation rather than an `async let` handle."
     },
     {
       "code": "RS0016",
@@ -107,7 +107,7 @@
     {
       "code": "RS0022",
       "title": "async call not consumed",
-      "explanation": "Async calls must be consumed by `await` so suspension boundaries remain review-visible. `spawn` is reserved but not executable in v0.7."
+      "explanation": "Async calls must be consumed by `await` so suspension boundaries remain review-visible. `spawn` is reserved but not executable in v0.7. Inside an `async fn`, consume the call where it is written: `let value = await work(id: 1)?`. From a synchronous function there is no suspension point to consume it at, so the call belongs to a task group — `task_group { async let handle = work(id: 1)` then `let value = await handle? }`, with the `await` a direct statement of the same group."
     },
     {
       "code": "RS0023",
@@ -147,12 +147,12 @@
     {
       "code": "RS0030",
       "title": "await non-async expression",
-      "explanation": "`await` must directly consume an async call in the executable async MVP; RSScript does not expose Future or Task values as source-level types."
+      "explanation": "`await` must directly consume an async call in the executable async MVP; RSScript does not expose Future or Task values as source-level types. So there is no binding to await later: write `let value = await work(id: 1)?`, not `let handle = work(id: 1)` followed by `await handle`. The one thing that names a task before it is awaited is `async let handle = work(id: 1)` inside a `task_group`, which is a task-group declaration rather than a value, and is consumed by `await handle?` in the same group. A `select` arm awaits an operation the same way — `binding = await Receiver.recv(receiver: rx) => { body }` — never an `async let` handle."
     },
     {
       "code": "RS0031",
       "title": "local value live across await",
-      "explanation": "RSScript async frames may suspend managed handles and Copy snapshots, but local values, resources, and runtime guards must not live across an await boundary."
+      "explanation": "RSScript async frames may suspend managed handles and Copy snapshots, but local values, resources, and runtime guards must not live across an await boundary. There are three repairs, in the order they usually apply. Bind the value managed instead of local — `let source = CancellationSource.new()` rather than `local source = ...` — when nothing takes it. Move it into the awaited call with `take` when something does: `local value = sample` immediately before `await Sender.send(sender: sender, value: take value)?` is live only up to the suspension, not across it. And open a resource scope outside the asynchronous one: run the `task_group { ... }` first and write `with File.open_read(path)? as file { ... }` after it has drained, because a resource cannot be suspended at all."
     },
     {
       "code": "RS0032",
@@ -262,7 +262,7 @@
     {
       "code": "RS0301",
       "title": "managed-to-local conversion",
-      "explanation": "Managed values cannot be rebound as local values. Create the value locally at its origin if local ownership is required."
+      "explanation": "Managed values cannot be rebound as local values; there is no managed-to-local conversion, so `local copy = shared` is rejected however simple the type is. Create the value locally at its origin instead: `local value = List.new<Int>()`, or a constructor call, or any expression that produces a new value — `local total = count + 0` is a fresh `Int` where `local total = count` over a `let mut count` is this error. A `for` element view is already exclusive, so `for sample in samples { local value = sample }` is the usual spelling when a loop has to hand each element to a `take` parameter such as `Sender.send`."
     },
     {
       "code": "RS0302",
@@ -342,7 +342,7 @@
     {
       "code": "RS0501",
       "title": "local value retained",
-      "explanation": "APIs marked `retains(param)` may store the argument beyond the call. Passing a clean local value directly would let local ownership escape."
+      "explanation": "APIs marked `retains(param)` may store the argument beyond the call. Passing a clean local value directly would let local ownership escape. The repair is to hand the value to the managed runtime at the call site — `List.push(list: mut alerts, value: manage first)` — which is also what `take` does not do: `take` moves the value to the callee and a retaining callee still holds it after the call, so `value: take first` is this error too (plus the effect mismatch, since the parameter is `read`). Binding the value with `let` instead of `local` in the first place has the same effect for a value that was only ever going to be stored."
     },
     {
       "code": "RS0601",
