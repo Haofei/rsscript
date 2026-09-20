@@ -751,3 +751,258 @@ session.
 n = 1 per task, one draw, 30 candidates. 17/30 to 20/30 and 8/20 to 11/20 are
 three-candidate moves in the direction the mechanism predicts, with a
 class-level account of which three and why; they are not a rate.
+
+## 50 tasks, two models (2026-09-19)
+
+Every measurement above rests on one twenty-task generation set drawn before the
+compiler gained callback parameters, closures with implicit captures, protocols
+executing through `Dyn<P>`, list and variant patterns, index assignment,
+`let ... else`, RS0016–RS0020, the RS0203/RS0206 did-you-mean, and the
+`local`/`take` rows in the card. Twenty more generation tasks were added, shaped
+like the work a host actually hands an agent, and the whole fifty-task corpus
+was sampled twice: once with `sonnet` and once with `haiku`.
+
+```bash
+python3 tools/collect-model-samples.py --model sonnet --jobs 10 --timeout 400 \
+  --rss <pinned rss> --out evals/samples/sonnet-2026-09-19
+python3 tools/collect-model-samples.py --model haiku  --jobs 10 --timeout 400 \
+  --rss <pinned rss> --out evals/samples/haiku-2026-09-19
+for model in sonnet haiku; do for mode in prompt_only language_card repair_loop; do
+  cargo run -p rsscript-xtask -- agent-eval --tasks evals/tasks \
+    --candidates "evals/samples/$model-2026-09-19/$mode" \
+    --output "evals/samples/$model-2026-09-19/$mode/report.v1.json"
+done; done
+```
+
+Both CLI aliases were accepted as written; neither needed a substitute. 300
+candidates, one draw per task per mode, `claude -p --output-format text
+--allowedTools ""` from an empty temporary directory, all scored by one pinned
+`rss` binary and one `agent-eval` build. A session limit interrupted the haiku
+`repair_loop`: eleven tasks produced nothing and six lost a turn mid-loop. All
+seventeen were deleted and re-collected after the limit reset, so every
+committed candidate had its full three-turn budget and no transcript carries a
+turn error.
+
+**n = 1 per task per mode.** Fifty samples per mode ranks classes that occur in
+ten or more candidates; it does not support reading a two-candidate difference
+as a rate.
+
+### Pass rates
+
+`old20` is the September generation set, for comparison with its 0 / 1 / 5 and
+3 / 8 / 11 of 20 history. `new20` is the set added today. `repair10` is the ten
+original repair/review fixtures.
+
+| model / mode | old20 | new20 | repair10 | overall | compiles | canonical spelling |
+|---|---|---|---|---|---|---|
+| sonnet `prompt_only` | **0/20** | **0/20** | 10/10 | 10/50 | 10/50 | 8 |
+| sonnet `language_card` | **3/20** | **2/20** | 10/10 | 15/50 | 15/50 | 15 |
+| sonnet `repair_loop` | **15/20** | **11/20** | 10/10 | 36/50 | 37/50 | 18 |
+| haiku `prompt_only` | **0/20** | **0/20** | 8/10 | 8/50 | 8/50 | 6 |
+| haiku `language_card` | **1/20** | **2/20** | 9/10 | 12/50 | 13/50 | 6 |
+| haiku `repair_loop` | **7/20** | **8/20** | 9/10 | 24/50 | 25/50 | 7 |
+
+Three things in that table.
+
+**The old20 trend continues and is now large.** On the September set,
+`repair_loop` has gone 5 → 8 → 11 → **15** of 20 across four measurements, each
+after a round of oracle work, while `prompt_only` has stayed at 0/20 in every
+one of them. Nothing in this project has ever moved the first attempt; every
+gain has been in the repair loop, and this draw is the largest of them.
+
+**The new twenty are slightly harder than the old twenty, and not differently
+hard.** `new20` tracks `old20` within a few candidates in five of the six
+mode-sets. The gap in sonnet `repair_loop` (15/20 against 11/20) is the largest
+and it has a named cause below: three of the new tasks are the only ones in the
+corpus that require a closure literal, and the card does not contain one.
+
+**The model gap is entirely in the repair loop.** sonnet and haiku are within
+two candidates of each other on the first attempt in both prompted modes
+(10 vs 8, 15 vs 12). After three repair turns they are 36 vs 24. Both models
+start in the same place; one of them uses the diagnostics and the other does
+not, which is a capability difference and not a language one.
+
+### Failure classes
+
+Candidates showing the class at least once, out of 50 per cell.
+
+| class | s `prompt_only` | s `language_card` | s `repair_loop` | h `prompt_only` | h `language_card` | h `repair_loop` |
+|---|---|---|---|---|---|---|
+| RS0206 invents a symbol | **29** | **28** | 3 | **34** | **31** | 9 |
+| RS0015 hallucinated syntax | 18 | 8 | 3 | **28** | **23** | 5 |
+| RS0201/RS0203/RS0204 labels | 16 | 9 | 4 | 13 | 17 | 7 |
+| RS0208 return-type mismatch | 15 | 6 | 1 | **36** | 5 | 5 |
+| RS0209 branch used as a value | 9 | 8 | 1 | 4 | 5 | 5 |
+| RS0202/RS0308 call-site effect | 7 | 8 | 2 | 6 | 8 | 5 |
+| RS1001 string `+` | 12 | **14** | 0 | 6 | 2 | 3 |
+| RS0016–RS0020 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+**RS0016–RS0020 never fire.** Not once in 300 candidates. `let … else`
+(RS0020), loop control outside a loop (RS0016), read-before-assign (RS0017),
+unresolved import (RS0018) and private-use (RS0019) are all checks nothing in
+this corpus reaches — including the task written specifically to require
+`let … else`, whose failures are RS0206 and RS0203 instead. These five codes
+are not part of the generation failure surface and should not be budgeted for.
+
+Classes present now that no earlier measurement recorded, as
+candidate-appearances over all 300: RS0034 binding type cannot be inferred (5),
+RS0601 `fresh` return not clean (4), RS0210 operator type mismatch (4), RS0301
+managed-to-local (3), **RS1004 surface reference attempt (3)**, and one each of
+RS0313, RS0037 and RS0706. RS1004 is the only interesting one: `&T` / `&mut T`
+written by haiku, which is the Rust spelling of the thing RSScript spells with
+`read`/`mut`, and it belongs to the same family as the `::` paths the card
+already removed.
+
+### Did the model take the fixes it was offered?
+
+Counting every machine-applicable replacement offered on turn N and asking
+whether that exact text appears in the source the model produced for turn N+1:
+
+| code | sonnet offered | sonnet present next turn | haiku offered | haiku present next turn |
+|---|---|---|---|---|
+| RS0206 rename callee | 63 | 55 | 72 | 53 |
+| RS0203 rename argument label | 54 | **54** | 67 | 63 |
+| RS0202 match data effect | 12 | **12** | 15 | **15** |
+| **total** | **129** | **121 (94%)** | **154** | **131 (85%)** |
+
+Both models take almost everything the compiler hands them, and the nine-point
+gap between them is entirely RS0206: sonnet applies 87% of callee renames,
+haiku 74%. This is the cleanest statement of the difference between the two
+models in the whole report — the weaker model is not worse at reading the
+suggestion, it is worse at not rewriting the surrounding region while it does.
+
+Per-class repair outcomes agree. Comparing each repairing candidate's first and
+last turn (sonnet n = 34, haiku n = 39), the classes with a machine-applicable
+fix behave as the earlier reports predicted:
+
+| code | sonnet cleared / persisted / introduced | haiku cleared / persisted / introduced |
+|---|---|---|
+| RS0206 | 24 / 3 / 0 | 22 / 9 / 0 |
+| RS0203 | 8 / 0 / 3 | 15 / 4 / 0 |
+| RS0204 | 8 / 0 / 3 | 12 / 4 / 2 |
+| RS0015 | 6 / 3 / 0 | 19 / 4 / 1 |
+| RS1001 | 12 / 0 / 0 | 2 / 1 / 2 |
+| RS0207 | 6 / 0 / 1 | 1 / 1 / **5** |
+| RS0202/RS0308 | 7 / 1 / 1 | 5 / 2 / 3 |
+
+RS0207 (argument type mismatch) is the one class haiku *introduces* more often
+than it clears, five times against one. Every instance is the same shape:
+`Output.write(message: count)` where `count` is an `Int`. RS0207 names the
+expected type and offers no edit, and the repair loop spends turns re-deriving
+`String.from_int`.
+
+### Which task shapes fail for both models
+
+Thirteen of the fifty tasks pass in none of the three modes for either model.
+The final `repair_loop` diagnostic of each is the most informative view:
+
+| task | sonnet final | haiku final |
+|---|---|---|
+| closure-capture-local | RS0015, RS0206 | RS0206 |
+| noescape-filter-callback | RS0015 | RS0207 |
+| protocol-dyn-dispatch | RS0028, RS0201, RS0206, RS1301 | RS0201, RS0204, RS1301 |
+| protocol-select-impl | RS0201, RS0203, RS0204 | RS0208, RS1301 |
+| retains-declaration | RS0207 | RS0207 |
+| json-array-field-total | RS0209 | RS0206, RS0208 |
+| nested-json-array-sum | RS0206 | RS0206, RS0207, RS0209, RS1001 |
+| option-chain-defaults | invariant (`Option.unwrap_or`) | RS0206 |
+| result-question-mapping | RS0203, RS0204 | RS0209 |
+| tuple-destructure-caller | RS0203, RS0204 | RS0207 |
+| select-deadline-cancel | RS0308 | RS0015, RS0024, RS0202, RS0206, RS0208 |
+| task-group-select | RS0208 | RS0308 |
+| telemetry-cancel-pipeline | RS0202 | RS0202, RS1001 |
+
+These are **language and library problems, not capability problems**, and they
+group into four shapes:
+
+1. **Closures** (closure-capture-local, noescape-filter-callback,
+   callback-helper-twice). Both models write `fn(x: T) -> U { ... }` where
+   RSScript wants `|x| { ... }`, and then RS0206 on the call because the binding
+   never became a closure. The card contains no closure literal anywhere. This
+   is the only RS0015 sub-class that survives sonnet's repair loop — three
+   candidates, all three of them this.
+2. **Protocols** (protocol-dyn-dispatch, protocol-select-impl). RS1301 in both
+   models in both tasks after three turns. The card says nothing about
+   `protocol`, `impl P for T`, or `Dyn.from<P, T>`.
+3. **Structured concurrency** (select-deadline-cancel, task-group-select,
+   telemetry-cancel-pipeline). The card's one row says `task_group`, `with` and
+   `select` are statements; it does not show a `select` arm, an `async let`, or
+   which channel operation takes a `take`.
+4. **JSON and `Option`** (json-array-field-total, nested-json-array-sum,
+   option-chain-defaults). RS0206 on invented accessor names, again.
+
+The complement is short and tells the other half. Fourteen tasks pass for
+exactly one model, and thirteen of those are sonnet-only: async-stream-consume,
+csv-record-transform, json-config-validate, let-else-early-return,
+list-index-assign, list-try-fold-validate, option-defaults-chain,
+producer-consumer-bounded, resource-across-await, result-error-mapping,
+session-with-cleanup, string-builder-report and task-group-cancel. Every one of
+those is reachable, and the thing sonnet does that haiku does not is finish the
+repair loop without rewriting a working region. Only callback-helper-twice goes
+the other way, and only in one mode.
+
+### The constructs, counted directly
+
+Scanning the candidate sources rather than the diagnostics, since one bad
+construct can be charged to several codes:
+
+| construct | s `p_o` | s `l_c` | s `r_l` | h `p_o` | h `l_c` | h `r_l` |
+|---|---|---|---|---|---|---|
+| string `+` / `++` concatenation | **18** | **14** | 1 | 10 | 3 | 1 |
+| labelled or called variant: `Ok(value:`, `None()`, `Ok(())` | 3 | 0 | 0 | 4 | **11** | 1 |
+| Rust `::` path | 4 | 0 | 0 | **11** | 0 | 0 |
+| `with X = producer {` instead of `with producer as X {` | 3 | 3 | 0 | 3 | 3 | 0 |
+| closure `fn(x: T) -> U { }` instead of `|x| { }` | 1 | 3 | **3** | 2 | 3 | 0 |
+| `var` binding | 4 | 0 | 0 | 4 | 0 | 0 |
+
+The rows the card already covers go to zero with the card in both models —
+`::`, `var`, brace struct literals. The rows it does not cover do not. That is
+the same result the September card change produced and it is the reason the
+implications below are ranked the way they are.
+
+### Implications, ranked by count
+
+1. **Put the callable signatures in the prompt, not a link to them — 29 / 28 /
+   34 / 31 candidates.** RS0206 is the largest class in all four prompted cells
+   and is the only class that is large in *both* models. The card links a
+   450-signature index; pointing at an index does not make a model read it. The
+   smallest change that would address it is `rss generate` injecting the
+   signature list for the namespaces a task's prompt mentions. **This is
+   tooling, not language design**, and it is the same recommendation the
+   September report made and nothing has yet implemented.
+2. **Show a closure literal in the card — 9 candidates, and 3 of 3 of what
+   survives sonnet's repair loop.** Every RS0015 sonnet still has after three
+   turns is `fn(x: T) -> U { }` for `|x| { }`. One surface-form row. Tooling.
+3. **Say that strings are joined by a call — 26 candidates, 16 of them with the
+   card.** RS1001 is the largest card-addressable class by count and the card is
+   silent on it. One surface-form row; **implemented below, with a measurement.**
+   Tooling.
+4. **Give RS0207 an edit — 5 introduced by haiku's repair loop against 1
+   cleared.** Every instance is an `Int` passed where a `String` is wanted, and
+   `String.from_int(value: x)` is mechanical. RS0207's fix is `manual` and names
+   no replacement, which by this report's own rule is the shape that persists.
+   **Tooling, but it lives in the checker**, which this work does not own.
+5. **Show the `with producer as name { }` binding form — 12 candidates, 6 with
+   the card.** It is exactly the three `with`-resource tasks in five of the six
+   sets: when a task needs `with`, roughly half the candidates write
+   `with name = producer { }`. One surface-form row. Tooling.
+6. **Show `protocol` / `impl` / `Dyn.from` — 4 candidates, but 2 of the 13
+   both-fail tasks.** Low count, high concentration: the protocol tasks fail for
+   both models in every mode. Tooling, but a larger card change than one row.
+7. **Decide whether `Ok(value: x)` and `None()` should parse — 15 candidates,
+   11 of them haiku with the card.** Models write variant constructors with a
+   field label or with empty parens. The parser rejects both and `rss fmt`
+   normalises neither. **This one is a language-design decision, not tooling**:
+   either the parser accepts them as surface sugar the way it already accepts
+   brace struct literals and comma-terminated match arms, or the card names them
+   as a wrong form. The sugar precedent says accepting them converts a syntax
+   error into the semantic error underneath, which the 2026-09-15 section showed
+   is a strict improvement for the repair loop and not a first-attempt win.
+8. **Decide whether `+` on two strings should mean concatenation — 26
+   candidates.** Item 3 is the documentation half of this; the other half is
+   that RS1001 exists at all. Operator overloading is refused by design, so this
+   is a **language-design decision** and it is already settled in the negative;
+   it is listed here only because the count is large enough that it will keep
+   appearing.
+9. **RS0016–RS0020 need no work — 0 candidates.** Recorded so the next round
+   does not budget for them.
