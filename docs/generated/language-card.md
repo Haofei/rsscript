@@ -59,6 +59,57 @@ These are the forms most often written wrong. The right column is what `rss fmt`
 | a value you will `take` is bound with `local` | `local title = "daily"` | `let title = "daily"` |
 | `take` moves a binding, never a literal | `local title = "daily"; build(title: take title)` | `build(title: take "daily")` |
 | strings are joined by a call, never by `+` | `String.concat(left: head, right: tail)` | `head + tail` |
+| closure literal | `local double = \|x\| { return x * 2 }` | `let double = fn(x: Int) -> Int { return x * 2 }` |
+| closure with an explicit capture list | `local add = fn(x) captures(read base) { return x + base }` | `local add = \|x\| captures(read base) { return x + base }` |
+| `with` binds its resource with `as` | `with File.open_read(path)? as file { }` | `with file = File.open_read(path)? { }` |
+| `impl` maps an existing function into a protocol slot | `impl Formatter for Point { format = Point.format }` | `impl Formatter for Point { fn format(self: Point) -> fresh String { } }` |
+| dynamic dispatch is built by `Dyn.from` | `Dyn.from<Formatter, Point>(value: take point)` | `Dyn<Formatter>(point)` |
+| bind a pattern or leave the block | `let Some(inner) = value else { return "none" }` | `let inner = Option.unwrap(value: value)` |
+
+Four of those rows are a shape rather than a line. This program is the whole
+shape, exactly as `rss fmt` prints it and exactly as `rss check` accepts it: a
+`protocol` with an `impl` that maps an existing function into its slot, dynamic
+dispatch built by `Dyn.from`, a `let ... else` that leaves the block, and both
+closure spellings — `|x|` captures implicitly, `fn(x) captures(...)` lists what
+it captures.
+
+```rsscript
+protocol Formatter {
+    fn format(self: Self) -> fresh String
+}
+
+struct Point {
+    x: Int
+    y: Int
+}
+
+fn Point.format(self: Point) -> fresh String {
+    return String.from_int(value: self.x)
+}
+
+fn render(x: Int, y: Int) -> fresh String {
+    local point = Point(x: x, y: y)
+    let shape = Dyn.from<Formatter, Point>(value: take point)
+    return Formatter.format(self: shape)
+}
+
+fn shifted(value: Option<Int>) -> Int {
+    let Some(base) = value else {
+        return 0
+    }
+    local add = |x| {
+        return x + base
+    }
+    local scale = fn(x) captures(read base) {
+        return x * base
+    }
+    return add(2) + scale(3)
+}
+
+impl Formatter for Point {
+    format = Point.format
+}
+```
 
 ## Core interface signatures
 

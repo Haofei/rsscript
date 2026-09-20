@@ -59,8 +59,30 @@ the normalizer. Prefer the canonical spelling when writing new code.
 A trailing comma after a block arm (`Pattern => { ... },`) is accepted too.
 Nothing else outside the generated [grammar surface](docs/generated/grammar.md)
 is accepted: `::` paths, `task_group`/`with`/`select` in expression position,
-tuple destructuring in `for`, and `mut x: T = ...` as a binding form are all
-errors.
+tuple destructuring in `for`, `mut x: T = ...` as a binding form, and
+`fn(x: T) -> U { ... }` as a closure literal are all errors.
+
+## Closures, resource scopes, and protocols
+
+These four forms are the ones most often written in a neighbouring language's
+spelling. The canonical spelling of each, with its wrong twin, is a row in the
+generated [language card](docs/generated/language-card.md), which also carries
+a worked program showing them together.
+
+- A closure literal is `|x| { return x * 2 }`. It captures implicitly, and the
+  binding it goes into is `local`, not `let`. The explicit-capture spelling is
+  the other one — `fn(x) captures(read base) { ... }` — and the two do not mix:
+  `|x| captures(...)` is a syntax error.
+- A resource scope binds with `as`: `with File.open_read(path)? as file { ... }`,
+  never `with file = File.open_read(path) { ... }`. A resource producer is
+  declared bodyless in an `.rssi`; a `.rss` body cannot mint one.
+- An `impl P for T` block maps existing functions into the protocol's slots
+  (`format = Point.format`); it does not declare method bodies. Dynamic
+  dispatch is a call, not a constructor:
+  `Dyn.from<Formatter, Point>(value: take point)`.
+- `let Some(x) = value else { return ... }` binds or leaves the block, and the
+  `else` block must diverge. `Option` has no `unwrap`: the fallible readers are
+  `Option.unwrap_or`, `Option.unwrap_or_else` and `Option.ok_or`.
 
 ## Ownership and lifetime
 

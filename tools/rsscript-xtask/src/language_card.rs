@@ -108,6 +108,9 @@ struct LanguageCardJson {
     core_interface_count: usize,
     diagnostic_fixes: DiagnosticFixAvailability,
     canonical_call_example: String,
+    /// The worked example for the forms that are a shape rather than a line:
+    /// `protocol`/`impl`, `Dyn.from`, `let … else` and both closure spellings.
+    canonical_forms_example: String,
     accepted_surface_sugar: Vec<SurfaceSugar>,
     canonical_surface_forms: Vec<CanonicalSurfaceForm>,
     signature_count: usize,
@@ -196,6 +199,57 @@ fn canonical_surface_forms() -> Vec<CanonicalSurfaceForm> {
             form: "strings are joined by a call, never by `+`",
             right: "String.concat(left: head, right: tail)",
             wrong: "head + tail",
+        },
+        // Measured on 2026-09-19: `fn(x: T) -> U { }` for `|x| { }` is the
+        // *only* `RS0015` sub-class that survives sonnet's three-turn repair
+        // loop — three candidates, all three of them this — and the three
+        // tasks needing a closure are the largest part of the gap between the
+        // old and new generation sets. The card contained no closure literal
+        // anywhere.
+        CanonicalSurfaceForm {
+            form: "closure literal",
+            right: "local double = |x| { return x * 2 }",
+            wrong: "let double = fn(x: Int) -> Int { return x * 2 }",
+        },
+        // The two spellings are not interchangeable: `|x|` captures
+        // implicitly, and a `captures(...)` list is written on the `fn` form.
+        // Crossing them (`|x| captures(read base)`) is `RS0015`.
+        CanonicalSurfaceForm {
+            form: "closure with an explicit capture list",
+            right: "local add = fn(x) captures(read base) { return x + base }",
+            wrong: "local add = |x| captures(read base) { return x + base }",
+        },
+        // 12 candidates, 6 of them with the card: when a task needs `with`,
+        // roughly half of them bind the resource with `=` instead of `as`.
+        CanonicalSurfaceForm {
+            form: "`with` binds its resource with `as`",
+            right: "with File.open_read(path)? as file { }",
+            wrong: "with file = File.open_read(path)? { }",
+        },
+        // Both protocol tasks fail for both models in every mode, ending on
+        // `RS1301` after three repair turns. An `impl` block maps an existing
+        // function into the protocol slot; it does not declare a method body,
+        // which is what a model writes when it has only seen Rust or Swift.
+        CanonicalSurfaceForm {
+            form: "`impl` maps an existing function into a protocol slot",
+            right: "impl Formatter for Point { format = Point.format }",
+            wrong: "impl Formatter for Point { fn format(self: Point) -> fresh String { } }",
+        },
+        // The dynamic form is a call with both type arguments and a `take`,
+        // not a constructor: `Dyn<P>(value)` is `RS0024` plus `RS0201`.
+        CanonicalSurfaceForm {
+            form: "dynamic dispatch is built by `Dyn.from`",
+            right: "Dyn.from<Formatter, Point>(value: take point)",
+            wrong: "Dyn<Formatter>(point)",
+        },
+        // `RS0020` never fired in 300 candidates, including in the task
+        // written to require `let … else` — that task failed on `RS0206` and
+        // `RS0203` instead, because the model reached for an `Option.unwrap`
+        // that does not exist rather than for the form the language has.
+        CanonicalSurfaceForm {
+            form: "bind a pattern or leave the block",
+            right: "let Some(inner) = value else { return \"none\" }",
+            wrong: "let inner = Option.unwrap(value: value)",
         },
     ]
 }
@@ -374,12 +428,14 @@ fn language_card_document() -> String {
     output
 }
 
-/// The five forms models get wrong most often, each with a right/wrong pair.
+/// The forms models get wrong most often, each with a right/wrong pair.
 ///
 /// The card used to be silent on exactly these, and hallucinated syntax stayed
 /// the largest first-attempt failure class (19 candidates without the card, 16
 /// with it). Silence is what costs; the one call-spelling example the card
-/// already carried removed Rust `::` paths entirely.
+/// already carried removed Rust `::` paths entirely. Every row added since has
+/// behaved the same way: the construct the row names disappears from the next
+/// draw.
 fn canonical_surface_forms_section() -> String {
     let mut output = String::from(
         "## Canonical surface forms\n\nThese are the forms most often written wrong. The right column is what `rss fmt` prints.\n\n| Form | Write this | Not this |\n| --- | --- | --- |\n",
@@ -387,12 +443,36 @@ fn canonical_surface_forms_section() -> String {
     for form in canonical_surface_forms() {
         output.push_str(&format!(
             "| {} | `{}` | `{}` |\n",
-            form.form, form.right, form.wrong
+            form.form,
+            table_cell(form.right),
+            table_cell(form.wrong)
         ));
     }
-    output.push('\n');
+    output.push_str(CANONICAL_FORMS_EXAMPLE_INTRO);
+    output.push_str(&canonical_forms_example());
+    output.push_str("```\n\n");
     output
 }
+
+/// A table cell's contents, with the column separator escaped.
+///
+/// A closure literal is spelled with the same character Markdown uses to end a
+/// cell, so the row that finally shows `|x| { }` would have silently shredded
+/// the table that shows it.
+fn table_cell(value: &str) -> String {
+    value.replace('|', "\\|")
+}
+
+const CANONICAL_FORMS_EXAMPLE_INTRO: &str = r#"
+Four of those rows are a shape rather than a line. This program is the whole
+shape, exactly as `rss fmt` prints it and exactly as `rss check` accepts it: a
+`protocol` with an `impl` that maps an existing function into its slot, dynamic
+dispatch built by `Dyn.from`, a `let ... else` that leaves the block, and both
+closure spellings — `|x|` captures implicitly, `fn(x) captures(...)` lists what
+it captures.
+
+```rsscript
+"#;
 
 /// The whole callable surface, inline in the card.
 ///
@@ -540,6 +620,57 @@ Prefer the canonical spelling when writing new code.
 
 "#;
 
+/// A second, larger canonical example: the four forms that are a shape rather
+/// than a line.
+///
+/// Verified twice by
+/// [`tests::canonical_forms_example_is_valid_and_already_formatted`] — it
+/// checks clean and `rss fmt` is a fixpoint on it — so the card can never show
+/// a protocol, a `Dyn.from`, a `let … else` or a closure the compiler would
+/// reject. `with ... as` is the one row without a line here: a resource
+/// producer must be declared bodyless in an `.rssi`, so no self-contained
+/// program can demonstrate it; the SDK fixture
+/// `multiline-with-as-resource.rss` carries that proof instead.
+fn canonical_forms_example() -> String {
+    r#"protocol Formatter {
+    fn format(self: Self) -> fresh String
+}
+
+struct Point {
+    x: Int
+    y: Int
+}
+
+fn Point.format(self: Point) -> fresh String {
+    return String.from_int(value: self.x)
+}
+
+fn render(x: Int, y: Int) -> fresh String {
+    local point = Point(x: x, y: y)
+    let shape = Dyn.from<Formatter, Point>(value: take point)
+    return Formatter.format(self: shape)
+}
+
+fn shifted(value: Option<Int>) -> Int {
+    let Some(base) = value else {
+        return 0
+    }
+    local add = |x| {
+        return x + base
+    }
+    local scale = fn(x) captures(read base) {
+        return x * base
+    }
+    return add(2) + scale(3)
+}
+
+impl Formatter for Point {
+    format = Point.format
+}
+"#
+    .to_string()
+}
+
 fn canonical_example() -> String {
     "fn apply(target: mut Buffer, input: take String, note: read String) -> Unit {}\n\nfn update(target: mut Buffer, input: take String, note: read String) -> Unit {\n    return apply(target: mut target, input: take input, note: note)\n}\n".to_string()
 }
@@ -624,6 +755,7 @@ fn language_card_json() -> String {
         core_interface_count: core_interfaces().len(),
         diagnostic_fixes: diagnostic_fix_availability(),
         canonical_call_example: canonical_example(),
+        canonical_forms_example: canonical_forms_example(),
         accepted_surface_sugar: accepted_surface_sugar(),
         canonical_surface_forms: canonical_surface_forms(),
         signature_count: interface_signatures().len(),
@@ -1136,12 +1268,42 @@ mod tests {
     #[test]
     fn canonical_surface_forms_show_a_right_and_wrong_pair() {
         let forms = canonical_surface_forms();
-        assert_eq!(forms.len(), 8);
+        assert_eq!(forms.len(), 14);
         let section = canonical_surface_forms_section();
         for form in &forms {
             assert_ne!(form.right, form.wrong);
-            assert!(section.contains(form.right), "missing `{}`", form.right);
-            assert!(section.contains(form.wrong), "missing `{}`", form.wrong);
+            // A cell is escaped for the table, so it is the escaped spelling
+            // that has to be present — a closure literal is written with the
+            // same character Markdown uses to end a column.
+            assert!(
+                section.contains(&table_cell(form.right)),
+                "missing `{}`",
+                form.right
+            );
+            assert!(
+                section.contains(&table_cell(form.wrong)),
+                "missing `{}`",
+                form.wrong
+            );
+        }
+        assert!(
+            section.contains("| closure literal | `local double = \\|x\\| { return x * 2 }` |"),
+            "the closure row must escape the column separator: {section}"
+        );
+        // One row per measured class, and the four that are a shape rather
+        // than a line are also shown whole.
+        for form in [
+            "closure literal",
+            "closure with an explicit capture list",
+            "`with` binds its resource with `as`",
+            "`impl` maps an existing function into a protocol slot",
+            "dynamic dispatch is built by `Dyn.from`",
+            "bind a pattern or leave the block",
+        ] {
+            assert!(
+                forms.iter().any(|candidate| candidate.form == form),
+                "`{form}` must be a named surface form"
+            );
         }
 
         let card: serde_json::Value = serde_json::from_str(&language_card_json()).unwrap();
@@ -1176,5 +1338,43 @@ mod tests {
                 .all(|diagnostic| !diagnostic.severity.is_error()),
             "canonical language-card example must be valid: {diagnostics:#?}"
         );
+    }
+
+    /// The worked example for `protocol`/`impl`, `Dyn.from`, `let … else` and
+    /// both closure spellings must be a program the compiler accepts *and* the
+    /// spelling the formatter prints. A card that shows a form the checker
+    /// rejects is worse than a card that stays silent about it.
+    #[test]
+    fn canonical_forms_example_is_valid_and_already_formatted() {
+        let example = canonical_forms_example();
+        let diagnostics = rsscript_semantics::analyze_source("language-card.rss", &example);
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| !diagnostic.severity.is_error()),
+            "the canonical forms example must check clean: {diagnostics:#?}"
+        );
+        assert_eq!(
+            rsscript_syntax::format_source("language-card.rss", &example),
+            example,
+            "`rss fmt` must be a fixpoint on the canonical forms example"
+        );
+
+        // Each form the example exists to show.
+        for form in [
+            "protocol Formatter {",
+            "impl Formatter for Point {",
+            "    format = Point.format",
+            "Dyn.from<Formatter, Point>(value: take point)",
+            "let Some(base) = value else {",
+            "local add = |x| {",
+            "local scale = fn(x) captures(read base) {",
+        ] {
+            assert!(example.contains(form), "the example must show `{form}`");
+        }
+
+        assert!(canonical_surface_forms_section().contains(&example));
+        let card: serde_json::Value = serde_json::from_str(&language_card_json()).unwrap();
+        assert_eq!(card["canonical_forms_example"], example);
     }
 }

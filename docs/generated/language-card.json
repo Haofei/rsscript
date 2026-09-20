@@ -26,6 +26,7 @@
     "description": "Static diagnostic explanations do not claim fixes; machine-applicable edits are attached to concrete diagnostic instances."
   },
   "canonical_call_example": "fn apply(target: mut Buffer, input: take String, note: read String) -> Unit {}\n\nfn update(target: mut Buffer, input: take String, note: read String) -> Unit {\n    return apply(target: mut target, input: take input, note: note)\n}\n",
+  "canonical_forms_example": "protocol Formatter {\n    fn format(self: Self) -> fresh String\n}\n\nstruct Point {\n    x: Int\n    y: Int\n}\n\nfn Point.format(self: Point) -> fresh String {\n    return String.from_int(value: self.x)\n}\n\nfn render(x: Int, y: Int) -> fresh String {\n    local point = Point(x: x, y: y)\n    let shape = Dyn.from<Formatter, Point>(value: take point)\n    return Formatter.format(self: shape)\n}\n\nfn shifted(value: Option<Int>) -> Int {\n    let Some(base) = value else {\n        return 0\n    }\n    local add = |x| {\n        return x + base\n    }\n    local scale = fn(x) captures(read base) {\n        return x * base\n    }\n    return add(2) + scale(3)\n}\n\nimpl Formatter for Point {\n    format = Point.format\n}\n",
   "accepted_surface_sugar": [
     {
       "accepted": "T { field: value }",
@@ -78,6 +79,36 @@
       "form": "strings are joined by a call, never by `+`",
       "right": "String.concat(left: head, right: tail)",
       "wrong": "head + tail"
+    },
+    {
+      "form": "closure literal",
+      "right": "local double = |x| { return x * 2 }",
+      "wrong": "let double = fn(x: Int) -> Int { return x * 2 }"
+    },
+    {
+      "form": "closure with an explicit capture list",
+      "right": "local add = fn(x) captures(read base) { return x + base }",
+      "wrong": "local add = |x| captures(read base) { return x + base }"
+    },
+    {
+      "form": "`with` binds its resource with `as`",
+      "right": "with File.open_read(path)? as file { }",
+      "wrong": "with file = File.open_read(path)? { }"
+    },
+    {
+      "form": "`impl` maps an existing function into a protocol slot",
+      "right": "impl Formatter for Point { format = Point.format }",
+      "wrong": "impl Formatter for Point { fn format(self: Point) -> fresh String { } }"
+    },
+    {
+      "form": "dynamic dispatch is built by `Dyn.from`",
+      "right": "Dyn.from<Formatter, Point>(value: take point)",
+      "wrong": "Dyn<Formatter>(point)"
+    },
+    {
+      "form": "bind a pattern or leave the block",
+      "right": "let Some(inner) = value else { return \"none\" }",
+      "wrong": "let inner = Option.unwrap(value: value)"
     }
   ],
   "signature_count": 450,
