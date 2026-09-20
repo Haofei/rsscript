@@ -1008,7 +1008,21 @@ fn unresolved_callee_suggestions(
         .map(|(key, _)| key.to_string())
         .chain(analyzer.hir.types().map(|info| info.name.clone()))
         .collect();
-    rsscript_semantics::unresolved_call_suggestions(written, in_scope.iter().map(String::as_str))
+    let mut suggestions = rsscript_semantics::unresolved_call_suggestions(
+        written,
+        in_scope.iter().map(String::as_str),
+    );
+    // A name says the function exists; the signature says what to write. Both
+    // come from the same symbol table the suggestion was drawn from, so the
+    // rendered call can never describe a function the checker does not have.
+    for suggestion in &mut suggestions {
+        suggestion.signature = analyzer
+            .hir
+            .signatures()
+            .find(|(key, _)| *key == suggestion.name)
+            .map(|(_, signature)| rsscript_semantics::render_callable_signature(signature));
+    }
+    suggestions
 }
 
 /// The exact source range covering the callee written at `call_span`, when the

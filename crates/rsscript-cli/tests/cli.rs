@@ -913,11 +913,17 @@ fn unresolved_calls_suggest_in_scope_names_and_rename_fixes_apply() {
     let diagnostics = diagnostics.as_array().expect("diagnostics are an array");
     assert_eq!(diagnostics.len(), 3, "{diagnostics:#?}");
 
-    for (diagnostic, expected) in
-        diagnostics
-            .iter()
-            .zip(["Output.write", "String.parse_int", "List.len"])
-    {
+    // The help names the whole call — labels, call-site effects, return type —
+    // not just the function. The edit still replaces the callee with the bare
+    // name, so the fix contract is unchanged.
+    for (diagnostic, (expected, signature)) in diagnostics.iter().zip([
+        ("Output.write", "Output.write(message: String) -> Unit"),
+        (
+            "String.parse_int",
+            "String.parse_int(value: String) -> Option<Int>",
+        ),
+        ("List.len", "List.len<T>(list: List<T>) -> Int"),
+    ]) {
         assert_eq!(diagnostic["code"], "RS0206");
         let fix = diagnostic["fixes"]
             .as_array()
@@ -928,6 +934,12 @@ fn unresolved_calls_suggest_in_scope_names_and_rename_fixes_apply() {
                 .as_str()
                 .is_some_and(|title| title.starts_with("Did you mean") && title.contains(expected)),
             "help must name `{expected}`: {fix:#?}"
+        );
+        assert!(
+            fix["title"]
+                .as_str()
+                .is_some_and(|title| title.contains(signature)),
+            "help must carry the whole signature `{signature}`: {fix:#?}"
         );
         assert_eq!(fix["applicability"], "machine-applicable");
         assert_eq!(fix["edit"]["replacement"], expected);

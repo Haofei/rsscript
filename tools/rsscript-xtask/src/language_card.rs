@@ -394,20 +394,61 @@ fn canonical_surface_forms_section() -> String {
     output
 }
 
-/// A pointer to the generated signature index.
+/// The whole callable surface, inline in the card.
 ///
 /// The measurement is blunt about why this exists: `RS0206` is the largest
-/// class that survives everything (15 / 14 / 9 candidates across the three
-/// modes), and the card named 35 interface *files* while carrying zero callable
-/// signatures. Models filled that vacuum with `print`, `Int.parse` and a
-/// nine-call `get_*` JSON accessor family that does not exist.
+/// class that survives everything, and the only class that is large in *both*
+/// measured models — 28 of 50 sonnet candidates and 31 of 50 haiku candidates
+/// written *with* this card in the prompt. The card named 35 interface *files*
+/// and linked a 450-signature index it never showed, so a model reading only
+/// the card saw not one signature. Models filled that vacuum with `print`,
+/// `Int.parse` and a nine-call `get_*` JSON accessor family that does not
+/// exist.
+///
+/// Pointing at an index does not make a model read it, so the index is no
+/// longer pointed at: it is here, complete and untruncated, in the same
+/// generated form [`signatures_document`] renders. That costs roughly 760
+/// lines, which is the acceptable price of a reference read once per prompt.
 fn core_signatures_section() -> String {
     let signatures = interface_signatures();
     let namespaces = namespace_count(&signatures);
-    format!(
-        "## Core interface signatures\n\n{} callable signatures across {namespaces} namespaces are prelude-visible to a single-file check. The full list, grouped by namespace and generated from the interface sources themselves, is [signatures.md](signatures.md); the machine-readable form is the `signatures` array of [language-card.json](language-card.json).\n\nAt a cursor, `rss generate continuations` returns the signatures for the namespace being typed, and every callable candidate carries its parameters as data: the label to write, whether that label may be dropped, and the effect the call site has to supply. Argument labels are the callee's own names, not the caller's: `String.split` takes `value` and `delimiter`, not `text` and `separator`. Read them rather than guessing them.\n",
+    let mut output = format!(
+        "## Core interface signatures\n\n{} callable signatures across {namespaces} namespaces are prelude-visible to a single-file check. Every one of them is listed below, grouped by namespace and generated from the interface sources themselves; nothing is truncated and nothing outside this list is callable without declaring it. The same list stands alone as [signatures.md](signatures.md), and its machine-readable form is the `signatures` array of [language-card.json](language-card.json).\n\nA call is `Namespace.function(label: value)`. Parameter declarations keep `read`; at a call site `read` is omitted because it is the default, while `mut` and `take` stay explicit.\n\nAt a cursor, `rss generate continuations` returns the signatures for the namespace being typed, and every callable candidate carries its parameters as data: the label to write, whether that label may be dropped, and the effect the call site has to supply. Argument labels are the callee's own names, not the caller's: `String.split` takes `value` and `delimiter`, not `text` and `separator`. Read them rather than guessing them.\n",
         signatures.len()
-    )
+    );
+    output.push_str(&grouped_signature_list(&signatures, "###"));
+    output
+}
+
+/// Every signature grouped by namespace and, within a namespace, by interface
+/// file. `heading` is the namespace heading level: `##` standalone, `###` when
+/// nested under the card's own section.
+///
+/// One renderer serves both so the card and the standalone index cannot drift
+/// into disagreeing about what exists.
+fn grouped_signature_list(signatures: &[InterfaceSignature], heading: &str) -> String {
+    let mut output = String::new();
+    let mut namespace = None;
+    let mut path = None;
+    for signature in signatures {
+        if namespace.as_ref() != Some(&signature.namespace) {
+            namespace = Some(signature.namespace.clone());
+            path = None;
+            output.push_str(&format!(
+                "\n{heading} {}\n",
+                signature
+                    .namespace
+                    .as_deref()
+                    .unwrap_or("Free functions (no namespace)")
+            ));
+        }
+        if path.as_deref() != Some(signature.path.as_str()) {
+            path = Some(signature.path.clone());
+            output.push_str(&format!("\n`{}`\n\n", signature.path));
+        }
+        output.push_str(&format!("- `{}`\n", signature.signature));
+    }
+    output
 }
 
 fn namespace_count(signatures: &[InterfaceSignature]) -> usize {
@@ -437,27 +478,7 @@ fn signatures_document() -> String {
         signatures.len(),
         namespace_count(&signatures)
     ));
-
-    let mut namespace = None;
-    let mut path = None;
-    for signature in &signatures {
-        if namespace.as_ref() != Some(&signature.namespace) {
-            namespace = Some(signature.namespace.clone());
-            path = None;
-            output.push_str(&format!(
-                "\n## {}\n",
-                signature
-                    .namespace
-                    .as_deref()
-                    .unwrap_or("Free functions (no namespace)")
-            ));
-        }
-        if path.as_deref() != Some(signature.path.as_str()) {
-            path = Some(signature.path.clone());
-            output.push_str(&format!("\n`{}`\n\n", signature.path));
-        }
-        output.push_str(&format!("- `{}`\n", signature.signature));
-    }
+    output.push_str(&grouped_signature_list(&signatures, "##"));
     output
 }
 
@@ -1052,6 +1073,61 @@ mod tests {
                 signature.signature
             );
         }
+    }
+
+    /// The card must *carry* the signatures, not link them.
+    ///
+    /// Measured on 2026-09-19: `RS0206` appears in 28 of 50 sonnet and 31 of 50
+    /// haiku candidates written with the card, the largest class in both
+    /// models, while the card showed zero signatures and linked an index
+    /// instead. A link is not a prompt. Every signature the standalone index
+    /// carries must therefore appear in the card itself, grouped the same way,
+    /// with nothing dropped.
+    #[test]
+    fn the_card_carries_every_signature_inline_and_does_not_merely_link_them() {
+        let signatures = interface_signatures();
+        let card = language_card_document();
+
+        assert!(card.contains("\n## Core interface signatures\n"));
+        // Namespaces nest one level under the card's own section heading.
+        assert!(card.contains("\n### Json\n"));
+        assert!(card.contains("\n### String\n"));
+        assert!(card.contains("`stdlib/json/json.rssi`"));
+        for signature in &signatures {
+            assert!(
+                card.contains(&format!("- `{}`\n", signature.signature)),
+                "`{}` is missing from the card itself",
+                signature.signature
+            );
+        }
+
+        // The standalone index keeps its own top-level headings and stays a
+        // complete copy, so the two renderings cannot drift apart.
+        let index = signatures_document();
+        assert!(index.contains("\n## Json\n"));
+        assert_eq!(
+            index.lines().filter(|line| line.starts_with("- `")).count(),
+            signatures.len()
+        );
+        assert_eq!(
+            card.lines().filter(|line| line.starts_with("- `")).count(),
+            signatures.len(),
+            "the card's inline list must be exactly as long as the index"
+        );
+        assert_eq!(
+            card.matches("\n### ").count(),
+            namespace_count(&signatures),
+            "one namespace heading per namespace, nested under the card's section"
+        );
+
+        // A reference a model reads once, not a file it is told about: the card
+        // grows past a screenful on purpose, and the assertion records the
+        // size so a silent truncation cannot pass.
+        assert!(
+            card.lines().count() > 700,
+            "the inline signature list should dominate the card: {} lines",
+            card.lines().count()
+        );
     }
 
     /// Each canonical surface form must name a real measured failure and render

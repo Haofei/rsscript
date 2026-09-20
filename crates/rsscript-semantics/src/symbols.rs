@@ -938,6 +938,15 @@ pub struct NameSuggestion {
     /// untouched. Only a pure rename may carry a machine-applicable edit; a
     /// suggestion that also moves the receiver into a named argument is advice.
     pub pure_rename: bool,
+    /// The full signature of `name` — labels, call-site effects and return
+    /// type — when the caller resolved one.
+    ///
+    /// A name alone answers "what exists"; it does not answer "what do I
+    /// write?", which is the question the repair loop was measured spending
+    /// turns on: 63 of 63 `RS0206` renames offered to sonnet named only a
+    /// function, and the next turn's failure was routinely `RS0203`/`RS0207`
+    /// on the arguments of the very call the compiler had just named.
+    pub signature: Option<String>,
 }
 
 /// Names a code-generating model invents, mapped to the real core-interface
@@ -1039,6 +1048,7 @@ pub fn unresolved_call_suggestions<'a>(
                 name: target.to_string(),
                 source: SuggestionSource::KnownAlias,
                 pure_rename: !is_receiver_call,
+                signature: None,
             },
             &mut suggestions,
         );
@@ -1053,6 +1063,7 @@ pub fn unresolved_call_suggestions<'a>(
                 name: target.to_string(),
                 source: SuggestionSource::KnownAlias,
                 pure_rename: false,
+                signature: None,
             },
             &mut suggestions,
         );
@@ -1064,6 +1075,7 @@ pub fn unresolved_call_suggestions<'a>(
                 name,
                 source: SuggestionSource::EditDistance,
                 pure_rename: !is_receiver_call,
+                signature: None,
             },
             &mut suggestions,
         );

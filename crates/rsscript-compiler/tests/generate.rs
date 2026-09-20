@@ -404,9 +404,12 @@ fn namespace_cursor_lists_that_namespace_signatures() {
         .find(|candidate| candidate.text == "parse_int")
         .expect("the namespace's own functions are offered");
     assert_eq!(parse_int.kind, CompletionKind::Function);
+    // Spelled the way the call site spells it, which is also the spelling the
+    // generated signature index prints: `read` is the default and is left off,
+    // so the rendered signature is copyable as it stands.
     assert_eq!(
         parse_int.signature.as_deref(),
-        Some("String.parse_int(value: read String) -> Option<Int>")
+        Some("String.parse_int(value: String) -> Option<Int>")
     );
 
     // Every callable candidate belongs to the namespace at the cursor, and each
@@ -554,7 +557,7 @@ fn standard_package_namespaces_are_offered_to_a_generation_session() {
         bounded
             .signature
             .as_deref()
-            .is_some_and(|signature| signature.starts_with("Channel.bounded(")),
+            .is_some_and(|signature| signature.starts_with("Channel.bounded<T>(")),
         "{bounded:#?}"
     );
     assert!(

@@ -286,6 +286,14 @@ fn print_continuations_text(path: &str, source_bytes: usize, continuations: &Con
             Some(ty) => println!("name: {}: {}", name.text, ty.display),
             None => println!("name: {}", name.text),
         }
+        // The whole signature, in the spelling the call site uses, is printed
+        // before the per-parameter breakdown. The text form used to give only
+        // a name and a result type, which is the same half-answer `RS0206`
+        // used to give: a caller that knows a function exists still does not
+        // know what to write.
+        if let Some(signature) = &name.signature {
+            println!("  signature: {signature}");
+        }
         // The resolved parameter line is what turns "this function exists" into
         // "this is the call you write": the label to spell and the effect that
         // goes with it, rather than a guess that the checker then rejects.

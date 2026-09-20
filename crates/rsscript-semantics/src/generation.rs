@@ -654,7 +654,7 @@ fn completion_from_semantic(
             end: replace.end,
         },
         kind,
-        signature: candidate.signature.as_ref().map(format_signature),
+        signature: candidate.signature.as_ref().map(render_callable_signature),
         result_type: candidate.ty.as_ref().map(|ty| TypeRef {
             display: ty.to_string(),
         }),
@@ -698,26 +698,85 @@ fn parameter_facts(
         .collect()
 }
 
-fn format_signature(signature: &crate::hir::FunctionSig) -> String {
+/// One checked signature as a call site has to spell it: the qualified name,
+/// every parameter with its label and the effect the caller must supply, and
+/// the return type including `fresh`.
+///
+/// This is the answer to "what do I write?", and it is rendered in exactly one
+/// place so a completion candidate and an `RS0206` suggestion cannot describe
+/// the same function differently. `read` is omitted because it is the call
+/// site's default and the canonical spelling leaves it off — the same form the
+/// generated signature index prints — so the rendered call is copyable as it
+/// stands; `mut` and `take` are written because a call site must write them.
+pub fn render_callable_signature(signature: &crate::hir::FunctionSig) -> String {
     let name = signature
         .namespace
         .as_ref()
         .map(|namespace| format!("{namespace}.{}", signature.name))
         .unwrap_or_else(|| signature.name.clone());
+    let asynchronous = if signature.is_async { "async " } else { "" };
+    // The type parameter list is part of the answer, not decoration: it is
+    // what makes `List.len<T>(list: List<T>) -> Int` readable as a call over
+    // any element type rather than over an undefined `T`.
+    let type_params = if signature.type_params.is_empty() {
+        String::new()
+    } else {
+        let rendered = signature
+            .type_params
+            .iter()
+            .enumerate()
+            .map(|(index, parameter)| {
+                match signature
+                    .type_param_bounds
+                    .get(index)
+                    .and_then(Option::as_ref)
+                {
+                    Some(bound) => format!("{parameter}: {}", generic_bound_name(bound)),
+                    None => parameter.clone(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("<{rendered}>")
+    };
     let parameters = signature
         .params
         .iter()
         .map(|parameter| match parameter.effect {
+            Some(crate::hir::ParamEffect::Read) | None => {
+                format!("{}: {}", parameter.name, parameter.ty)
+            }
             Some(effect) => format!("{}: {} {}", parameter.name, effect.as_str(), parameter.ty),
-            None => format!("{}: {}", parameter.name, parameter.ty),
         })
         .collect::<Vec<_>>()
         .join(", ");
     signature
         .return_ty
         .as_ref()
-        .map(|ty| format!("{name}({parameters}) -> {ty}"))
-        .unwrap_or_else(|| format!("{name}({parameters})"))
+        .map(|ty| {
+            // `fresh` is a non-aliasing promise the declaration makes, and the
+            // rendered type already carries it wherever it is nested — a
+            // `Result<fresh Bytes, DecodeError>` must not be re-prefixed into
+            // `fresh Result<fresh Bytes, …>`, which no declaration spells.
+            let rendered = ty.to_string();
+            let fresh = if signature.returns_fresh && !rendered.contains("fresh") {
+                "fresh "
+            } else {
+                ""
+            };
+            format!("{asynchronous}{name}{type_params}({parameters}) -> {fresh}{rendered}")
+        })
+        .unwrap_or_else(|| format!("{asynchronous}{name}{type_params}({parameters})"))
+}
+
+fn generic_bound_name(bound: &rsscript_syntax::ast::GenericBound) -> &str {
+    use rsscript_syntax::ast::GenericBound;
+    match bound {
+        GenericBound::Managed => "Managed",
+        GenericBound::Struct => "Struct",
+        GenericBound::Resource => "Resource",
+        GenericBound::Protocol(name) => name,
+    }
 }
 
 fn terminal_completeness(value: TerminalCompleteness) -> Completeness {

@@ -62,6 +62,762 @@ These are the forms most often written wrong. The right column is what `rss fmt`
 
 ## Core interface signatures
 
-450 callable signatures across 59 namespaces are prelude-visible to a single-file check. The full list, grouped by namespace and generated from the interface sources themselves, is [signatures.md](signatures.md); the machine-readable form is the `signatures` array of [language-card.json](language-card.json).
+450 callable signatures across 59 namespaces are prelude-visible to a single-file check. Every one of them is listed below, grouped by namespace and generated from the interface sources themselves; nothing is truncated and nothing outside this list is callable without declaring it. The same list stands alone as [signatures.md](signatures.md), and its machine-readable form is the `signatures` array of [language-card.json](language-card.json).
+
+A call is `Namespace.function(label: value)`. Parameter declarations keep `read`; at a call site `read` is omitted because it is the default, while `mut` and `take` stay explicit.
 
 At a cursor, `rss generate continuations` returns the signatures for the namespace being typed, and every callable candidate carries its parameters as data: the label to write, whether that label may be dropped, and the effect the call site has to supply. Argument labels are the callee's own names, not the caller's: `String.split` takes `value` and `delimiter`, not `text` and `separator`. Read them rather than guessing them.
+
+### Arguments
+
+`stdlib/arguments/arguments.rssi`
+
+- `Arguments.all(args: read List<String>) -> fresh List<String>`
+- `Arguments.count(args: read List<String>) -> Int`
+- `Arguments.get(args: read List<String>, index: Int) -> Option<String>`
+- `Arguments.get_or_default(args: read List<String>, index: Int, default: String) -> String`
+
+### Assert
+
+`stdlib/test/assert.rssi`
+
+- `Assert.equal(left: String, right: String) -> Unit`
+- `Assert.equal_bool(left: Bool, right: Bool) -> Unit`
+- `Assert.equal_int(left: Int, right: Int) -> Unit`
+
+### Base64
+
+`stdlib/encoding/encoding.rssi`
+
+- `Base64.decode(text: String) -> Result<fresh Bytes, DecodeError>`
+- `Base64.decode_string(text: String) -> Result<fresh String, DecodeError>`
+- `Base64.encode(value: String) -> fresh String`
+- `Base64.encode_bytes(value: Bytes) -> fresh String`
+
+### Buffer
+
+`stdlib/collections/buffer.rssi`
+
+- `Buffer.clear(buffer: mut Buffer) -> Unit`
+- `Buffer.consume(buffer: take Buffer) -> Unit`
+- `Buffer.is_empty(buffer: Buffer) -> Bool`
+- `Buffer.len(buffer: Buffer) -> Int`
+- `Buffer.new(size: Int) -> fresh Buffer`
+- `Buffer.view(buffer: Buffer, start: Int, len: Int) -> BufferView`
+
+### BufferView
+
+`stdlib/collections/buffer.rssi`
+
+- `BufferView.is_empty(value: BufferView) -> Bool`
+- `BufferView.len(value: BufferView) -> Int`
+- `BufferView.slice(value: BufferView, start: Int, len: Int) -> BufferView`
+- `BufferView.to_bytes(value: BufferView) -> fresh Bytes`
+
+### Bytes
+
+`stdlib/collections/bytes.rssi`
+
+- `Bytes.concat(left: Bytes, right: Bytes) -> fresh Bytes`
+- `Bytes.consume(bytes: take Bytes) -> Unit`
+- `Bytes.from_buffer(buffer: Buffer) -> fresh Bytes`
+- `Bytes.from_string(value: String) -> fresh Bytes`
+- `Bytes.from_uints(values: List<Int>) -> fresh Bytes`
+- `Bytes.is_empty(value: Bytes) -> Bool`
+- `Bytes.len(value: Bytes) -> Int`
+- `Bytes.slice(value: Bytes, start: Int, len: Int) -> fresh Bytes`
+- `Bytes.to_string(value: Bytes) -> fresh String`
+- `Bytes.to_uints(value: Bytes) -> fresh List<Int>`
+- `Bytes.view(value: Bytes, start: Int, len: Int) -> BytesView`
+
+### BytesView
+
+`stdlib/collections/bytes.rssi`
+
+- `BytesView.is_empty(value: BytesView) -> Bool`
+- `BytesView.len(value: BytesView) -> Int`
+- `BytesView.slice(value: BytesView, start: Int, len: Int) -> BytesView`
+- `BytesView.starts_with(value: BytesView, prefix: BytesView) -> Bool`
+- `BytesView.to_bytes(value: BytesView) -> fresh Bytes`
+
+### CancellationSource
+
+`packages/async/interface/cancellation.rssi`
+
+- `CancellationSource.cancel(source: mut CancellationSource) -> Unit`
+- `CancellationSource.new() -> fresh CancellationSource`
+- `CancellationSource.token(source: CancellationSource) -> fresh CancellationToken`
+
+### CancellationToken
+
+`packages/async/interface/cancellation.rssi`
+
+- `CancellationToken.is_cancelled(token: CancellationToken) -> Bool`
+
+### Channel
+
+`packages/async/interface/channel.rssi`
+
+- `Channel.bounded<T>(capacity: Int) -> Result<fresh Channel<T>, ChannelError>`
+- `Channel.message<T>(capacity: Int) -> Result<fresh Channel<T>, ChannelError>`
+- `Channel.receiver<T>(channel: mut Channel<T>) -> Result<fresh Receiver<T>, ChannelError>`
+- `Channel.sender<T>(channel: Channel<T>) -> fresh Sender<T>`
+
+### ChannelError
+
+`packages/async/interface/channel.rssi`
+
+- `ChannelError.message(error: ChannelError) -> fresh String`
+
+### Char
+
+`stdlib/string/string.rssi`
+
+- `Char.compare(left: Char, right: Char) -> Int`
+- `Char.from_code(value: Int) -> Option<Char>`
+- `Char.is_alpha(value: Char) -> Bool`
+- `Char.is_alphanumeric(value: Char) -> Bool`
+- `Char.is_digit(value: Char) -> Bool`
+- `Char.is_lower(value: Char) -> Bool`
+- `Char.is_upper(value: Char) -> Bool`
+- `Char.is_whitespace(value: Char) -> Bool`
+- `Char.to_code(value: Char) -> Int`
+- `Char.to_lower(value: Char) -> Char`
+- `Char.to_string(value: Char) -> fresh String`
+- `Char.to_upper(value: Char) -> Char`
+
+### Clone
+
+`stdlib/clone/clone.rssi`
+
+- `Clone.clone<Self: Managed>(self: Self) -> fresh Self`
+
+### Csv
+
+`stdlib/csv/csv.rssi`
+
+- `Csv.parse_row(buffer: RowBuffer) -> Result<fresh Row, CsvError>`
+
+### Date
+
+`stdlib/date/date.rssi`
+
+- `Date.add_days(unix_ms: Int, days: Int) -> Int`
+- `Date.add_ms(unix_ms: Int, ms: Int) -> Int`
+- `Date.day(unix_ms: Int) -> Int`
+- `Date.days_between(start_unix_ms: Int, end_unix_ms: Int) -> Int`
+- `Date.days_in_month(year: Int, month: Int) -> Int`
+- `Date.format_iso(unix_ms: Int) -> fresh String`
+- `Date.format_ymd(unix_ms: Int) -> fresh String`
+- `Date.hour(unix_ms: Int) -> Int`
+- `Date.is_leap_year(year: Int) -> Bool`
+- `Date.minute(unix_ms: Int) -> Int`
+- `Date.month(unix_ms: Int) -> Int`
+- `Date.parse_iso(value: String) -> Option<Int>`
+- `Date.parse_ymd(value: String) -> Option<Int>`
+- `Date.second(unix_ms: Int) -> Int`
+- `Date.start_of_day(unix_ms: Int) -> Int`
+- `Date.weekday(unix_ms: Int) -> Int`
+- `Date.year(unix_ms: Int) -> Int`
+
+### DecodeError
+
+`stdlib/encoding/encoding.rssi`
+
+- `DecodeError.message(error: DecodeError) -> String`
+
+### Deque
+
+`stdlib/collections/deque.rssi`
+
+- `Deque.clear<T>(deque: mut Deque<T>) -> Unit`
+- `Deque.is_empty<T>(deque: Deque<T>) -> Bool`
+- `Deque.len<T>(deque: Deque<T>) -> Int`
+- `Deque.new<T>() -> fresh Deque<T>`
+- `Deque.pop_back<T>(deque: mut Deque<T>) -> Option<T>`
+- `Deque.pop_front<T>(deque: mut Deque<T>) -> Option<T>`
+- `Deque.push_back<T>(deque: mut Deque<T>, value: T) -> Unit retains(value)`
+- `Deque.push_front<T>(deque: mut Deque<T>, value: T) -> Unit retains(value)`
+- `Deque.to_list<T>(deque: Deque<T>) -> fresh List<T>`
+
+### Diff
+
+`stdlib/diff/diff.rssi`
+
+- `Diff.unified(old: String, new: String) -> fresh String`
+
+### Duration
+
+`stdlib/duration/duration.rssi`
+
+- `Duration.add(left: Duration, right: Duration) -> fresh Duration`
+- `Duration.as_ms(value: Duration) -> Int`
+- `Duration.as_seconds(value: Duration) -> Int`
+- `Duration.ms(value: Int) -> fresh Duration`
+- `Duration.seconds(value: Int) -> fresh Duration`
+
+### Dyn
+
+`stdlib/dyn/dyn.rssi`
+
+- `Dyn.from<P, T>(value: take T) -> fresh Dyn<P>`
+
+### Eq
+
+`stdlib/cmp/eq.rssi`
+
+- `Eq.equals<Self: Managed>(self: Self, other: Self) -> Bool`
+
+### FalliblePipeline
+
+`stdlib/collections/pipeline.rssi`
+
+- `FalliblePipeline.collect<T, E>(pipeline: FalliblePipeline<T, E>) -> Result<fresh List<T>, E>`
+- `FalliblePipeline.each<T, E>(pipeline: FalliblePipeline<T, E>, action: noescape Fn(T) -> Unit) -> fresh FalliblePipeline<T, E>`
+- `FalliblePipeline.filter<T, E>(pipeline: FalliblePipeline<T, E>, predicate: noescape Fn(T) -> Bool) -> fresh FalliblePipeline<T, E>`
+- `FalliblePipeline.map<T, U, E>(pipeline: FalliblePipeline<T, E>, mapper: noescape Fn(T) -> U) -> fresh FalliblePipeline<U, E>`
+- `FalliblePipeline.try_map<T, U, E>(pipeline: FalliblePipeline<T, E>, mapper: noescape Fn(T) -> Result<fresh U, E>) -> fresh FalliblePipeline<U, E>`
+
+### Float
+
+`stdlib/string/string.rssi`
+
+- `Float.is_finite(value: Float) -> Bool`
+- `Float.is_infinite(value: Float) -> Bool`
+- `Float.is_nan(value: Float) -> Bool`
+- `Float.to_string(value: Float) -> fresh String`
+
+### Gzip
+
+`stdlib/encoding/encoding.rssi`
+
+- `Gzip.decompress_bytes(value: Bytes) -> Result<fresh Bytes, DecodeError>`
+
+### Hash
+
+`stdlib/hash/hash.rssi`
+
+- `Hash.sha256_bytes(value: Bytes) -> fresh String`
+- `Hash.sha256_string(value: String) -> fresh String`
+- `Hash.sha3_224_bytes(value: Bytes) -> fresh Bytes`
+- `Hash.sha3_256_bytes(value: Bytes) -> fresh Bytes`
+- `Hash.shake128_bytes(value: Bytes, out_len: Int) -> fresh Bytes`
+
+### Hashable
+
+`stdlib/hash/hashable.rssi`
+
+- `Hashable.hash_value<Self: Managed>(self: Self) -> Int`
+
+### Hex
+
+`stdlib/encoding/encoding.rssi`
+
+- `Hex.decode(text: String) -> Result<fresh Bytes, DecodeError>`
+- `Hex.encode(value: Bytes) -> fresh String`
+- `Hex.encode_string(value: String) -> fresh String`
+
+### Hmac
+
+`stdlib/hash/hash.rssi`
+
+- `Hmac.sha256_bytes(key: Bytes, value: Bytes) -> fresh String`
+- `Hmac.sha256_string(key: String, value: String) -> fresh String`
+
+### Int
+
+`stdlib/string/string.rssi`
+
+- `Int.bit_and(left: Int, right: Int) -> Int`
+- `Int.bit_not(value: Int) -> Int`
+- `Int.bit_or(left: Int, right: Int) -> Int`
+- `Int.bit_xor(left: Int, right: Int) -> Int`
+- `Int.shift_left(value: Int, bits: Int) -> Int`
+- `Int.shift_right(value: Int, bits: Int) -> Int`
+- `Int.to_float(value: Int) -> Float`
+- `Int.to_string(value: Int) -> fresh String`
+
+### Json
+
+`stdlib/json/json.rssi`
+
+- `Json.array(items: List<String>) -> fresh String`
+- `Json.array_bools(value: JsonValue) -> Result<fresh List<Bool>, JsonError>`
+- `Json.array_contains_prefix(value: JsonValue, prefix: String) -> Result<Bool, JsonError>`
+- `Json.array_contains_string(value: JsonValue, item: String) -> Result<Bool, JsonError>`
+- `Json.array_contains_substring(value: JsonValue, text: String) -> Result<Bool, JsonError>`
+- `Json.array_count_where(value: JsonValue, predicate: noescape Fn(JsonValue) -> Result<Bool, JsonError>) -> Result<Int, JsonError>`
+- `Json.array_fold<T: Struct>(value: JsonValue, initial: T, folder: noescape Fn(T, JsonValue) -> Result<fresh T, JsonError>) -> Result<fresh T, JsonError>`
+- `Json.array_get(value: JsonValue, index: Int) -> Result<fresh JsonValue, JsonError>`
+- `Json.array_ints(value: JsonValue) -> Result<fresh List<Int>, JsonError>`
+- `Json.array_len(value: JsonValue) -> Result<Int, JsonError>`
+- `Json.array_strings(value: JsonValue) -> Result<fresh List<String>, JsonError>`
+- `Json.as_bool(value: JsonValue) -> Result<Bool, JsonError>`
+- `Json.as_int(value: JsonValue) -> Result<Int, JsonError>`
+- `Json.as_string(value: JsonValue) -> Result<String, JsonError>`
+- `Json.at(value: JsonValue, path: String) -> Result<fresh JsonValue, JsonError>`
+- `Json.at_bool(value: JsonValue, path: String) -> Result<Bool, JsonError>`
+- `Json.at_bool_or(value: JsonValue, path: String, fallback: Bool) -> Bool`
+- `Json.at_int(value: JsonValue, path: String) -> Result<Int, JsonError>`
+- `Json.at_int_or(value: JsonValue, path: String, fallback: Int) -> Int`
+- `Json.at_optional(value: JsonValue, path: String) -> Result<Option<JsonValue>, JsonError>`
+- `Json.at_optional_bool(value: JsonValue, path: String) -> Result<Option<Bool>, JsonError>`
+- `Json.at_optional_int(value: JsonValue, path: String) -> Result<Option<Int>, JsonError>`
+- `Json.at_optional_string(value: JsonValue, path: String) -> Result<Option<String>, JsonError>`
+- `Json.at_or(value: JsonValue, path: String, fallback: JsonValue) -> fresh JsonValue`
+- `Json.at_string(value: JsonValue, path: String) -> Result<String, JsonError>`
+- `Json.at_string_or(value: JsonValue, path: String, fallback: String) -> String`
+- `Json.at_to_string(value: JsonValue, path: String) -> Result<String, JsonError>`
+- `Json.at_to_string_or(value: JsonValue, path: String, fallback: String) -> String`
+- `Json.bool_at(text: String, path: String) -> Result<Bool, JsonError>`
+- `Json.bool_at_or(text: String, path: String, fallback: Bool) -> Bool`
+- `Json.bool_field(name: String, value: Bool) -> fresh String`
+- `Json.clone(value: JsonValue) -> fresh JsonValue`
+- `Json.decode<T: Struct>(value: JsonValue) -> Result<fresh T, JsonError>`
+- `Json.decode_text<T: Struct>(text: String) -> Result<fresh T, JsonError>`
+- `Json.encode(value: JsonLiteral) -> fresh String`
+- `Json.field(value: JsonValue, name: String) -> Result<fresh JsonValue, JsonError>`
+- `Json.field_bool(value: JsonValue, name: String) -> Result<Bool, JsonError>`
+- `Json.field_int(value: JsonValue, name: String) -> Result<Int, JsonError>`
+- `Json.field_optional(value: JsonValue, name: String) -> Result<Option<JsonValue>, JsonError>`
+- `Json.field_optional_bool(value: JsonValue, name: String) -> Result<Option<Bool>, JsonError>`
+- `Json.field_optional_int(value: JsonValue, name: String) -> Result<Option<Int>, JsonError>`
+- `Json.field_optional_string(value: JsonValue, name: String) -> Result<Option<String>, JsonError>`
+- `Json.field_string(value: JsonValue, name: String) -> Result<String, JsonError>`
+- `Json.int_at(text: String, path: String) -> Result<Int, JsonError>`
+- `Json.int_at_or(text: String, path: String, fallback: Int) -> Int`
+- `Json.int_field(name: String, value: Int) -> fresh String`
+- `Json.is_array(value: JsonValue) -> Bool`
+- `Json.is_null(value: JsonValue) -> Bool`
+- `Json.is_object(value: JsonValue) -> Bool`
+- `Json.json_bool_at_or(text: String, path: String, fallback: Bool) -> Bool`
+- `Json.json_int_at_or(text: String, path: String, fallback: Int) -> Int`
+- `Json.json_parse(text: String) -> Result<fresh JsonValue, JsonError>`
+- `Json.json_string_at_or(text: String, path: String, fallback: String) -> String`
+- `Json.kind(value: JsonValue) -> String`
+- `Json.object(fields: List<String>) -> fresh String`
+- `Json.object_keys(value: JsonValue) -> Result<fresh List<String>, JsonError>`
+- `Json.object_len(value: JsonValue) -> Result<Int, JsonError>`
+- `Json.parse(text: String) -> Result<fresh JsonValue, JsonError>`
+- `Json.quote_string(value: String) -> fresh String`
+- `Json.raw_field(name: String, value: String) -> fresh String`
+- `Json.string_array(items: List<String>) -> fresh String`
+- `Json.string_at(text: String, path: String) -> Result<String, JsonError>`
+- `Json.string_at_or(text: String, path: String, fallback: String) -> String`
+- `Json.string_field(name: String, value: String) -> fresh String`
+- `Json.strings(items: List<String>) -> fresh JsonValue`
+- `Json.to_string(value: JsonValue) -> fresh String`
+- `Json.to_string_at(text: String, path: String) -> Result<String, JsonError>`
+- `Json.to_string_at_or(text: String, path: String, fallback: String) -> String`
+- `Json.value(value: JsonLiteral) -> fresh JsonValue`
+- `Json.value_at(value: JsonValue, path: String) -> Result<fresh JsonValue, JsonError>`
+- `Json.values(items: List<JsonValue>) -> fresh JsonValue`
+
+### JsonError
+
+`stdlib/json/json.rssi`
+
+- `JsonError.message(error: JsonError) -> String`
+
+### List
+
+`stdlib/collections/list.rssi`
+
+- `List.all<T>(list: List<T>, predicate: noescape Fn(T) -> Bool) -> Bool`
+- `List.any<T>(list: List<T>, predicate: noescape Fn(T) -> Bool) -> Bool`
+- `List.append<T>(list: mut List<T>, values: List<T>) -> Unit retains(values)`
+- `List.clear<T>(list: mut List<T>) -> Unit`
+- `List.consume<T>(list: take List<T>) -> Unit`
+- `List.contains<T>(list: List<T>, predicate: noescape Fn(T) -> Bool) -> Bool`
+- `List.contains_value<T>(list: List<T>, value: T) -> Bool`
+- `List.count_where<T>(list: List<T>, predicate: noescape Fn(T) -> Bool) -> Int`
+- `List.dedup<T>(list: List<T>) -> fresh List<T>`
+- `List.enumerate(list: List<Int>) -> fresh List<List<Int>>`
+- `List.filter<T>(list: List<T>, predicate: noescape Fn(T) -> Bool) -> fresh List<T>`
+- `List.find<T>(list: List<T>, predicate: noescape Fn(T) -> Bool) -> Option<T>`
+- `List.first<T>(list: List<T>) -> Option<T>`
+- `List.flat_map<T, U>(list: List<T>, mapper: noescape Fn(T) -> List<U>) -> fresh List<U>`
+- `List.flatten<T>(list: List<List<T>>) -> fresh List<T>`
+- `List.fold<T, U: Struct>(list: List<T>, initial: U, folder: noescape Fn(U, T) -> fresh U) -> fresh U`
+- `List.get<T>(list: List<T>, index: Int) -> T`
+- `List.group_by<T, K>(list: List<T>, key: noescape Fn(T) -> K) -> fresh Map<K, List<T>>`
+- `List.is_empty<T>(list: List<T>) -> Bool`
+- `List.join(list: List<String>, separator: String) -> fresh String`
+- `List.last<T>(list: List<T>) -> Option<T>`
+- `List.len<T>(list: List<T>) -> Int`
+- `List.map<T, U>(list: List<T>, mapper: noescape Fn(T) -> U) -> fresh List<U>`
+- `List.max(list: List<Int>) -> Option<Int>`
+- `List.min(list: List<Int>) -> Option<Int>`
+- `List.new<T>() -> fresh List<T>`
+- `List.partition<T>(list: List<T>, predicate: noescape Fn(T) -> Bool) -> fresh List<List<T>>`
+- `List.pop<T>(list: mut List<T>) -> Option<T>`
+- `List.push<T>(list: mut List<T>, value: T) -> Unit retains(value)`
+- `List.remove_at<T>(list: mut List<T>, index: Int) -> Option<T>`
+- `List.reverse<T>(list: List<T>) -> fresh List<T>`
+- `List.set<T>(list: mut List<T>, index: Int, value: T) -> Unit retains(value)`
+- `List.skip<T>(list: List<T>, count: Int) -> fresh List<T>`
+- `List.slice<T>(list: List<T>, start: Int, len: Int) -> fresh List<T>`
+- `List.sort<T: Ord>(list: mut List<T>) -> Unit`
+- `List.sort_by<T, K>(list: List<T>, key: noescape Fn(T) -> K, compare: noescape Fn(K, K) -> Int) -> fresh List<T>`
+- `List.sort_with<T>(list: mut List<T>, compare: noescape Fn(T, T) -> Int) -> Unit`
+- `List.sum(list: List<Int>) -> Int`
+- `List.take<T>(list: List<T>, count: Int) -> fresh List<T>`
+- `List.to_json_strings(list: List<String>) -> fresh JsonValue`
+- `List.to_json_values(list: List<JsonValue>) -> fresh JsonValue`
+- `List.try_fold<T, U: Struct, E>(list: List<T>, initial: U, folder: noescape Fn(U, T) -> Result<fresh U, E>) -> Result<fresh U, E>`
+- `List.zip<T>(left: List<T>, right: List<T>) -> fresh List<List<T>>`
+
+`stdlib/collections/pipeline.rssi`
+
+- `List.pipeline<T>(list: List<T>) -> fresh Pipeline<T>`
+
+### Map
+
+`stdlib/collections/map.rssi`
+
+- `Map.clear<K: Hashable, V>(map: mut Map<K, V>) -> Unit`
+- `Map.contains_key<K: Hashable, V>(map: Map<K, V>, key: K) -> Bool`
+- `Map.filter<K: Hashable, V>(map: Map<K, V>, predicate: noescape Fn(K, V) -> Bool) -> fresh Map<K, V>`
+- `Map.fold<K: Hashable, V, U: Struct>(map: Map<K, V>, initial: U, folder: noescape Fn(U, K, V) -> fresh U) -> fresh U`
+- `Map.for_each<K: Hashable, V>(map: Map<K, V>, callback: noescape Fn(K, V) -> Unit) -> Unit`
+- `Map.get<K: Hashable, V>(map: Map<K, V>, key: K) -> Option<V>`
+- `Map.get_or_default<K: Hashable, V>(map: Map<K, V>, key: K, default: V) -> V`
+- `Map.insert<K: Hashable, V>(map: mut Map<K, V>, key: K, value: V) -> Unit retains(key) retains(value)`
+- `Map.insert_old<K: Hashable, V>(map: mut Map<K, V>, key: K, value: V) -> Option<V> retains(key) retains(value)`
+- `Map.is_empty<K: Hashable, V>(map: Map<K, V>) -> Bool`
+- `Map.keys<K: Hashable, V>(map: Map<K, V>) -> fresh List<K>`
+- `Map.len<K: Hashable, V>(map: Map<K, V>) -> Int`
+- `Map.map_values<K: Hashable, V, U>(map: Map<K, V>, mapper: noescape Fn(V) -> U) -> fresh Map<K, U>`
+- `Map.merge<K: Hashable, V>(left: Map<K, V>, right: Map<K, V>, resolver: noescape Fn(V, V) -> V) -> fresh Map<K, V>`
+- `Map.new<K: Hashable, V>() -> fresh Map<K, V>`
+- `Map.remove<K: Hashable, V>(map: mut Map<K, V>, key: K) -> Option<V>`
+- `Map.try_fold<K: Hashable, V, U: Struct, E>(map: Map<K, V>, initial: U, folder: noescape Fn(U, K, V) -> Result<fresh U, E>) -> Result<fresh U, E>`
+- `Map.values<K: Hashable, V>(map: Map<K, V>) -> fresh List<V>`
+
+### Math
+
+`stdlib/math/math.rssi`
+
+- `Math.abs(value: Int) -> Int`
+- `Math.abs_float(value: Float) -> Float`
+- `Math.ceil(value: Float) -> Int`
+- `Math.clamp(value: Int, min: Int, max: Int) -> Int`
+- `Math.clamp_float(value: Float, min: Float, max: Float) -> Float`
+- `Math.cos(value: Float) -> Float`
+- `Math.exp(value: Float) -> Float`
+- `Math.exp2(value: Float) -> Float`
+- `Math.floor(value: Float) -> Int`
+- `Math.log(value: Float) -> Float`
+- `Math.log2(value: Float) -> Float`
+- `Math.max(left: Int, right: Int) -> Int`
+- `Math.max_float(left: Float, right: Float) -> Float`
+- `Math.min(left: Int, right: Int) -> Int`
+- `Math.min_float(left: Float, right: Float) -> Float`
+- `Math.pow(base: Int, exponent: Int) -> Int`
+- `Math.pow_float(base: Float, exponent: Float) -> Float`
+- `Math.round(value: Float) -> Int`
+- `Math.saturating_add(left: Int, right: Int) -> Int`
+- `Math.saturating_mul(left: Int, right: Int) -> Int`
+- `Math.saturating_sub(left: Int, right: Int) -> Int`
+- `Math.sin(value: Float) -> Float`
+- `Math.sqrt(value: Float) -> Float`
+- `Math.tanh(value: Float) -> Float`
+- `Math.trunc_float(value: Float) -> Float`
+- `Math.wrapping_add(left: Int, right: Int) -> Int`
+- `Math.wrapping_mul(left: Int, right: Int) -> Int`
+- `Math.wrapping_sub(left: Int, right: Int) -> Int`
+
+### Option
+
+`stdlib/option/option.rssi`
+
+- `Option.and_then<T, U>(value: Option<T>, mapper: noescape Fn(T) -> Option<U>) -> Option<U>`
+- `Option.filter<T>(value: Option<T>, predicate: noescape Fn(T) -> Bool) -> Option<T>`
+- `Option.is_none<T>(value: Option<T>) -> Bool`
+- `Option.is_some<T>(value: Option<T>) -> Bool`
+- `Option.map<T, U>(value: Option<T>, mapper: noescape Fn(T) -> U) -> Option<U>`
+- `Option.ok_or<T, E>(value: Option<T>, error: E) -> Result<T, E>`
+- `Option.or<T>(value: Option<T>, fallback: Option<T>) -> Option<T>`
+- `Option.unwrap_or<T>(value: Option<T>, default: T) -> T`
+- `Option.unwrap_or_else<T>(value: Option<T>, default: noescape Fn() -> T) -> T`
+
+### Ord
+
+`stdlib/cmp/ord.rssi`
+
+- `Ord.compare<Self: Managed>(self: Self, other: Self) -> Int`
+
+### Output
+
+`stdlib/output/output.rssi`
+
+- `Output.error(message: String) -> Unit`
+- `Output.error_json(value: JsonValue) -> Unit`
+- `Output.trace(event: String, message: String) -> Unit`
+- `Output.write(message: String) -> Unit`
+- `Output.write_json(value: JsonValue) -> Unit`
+
+### Patch
+
+`stdlib/patch/patch.rssi`
+
+- `Patch.apply_text(original: String, patch: String) -> Result<fresh String, String>`
+
+### Path
+
+`stdlib/path/path.rssi`
+
+- `Path.extension(path: Path) -> Option<String>`
+- `Path.file_name(path: Path) -> Option<String>`
+- `Path.from_string(value: String) -> fresh Path`
+- `Path.is_absolute(path: Path) -> Bool`
+- `Path.join(base: Path, child: String) -> fresh Path`
+- `Path.normalize(path: Path) -> fresh Path`
+- `Path.parent(path: Path) -> Option<Path>`
+- `Path.resolve_relative(root: Path, relative: String) -> Result<fresh Path, String>`
+- `Path.safe_relative(value: String) -> Result<fresh Path, String>`
+- `Path.starts_with(path: Path, base: Path) -> Bool`
+- `Path.to_string(path: Path) -> fresh String`
+- `Path.with_extension(path: Path, extension: String) -> fresh Path`
+
+### PersistentMap
+
+`stdlib/collections/persistent_map.rssi`
+
+- `PersistentMap.clear<K, V>(map: PersistentMap<K, V>) -> fresh PersistentMap<K, V>`
+- `PersistentMap.contains_key<K, V>(map: PersistentMap<K, V>, key: K) -> Bool`
+- `PersistentMap.get<K, V>(map: PersistentMap<K, V>, key: K) -> Option<V>`
+- `PersistentMap.insert<K, V>(map: PersistentMap<K, V>, key: K, value: V) -> fresh PersistentMap<K, V> retains(key) retains(value)`
+- `PersistentMap.is_empty<K, V>(map: PersistentMap<K, V>) -> Bool`
+- `PersistentMap.len<K, V>(map: PersistentMap<K, V>) -> Int`
+- `PersistentMap.new<K, V>() -> fresh PersistentMap<K, V>`
+- `PersistentMap.remove<K, V>(map: PersistentMap<K, V>, key: K) -> fresh PersistentMap<K, V>`
+
+### Pipeline
+
+`stdlib/collections/pipeline.rssi`
+
+- `Pipeline.collect<T>(pipeline: Pipeline<T>) -> fresh List<T>`
+- `Pipeline.each<T>(pipeline: Pipeline<T>, action: noescape Fn(T) -> Unit) -> fresh Pipeline<T>`
+- `Pipeline.filter<T>(pipeline: Pipeline<T>, predicate: noescape Fn(T) -> Bool) -> fresh Pipeline<T>`
+- `Pipeline.map<T, U>(pipeline: Pipeline<T>, mapper: noescape Fn(T) -> U) -> fresh Pipeline<U>`
+- `Pipeline.try_map<T, U, E>(pipeline: Pipeline<T>, mapper: noescape Fn(T) -> Result<fresh U, E>) -> fresh FalliblePipeline<U, E>`
+
+### Receiver
+
+`packages/async/interface/channel.rssi`
+
+- `Receiver.close<T>(receiver: mut Receiver<T>) -> Unit`
+- `async Receiver.recv<T>(receiver: Receiver<T>) -> Result<Option<T>, ChannelError>`
+- `async Receiver.recv_cancellable<T>(receiver: Receiver<T>, token: CancellationToken) -> Result<Option<T>, ChannelError>`
+
+`packages/async/interface/stream.rssi`
+
+- `Receiver.into_stream<T>(receiver: take Receiver<T>) -> fresh Stream<T>`
+
+### Regex
+
+`stdlib/regex/regex.rssi`
+
+- `Regex.captures(regex: Regex, value: String) -> fresh List<String>`
+- `Regex.compile(pattern: String) -> Result<fresh Regex, RegexError>`
+- `Regex.find(regex: Regex, value: String) -> Option<fresh String>`
+- `Regex.is_match(regex: Regex, value: String) -> Bool`
+- `Regex.replace_all(regex: Regex, value: String, replacement: String) -> fresh String`
+- `Regex.split(regex: Regex, value: String) -> fresh List<String>`
+
+### RegexError
+
+`stdlib/regex/regex.rssi`
+
+- `RegexError.message(error: RegexError) -> String`
+
+### Result
+
+`stdlib/result/result.rssi`
+
+- `Result.and_then<T, E, U>(result: Result<T, E>, mapper: noescape Fn(T) -> Result<U, E>) -> Result<U, E>`
+- `Result.err<T, E>(value: Result<T, E>) -> Option<E>`
+- `Result.err_message<T, E>(value: Result<T, E>) -> Option<String>`
+- `Result.is_err<T, E>(value: Result<T, E>) -> Bool`
+- `Result.is_ok<T, E>(value: Result<T, E>) -> Bool`
+- `Result.map<T, E, U>(result: Result<T, E>, mapper: noescape Fn(T) -> U) -> Result<U, E>`
+- `Result.map_error<T, E, F>(result: Result<T, E>, mapper: noescape Fn(E) -> F) -> Result<T, F>`
+- `Result.ok<T, E>(value: Result<T, E>) -> Option<T>`
+- `Result.unwrap_or<T, E>(value: Result<T, E>, default: T) -> T`
+- `Result.unwrap_or_else<T, E>(result: Result<T, E>, fallback: noescape Fn(E) -> T) -> T`
+
+### Row
+
+`stdlib/csv/csv.rssi`
+
+- `Row.field_string(row: Row, index: Int) -> Result<String, CsvError>`
+
+### RowBuffer
+
+`stdlib/csv/csv.rssi`
+
+- `RowBuffer.new(size: Int) -> fresh RowBuffer`
+
+### Sender
+
+`packages/async/interface/channel.rssi`
+
+- `Sender.close<T>(sender: mut Sender<T>) -> Unit`
+- `async Sender.send<T>(sender: Sender<T>, value: take T) -> Result<Unit, ChannelError>`
+- `async Sender.send_cancellable<T>(sender: Sender<T>, value: take T, token: CancellationToken) -> Result<Unit, ChannelError>`
+
+### Set
+
+`stdlib/collections/set.rssi`
+
+- `Set.clear<T: Hashable>(set: mut Set<T>) -> Unit`
+- `Set.contains<T: Hashable>(set: Set<T>, value: T) -> Bool`
+- `Set.difference<T: Hashable>(left: Set<T>, right: Set<T>) -> fresh Set<T>`
+- `Set.for_each<T: Hashable>(set: Set<T>, callback: noescape Fn(T) -> Unit) -> Unit`
+- `Set.insert<T: Hashable>(set: mut Set<T>, value: T) -> Bool retains(value)`
+- `Set.intersection<T: Hashable>(left: Set<T>, right: Set<T>) -> fresh Set<T>`
+- `Set.is_empty<T: Hashable>(set: Set<T>) -> Bool`
+- `Set.is_subset<T: Hashable>(left: Set<T>, right: Set<T>) -> Bool`
+- `Set.len<T: Hashable>(set: Set<T>) -> Int`
+- `Set.new<T: Hashable>() -> fresh Set<T>`
+- `Set.remove<T: Hashable>(set: mut Set<T>, value: T) -> Bool`
+- `Set.to_list<T: Hashable>(set: Set<T>) -> fresh List<T>`
+- `Set.union<T: Hashable>(left: Set<T>, right: Set<T>) -> fresh Set<T>`
+
+### SortedMap
+
+`stdlib/collections/sorted_map.rssi`
+
+- `SortedMap.clear<K: Ord, V>(map: mut SortedMap<K, V>) -> Unit`
+- `SortedMap.contains_key<K: Ord, V>(map: SortedMap<K, V>, key: K) -> Bool`
+- `SortedMap.get<K: Ord, V>(map: SortedMap<K, V>, key: K) -> Option<V>`
+- `SortedMap.insert<K: Ord, V>(map: mut SortedMap<K, V>, key: K, value: V) -> Unit retains(key) retains(value)`
+- `SortedMap.is_empty<K: Ord, V>(map: SortedMap<K, V>) -> Bool`
+- `SortedMap.keys<K: Ord, V>(map: SortedMap<K, V>) -> fresh List<K>`
+- `SortedMap.len<K: Ord, V>(map: SortedMap<K, V>) -> Int`
+- `SortedMap.new<K: Ord, V>() -> fresh SortedMap<K, V>`
+- `SortedMap.remove<K: Ord, V>(map: mut SortedMap<K, V>, key: K) -> Option<V>`
+- `SortedMap.values<K: Ord, V>(map: SortedMap<K, V>) -> fresh List<V>`
+
+### SortedSet
+
+`stdlib/collections/sorted_set.rssi`
+
+- `SortedSet.clear<T: Ord>(set: mut SortedSet<T>) -> Unit`
+- `SortedSet.contains<T: Ord>(set: SortedSet<T>, value: T) -> Bool`
+- `SortedSet.insert<T: Ord>(set: mut SortedSet<T>, value: T) -> Bool retains(value)`
+- `SortedSet.is_empty<T: Ord>(set: SortedSet<T>) -> Bool`
+- `SortedSet.len<T: Ord>(set: SortedSet<T>) -> Int`
+- `SortedSet.new<T: Ord>() -> fresh SortedSet<T>`
+- `SortedSet.remove<T: Ord>(set: mut SortedSet<T>, value: T) -> Bool`
+- `SortedSet.to_list<T: Ord>(set: SortedSet<T>) -> fresh List<T>`
+
+### Stream
+
+`packages/async/interface/stream.rssi`
+
+- `Stream.collect_list<T>(stream: Stream<T>) -> Result<fresh List<T>, ChannelError>`
+- `Stream.from_list<T>(items: take List<T>) -> fresh Stream<T>`
+- `async Stream.next<T>(stream: Stream<T>) -> Result<Option<T>, ChannelError>`
+
+### String
+
+`stdlib/string/string.rssi`
+
+- `String.after(value: String, delimiter: String) -> Option<String>`
+- `String.before(value: String, delimiter: String) -> Option<String>`
+- `String.char_at(value: String, index: Int) -> Option<Char>`
+- `String.chars(value: String) -> fresh List<Char>`
+- `String.clone(value: String) -> fresh String`
+- `String.concat(left: String, right: String) -> fresh String`
+- `String.contains(value: String, needle: String) -> Bool`
+- `String.copy(value: String) -> fresh String`
+- `String.count(value: String, needle: String) -> Int`
+- `String.ends_with(value: String, suffix: String) -> Bool`
+- `String.env(value: String) -> Option<fresh String>`
+- `String.env_or(value: String, default: String) -> fresh String`
+- `String.format(template: String, args: List<String>) -> fresh String`
+- `String.from_bool(value: Bool) -> fresh String`
+- `String.from_float(value: Float) -> fresh String`
+- `String.from_int(value: Int) -> fresh String`
+- `String.index_of(value: String, needle: String) -> Option<Int>`
+- `String.is_empty(value: String) -> Bool`
+- `String.join(parts: List<String>, separator: String) -> fresh String`
+- `String.len(value: String) -> Int`
+- `String.lines(value: String) -> fresh List<String>`
+- `String.pad_left(value: String, width: Int, fill: String) -> fresh String`
+- `String.pad_right(value: String, width: Int, fill: String) -> fresh String`
+- `String.parse_float(value: String) -> Option<Float>`
+- `String.parse_int(value: String) -> Option<Int>`
+- `String.repeat(value: String, count: Int) -> fresh String`
+- `String.replace(value: String, from: String, to: String) -> fresh String`
+- `String.replace_first(value: String, from: String, to: String) -> fresh String`
+- `String.reverse(value: String) -> fresh String`
+- `String.safe_relative(value: String) -> Result<fresh Path, String>`
+- `String.slice(value: String, start: Int, len: Int) -> fresh String`
+- `String.split(value: String, delimiter: String) -> fresh List<String>`
+- `String.starts_with(value: String, prefix: String) -> Bool`
+- `String.strip_prefix(value: String, prefix: String) -> Option<String>`
+- `String.to_bytes(value: String) -> fresh Bytes`
+- `String.to_lowercase(value: String) -> fresh String`
+- `String.to_path(value: String) -> fresh Path`
+- `String.to_uppercase(value: String) -> fresh String`
+- `String.to_url(value: String) -> fresh Url`
+- `String.trim(value: String) -> fresh String`
+- `String.trim_end(value: String) -> fresh String`
+- `String.trim_start(value: String) -> fresh String`
+- `String.view(value: String, start: Int, len: Int) -> StringView`
+
+### StringBuilder
+
+`stdlib/string/string.rssi`
+
+- `StringBuilder.finish(builder: take StringBuilder) -> fresh String`
+- `StringBuilder.new() -> fresh StringBuilder`
+- `StringBuilder.push(builder: mut StringBuilder, value: String) -> Unit`
+
+### StringView
+
+`stdlib/string/string.rssi`
+
+- `StringView.after(value: StringView, delimiter: String) -> Option<StringView>`
+- `StringView.before(value: StringView, delimiter: String) -> Option<StringView>`
+- `StringView.contains(value: StringView, needle: String) -> Bool`
+- `StringView.is_empty(value: StringView) -> Bool`
+- `StringView.len(value: StringView) -> Int`
+- `StringView.slice(value: StringView, start: Int, len: Int) -> StringView`
+- `StringView.starts_with(value: StringView, prefix: String) -> Bool`
+- `StringView.to_string(value: StringView) -> fresh String`
+
+### Task
+
+`packages/async/interface/task.rssi`
+
+- `Task.cancellation_token() -> fresh CancellationToken`
+
+### Url
+
+`stdlib/encoding/encoding.rssi`
+
+- `Url.decode_component(value: String) -> Result<fresh String, DecodeError>`
+- `Url.encode_component(value: String) -> fresh String`
+
+`stdlib/url/url.rssi`
+
+- `Url.from_string(value: String) -> fresh Url`
+- `Url.to_string(url: Url) -> fresh String`
+
+### Weak
+
+`stdlib/weak/weak.rssi`
+
+- `Weak.downgrade<T: Managed>(value: T) -> T`
+- `Weak.from<T: Managed>(value: T) -> T`
+- `Weak.upgrade<T: Managed>(value: T) -> Option<T>`
+
+### Yaml
+
+`stdlib/yaml/yaml.rssi`
+
+- `Yaml.parse(text: String) -> Result<fresh JsonValue, JsonError>`

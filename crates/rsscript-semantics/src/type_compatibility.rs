@@ -383,12 +383,25 @@ pub fn unknown_callee_diagnostic_with_suggestions(
         );
     };
 
-    let named = suggestions
+    // The best candidate is shown as a whole signature, not as a bare name.
+    // Measured on 2026-09-19: both models take the rename they are offered
+    // (sonnet 87%, haiku 74%) and then fail on the *arguments* of the call the
+    // compiler just named, because the name was all it named. The remaining
+    // candidates stay bare so the one answer stays legible.
+    let best_display = best.signature.clone().unwrap_or_else(|| best.name.clone());
+    let alternatives = suggestions
         .iter()
+        .skip(1)
         .map(|suggestion| format!("`{}`", suggestion.name))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let title = format!("Did you mean {named}?");
+        .collect::<Vec<_>>();
+    let title = if alternatives.is_empty() {
+        format!("Did you mean `{best_display}`?")
+    } else {
+        format!(
+            "Did you mean `{best_display}`? Also in scope: {}.",
+            alternatives.join(", ")
+        )
+    };
 
     let diagnostic = match rename_span.filter(|_| best.pure_rename) {
         Some(rename_span) => diagnostic.with_fix_edit(
@@ -497,6 +510,92 @@ mod tests {
         assert_eq!(
             message_payload_not_transferable_diagnostic("Handle", span()).code,
             code::MESSAGE_PAYLOAD_NOT_TRANSFERABLE
+        );
+    }
+
+    /// `RS0206` names the call, not just the callee.
+    ///
+    /// Measured on 2026-09-19: sonnet applied 55 of 63 offered renames and
+    /// haiku 53 of 72, and the turn *after* the rename routinely failed on the
+    /// arguments of the call the compiler had just named. A name answers "what
+    /// exists"; the signature answers "what do I write".
+    #[test]
+    fn unknown_callee_help_carries_the_best_candidates_whole_signature() {
+        let best = crate::NameSuggestion {
+            name: "String.parse_int".to_owned(),
+            source: crate::SuggestionSource::KnownAlias,
+            pure_rename: true,
+            signature: Some("String.parse_int(value: String) -> Option<Int>".to_owned()),
+        };
+        let other = crate::NameSuggestion {
+            name: "Json.parse".to_owned(),
+            source: crate::SuggestionSource::EditDistance,
+            pure_rename: true,
+            signature: Some("Json.parse(text: String) -> Result<fresh Json, JsonError>".to_owned()),
+        };
+
+        let diagnostic = unknown_callee_diagnostic_with_suggestions(
+            "Int.parse",
+            span(),
+            std::slice::from_ref(&best),
+            Some(span()),
+        );
+        let fix = diagnostic
+            .fixes
+            .iter()
+            .find(|fix| fix.kind == "rename_callee")
+            .expect("a rename fix");
+        assert_eq!(
+            fix.title,
+            "Did you mean `String.parse_int(value: String) -> Option<Int>`?"
+        );
+        // The fix contract is unchanged: the edit still replaces the written
+        // callee with the bare name, so `rss fix` produces the same source it
+        // produced before the title grew.
+        assert_eq!(fix.applicability, "machine-applicable");
+        assert_eq!(
+            fix.edit.as_ref().map(|edit| edit.replacement.as_str()),
+            Some("String.parse_int")
+        );
+
+        // Runners-up stay bare so the one answer stays legible.
+        let diagnostic =
+            unknown_callee_diagnostic_with_suggestions("Int.parse", span(), &[best, other], None);
+        let fix = diagnostic
+            .fixes
+            .iter()
+            .find(|fix| fix.kind == "rename_callee")
+            .expect("a rename fix");
+        assert_eq!(
+            fix.title,
+            "Did you mean `String.parse_int(value: String) -> Option<Int>`? Also in scope: `Json.parse`."
+        );
+        assert_eq!(fix.applicability, "maybe-incorrect");
+        assert!(fix.edit.is_none());
+    }
+
+    /// A suggestion the caller could not resolve a signature for still names
+    /// the replacement, rather than rendering an empty call.
+    #[test]
+    fn unknown_callee_help_falls_back_to_the_bare_name_without_a_signature() {
+        let diagnostic = unknown_callee_diagnostic_with_suggestions(
+            "Reprt",
+            span(),
+            &[crate::NameSuggestion {
+                name: "Report".to_owned(),
+                source: crate::SuggestionSource::EditDistance,
+                pure_rename: true,
+                signature: None,
+            }],
+            None,
+        );
+        assert!(
+            diagnostic
+                .fixes
+                .iter()
+                .any(|fix| fix.title == "Did you mean `Report`?"),
+            "{:#?}",
+            diagnostic.fixes
         );
     }
 

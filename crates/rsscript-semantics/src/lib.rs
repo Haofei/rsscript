@@ -185,7 +185,7 @@ pub use generation::{
     GenerationInterfaceSetSnapshot, GenerationInterfaceSnapshot, GenerationQueryIdentity,
     GenerationQuerySnapshot, GenerationRestoreError, GenerationSession, GenerationSessionStats,
     IdentifierRoleName, LiteralKindName, ParameterFact, ParserTerminal, PrefixStatus,
-    SemanticValidity, TextRange, TypeRef, valid_continuations,
+    SemanticValidity, TextRange, TypeRef, render_callable_signature, valid_continuations,
 };
 pub use generic_constraints::{
     ProtocolSatisfactionFacts, SubstitutionBudget, SubstitutionError,
