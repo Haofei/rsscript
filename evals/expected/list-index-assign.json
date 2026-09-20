@@ -1,0 +1,25 @@
+{
+  "task_id": "list-index-assign",
+  "candidate_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "target_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "invariants": [
+    {
+      "kind": "source_contains",
+      "value": "] = "
+    },
+    {
+      "kind": "diagnostic_absent",
+      "value": "RS0311"
+    },
+    {
+      "kind": "diagnostic_absent",
+      "value": "RS0206"
+    }
+  ]
+}

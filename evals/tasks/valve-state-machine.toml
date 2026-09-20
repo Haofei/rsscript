@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "valve-state-machine"
+version = 1
+mode = "review"
+title = "Drive a four-state valve machine held as a sum type"
+prompt = "Write a single RSScript file modelling a valve as a state machine. Declare sum ValveState with variants Closed, Opening(percent: Int), Open and Faulted(code: Int). Write fn step(state: read ValveState, command: read String) -> fresh ValveState where Closed moves to Opening(percent: 0) on \"open\", Opening advances by 50 until it reaches 100 and then becomes Open, Open returns to Closed on \"close\", and Faulted is unchanged; and fn label(state: read ValveState) -> fresh String rendering each state. Every match must cover all four variants, and an `if` must be a statement rather than a value. Add fn main() -> Unit that steps a closed valve four times with the open command and writes the final label."
+candidate = "fixtures/valve-state-machine/candidate.rss"
+interfaces = []
+expected = "expected/valve-state-machine.json"
+tags = ["sum-type", "state-machine", "match", "generation"]

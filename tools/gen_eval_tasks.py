@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-shot generator for the 20 generation tasks added to the eval corpus.
+"""Generator for the generation tasks in the eval corpus.
 
 Kept in-tree so the task/expected pairs can be regenerated deterministically
 instead of being hand-edited out of sync.
@@ -16,6 +16,8 @@ EVALS = ROOT / "evals"
 AUTOMATION = "interfaces/automation_api.rssi"
 CONFIG_STORE = "interfaces/config_store.rssi"
 REPORT_SINK = "interfaces/report_sink.rssi"
+DEVICE_SESSION = "interfaces/device_session.rssi"
+INVENTORY = "interfaces/inventory_api.rssi"
 
 TASKS = [
     {
@@ -455,6 +457,454 @@ TASKS = [
             {"kind": "source_contains", "value": "with ConfigStore.open"},
             {"kind": "diagnostic_absent", "value": "RS0702"},
             {"kind": "diagnostic_absent", "value": "RS0031"},
+        ],
+    },
+    {
+        "id": "device-report-render",
+        "title": "Render a list of device readings as a report string",
+        "prompt": (
+            "Write a single RSScript file that renders a list of records as one report "
+            "string. Declare a struct Reading with fields sensor: String and value: Int. "
+            "Write fn format_reading(reading: read Reading) -> fresh String that renders "
+            "one reading as `sensor=value`, and fn render_report(title: read String, "
+            "readings: read List<Reading>) -> fresh String that builds a list of lines "
+            "holding the title, one line per reading, and a final `count=N` line, then "
+            "joins the lines with the core list join and a newline separator. Add fn "
+            "main() -> Unit that builds two readings and writes the report with "
+            "Output.write. Use only the core interfaces; do not invent a host API."
+        ),
+        "interfaces": [],
+        "tags": ["collections", "strings", "report", "generation"],
+        "invariants": [
+            {"kind": "source_contains", "value": "List.join"},
+            {"kind": "source_excludes", "value": ".unwrap()"},
+            {"kind": "diagnostic_absent", "value": "RS0206"},
+        ],
+    },
+    {
+        "id": "config-typed-errors",
+        "title": "Validate a config and return a typed error",
+        "prompt": (
+            "Write a single RSScript file that validates a configuration and reports "
+            "failures as a typed error rather than a string. Declare struct PumpConfig "
+            "with fields name: String, interval_ms: Int and retries: Int, and sum "
+            "ConfigError with variants MissingField(field: String) and OutOfRange(field: "
+            "String, value: Int). Write fn ConfigError.describe(error: read ConfigError) "
+            "-> fresh String rendering each variant, and fn validate(config: read "
+            "PumpConfig) -> Result<Unit, ConfigError> that rejects an empty name, an "
+            "interval_ms outside 100..=60000, and a retries count outside 0..=10. Every "
+            "match must cover both variants. Add fn main() -> Unit that validates a "
+            "literal config and writes the name or the described error."
+        ),
+        "interfaces": [],
+        "tags": ["validation", "sum-type", "result", "generation"],
+        "invariants": [
+            {"kind": "source_contains", "value": "sum ConfigError"},
+            {"kind": "diagnostic_absent", "value": "RS0021"},
+            {"kind": "diagnostic_absent", "value": "RS0206"},
+        ],
+    },
+    {
+        "id": "firmware-retry-attempts",
+        "title": "Retry a declared host call within an attempt budget",
+        "prompt": (
+            "Write a single RSScript file that retries one fallible host call within an "
+            "attempt budget. The only host surface available is the declared interface: "
+            "Sync.push(id: read String, amount: Int) -> Result<Int, SyncError>, "
+            "Sync.is_retryable(error: read SyncError) -> Bool, SyncError.message(error: "
+            "read SyncError) -> fresh String, and Metrics.record(name: read String, "
+            "value: Int) -> Unit. Write fn push_until_accepted(id: read String, amount: "
+            "Int, budget: Int) -> Result<Int, String> that calls the push at most `budget` "
+            "times, returns immediately when the error is not retryable, records the "
+            "attempt number with Metrics.record on success, and otherwise returns the last "
+            "error message. Add fn main() -> Unit that calls it and writes the outcome. Do "
+            "not invent any other host API."
+        ),
+        "interfaces": [AUTOMATION],
+        "tags": ["result", "retry", "host-boundary", "generation"],
+        "invariants": [
+            {"kind": "source_contains", "value": "Sync.push"},
+            {"kind": "source_contains", "value": "Metrics.record"},
+            {"kind": "diagnostic_absent", "value": "RS0206"},
+        ],
+    },
+    {
+        "id": "telemetry-cancel-pipeline",
+        "title": "Producer and consumer over a channel with an explicit cancellation token",
+        "prompt": (
+            "Write a single RSScript file that moves telemetry samples from a producer to "
+            "a consumer over a bounded channel and cancels both with one token. In main, "
+            "create a bounded Int channel with capacity 2, take its sender and receiver, "
+            "and create a CancellationSource whose token is passed into both tasks. Write "
+            "async fn publish(sender: Sender<Int>, samples: read List<Int>, token: "
+            "CancellationToken) -> Result<Int, ChannelError> that stops early when the "
+            "token is cancelled and otherwise sends every sample with the cancellable send, "
+            "and async fn collect(receiver: Receiver<Int>, limit: Int, token: "
+            "CancellationToken) -> Result<Int, ChannelError> that sums received values "
+            "until it has seen `limit` of them or the channel closes. Run both inside one "
+            "task_group with async let and await both there; cancel the source after the "
+            "consumer finishes. Channel values transfer ownership, so send with take."
+        ),
+        "interfaces": [],
+        "tags": ["async", "channel", "cancellation", "ownership", "generation"],
+        "invariants": [
+            {"kind": "source_contains", "value": "task_group"},
+            {"kind": "source_contains", "value": "CancellationSource"},
+            {"kind": "source_contains", "value": "take "},
+        ],
+    },
+    {
+        "id": "session-with-cleanup",
+        "title": "Apply settings in a `with` scope that cleans up on the error path",
+        "prompt": (
+            "Write a single RSScript file that applies a list of settings to a scoped host "
+            "session. The only host surface available is the declared interface: a resource "
+            "DeviceSession with DeviceSession.open(device: read String) -> "
+            "Result<DeviceSession, String>, DeviceSession.apply(session: mut DeviceSession, "
+            "setting: read String, value: Int) -> Result<Unit, String>, "
+            "DeviceSession.commit(session: mut DeviceSession) -> Result<Int, String>, plus "
+            "Audit.note(event: read String) -> Unit. Write fn apply_settings(device: read "
+            "String, settings: read List<String>, value: Int) -> Result<Int, String> that "
+            "acquires the session with a `with` scope so cleanup runs on every path, "
+            "applies each setting in order, and on the first failure notes the aborted "
+            "setting with Audit.note and returns that error; on success it commits, notes "
+            "the commit, and returns the version. The session must not escape the `with` "
+            "scope. Add fn main() -> Unit that calls it and writes the outcome."
+        ),
+        "interfaces": [DEVICE_SESSION],
+        "tags": ["resource", "with", "host-boundary", "generation"],
+        "invariants": [
+            {"kind": "source_contains", "value": "with DeviceSession.open"},
+            {"kind": "source_contains", "value": "session: mut session"},
+            {"kind": "diagnostic_absent", "value": "RS0702"},
+        ],
+    },
+    {
+        "id": "protocol-select-impl",
+        "title": "Pick one of two protocol implementations from an input string",
+        "prompt": (
+            "Write a single RSScript file that picks a sink implementation at run time. "
+            "Declare a protocol Sink with one method fn deliver(self: read Self, line: read "
+            "String) -> fresh String, and two structs implementing it: ConsoleSink (field "
+            "prefix: String) rendering `prefix: line`, and JsonSink (field channel: String) "
+            "rendering a JSON field with the core Json interface. Provide the implementation "
+            "functions and an `impl Sink for ...` block for each. Write fn sink_for(kind: "
+            "read String) -> fresh Dyn<Sink> that returns the JSON sink when kind is "
+            '"json" and the console sink otherwise, and fn deliver_line(kind: read String, '
+            "line: read String) -> fresh String that dispatches dynamically through it. Add "
+            "fn main() -> Unit that writes both renderings. Dynamic protocol dispatch is "
+            "written as Dyn<P>."
+        ),
+        "interfaces": [],
+        "tags": ["protocol", "dyn", "dispatch", "generation"],
+        "invariants": [
+            {"kind": "source_contains", "value": "protocol Sink"},
+            {"kind": "source_contains", "value": "Dyn<Sink>"},
+            {"kind": "source_contains", "value": "Dyn.from"},
+        ],
+    },
+    {
+        "id": "callback-helper-twice",
+        "title": "Call one `noescape Fn` helper twice with different closures",
+        "prompt": (
+            "Write a single RSScript file with one callback-taking helper used twice. Write "
+            "fn count_matching(values: read List<Int>, predicate: noescape Fn(Int) -> Bool) "
+            "-> Int that counts the values the predicate accepts, and fn summarise(values: "
+            "read List<Int>, limit: Int) -> fresh String that calls count_matching twice — "
+            "once with a closure keeping values above the limit and once with a closure "
+            "keeping the rest — and renders the two counts as `high/low`. Add fn main() -> "
+            "Unit that writes the summary for a literal list. The callback must not escape "
+            "its call."
+        ),
+        "interfaces": [],
+        "tags": ["closures", "noescape", "generation"],
+        "invariants": [
+            {"kind": "source_contains", "value": "noescape Fn"},
+            {"kind": "diagnostic_absent", "value": "RS0802"},
+            {"kind": "diagnostic_absent", "value": "RS0206"},
+        ],
+    },
+    {
+        "id": "closure-capture-local",
+        "title": "Call a local closure that captures a surrounding local",
+        "prompt": (
+            "Write a single RSScript file whose helper builds a closure over its own "
+            "locals. Write fn scaled_total(values: read List<Int>, factor: Int, offset: "
+            "Int) -> Int that binds a closure capturing factor and offset implicitly, then "
+            "calls it once per value and sums the results. A closure that will be called by "
+            "name is bound with `local`; it must not be returned or stored. Add fn main() "
+            "-> Unit that writes the scaled total of a literal list."
+        ),
+        "interfaces": [],
+        "tags": ["closures", "captures", "generation"],
+        "invariants": [
+            {"kind": "source_contains", "value": "local "},
+            {"kind": "diagnostic_absent", "value": "RS0803"},
+            {"kind": "diagnostic_absent", "value": "RS0026"},
+        ],
+    },
+    {
+        "id": "variant-payload-match",
+        "title": "Match a sum type whose variants carry payloads",
+        "prompt": (
+            "Write a single RSScript file modelling a command union. Declare sum Command "
+            "with variants Ping, SetPoint(sensor: String, target: Int) and Shutdown(reason: "
+            "String). Write fn apply_command(command: read Command, current: Int) -> Int "
+            "that returns the current value for Ping, the target for SetPoint and 0 for "
+            "Shutdown, and fn describe(command: read Command) -> fresh String that renders "
+            "each variant. Bind the payloads in the patterns; every match must cover all "
+            "three variants and bind exactly the fields each variant declares. Add fn "
+            "main() -> Unit that builds a SetPoint command and writes both results."
+        ),
+        "interfaces": [],
+        "tags": ["sum-type", "match", "patterns", "generation"],
+        "invariants": [
+            {"kind": "source_contains", "value": "sum Command"},
+            {"kind": "diagnostic_absent", "value": "RS0021"},
+            {"kind": "diagnostic_absent", "value": "RS0037"},
+        ],
+    },
+    {
+        "id": "string-builder-report",
+        "title": "Build a multi-line report with `StringBuilder`",
+        "prompt": (
+            "Write a single RSScript file that builds a report incrementally rather than by "
+            "repeated concatenation. Declare struct Entry with fields label: String and "
+            "count: Int. Write fn render_entries(title: read String, entries: read "
+            "List<Entry>) -> fresh String that uses the core StringBuilder: create one, push "
+            "the title and a newline, push an indented `label: count` line per entry, and "
+            "finish the builder to produce the string. Finishing consumes the builder, so it "
+            "has to be a binding that can be taken. Add fn main() -> Unit that builds two "
+            "entries and writes the rendered report."
+        ),
+        "interfaces": [],
+        "tags": ["strings", "string-builder", "ownership", "generation"],
+        "invariants": [
+            {"kind": "source_contains", "value": "StringBuilder.new"},
+            {"kind": "source_contains", "value": "StringBuilder.finish"},
+            {"kind": "diagnostic_absent", "value": "RS0308"},
+        ],
+    },
+    {
+        "id": "map-default-aggregate",
+        "title": "Aggregate totals with `Map.get_or_default`",
+        "prompt": (
+            "Write a single RSScript file that totals amounts per SKU. Write fn "
+            "total_by_sku(skus: read List<String>, amounts: read List<Int>) -> fresh "
+            "Map<String, Int> that walks the two parallel lists by index and accumulates "
+            "each amount into the map, reading the running total with the core map "
+            "get-or-default rather than branching on presence, and fn total_for(totals: read "
+            "Map<String, Int>, sku: read String) -> Int returning 0 for an absent key. "
+            "Mutation of the map is explicit at the call site. Add fn main() -> Unit that "
+            "writes the total for a present key and for an absent one."
+        ),
+        "interfaces": [],
+        "tags": ["collections", "map", "mut", "generation"],
+        "invariants": [
+            {"kind": "source_contains", "value": "Map.get_or_default"},
+            {"kind": "source_contains", "value": "map: mut"},
+            {"kind": "diagnostic_absent", "value": "RS0202"},
+        ],
+    },
+    {
+        "id": "valve-state-machine",
+        "title": "Drive a four-state valve machine held as a sum type",
+        "prompt": (
+            "Write a single RSScript file modelling a valve as a state machine. Declare sum "
+            "ValveState with variants Closed, Opening(percent: Int), Open and Faulted(code: "
+            "Int). Write fn step(state: read ValveState, command: read String) -> fresh "
+            'ValveState where Closed moves to Opening(percent: 0) on "open", Opening '
+            "advances by 50 until it reaches 100 and then becomes Open, Open returns to "
+            'Closed on "close", and Faulted is unchanged; and fn label(state: read '
+            "ValveState) -> fresh String rendering each state. Every match must cover all "
+            "four variants, and an `if` must be a statement rather than a value. Add fn "
+            "main() -> Unit that steps a closed valve four times with the open command and "
+            "writes the final label."
+        ),
+        "interfaces": [],
+        "tags": ["sum-type", "state-machine", "match", "generation"],
+        "invariants": [
+            {"kind": "source_contains", "value": "sum ValveState"},
+            {"kind": "diagnostic_absent", "value": "RS0021"},
+            {"kind": "diagnostic_absent", "value": "RS0209"},
+        ],
+    },
+    {
+        "id": "json-array-field-total",
+        "title": "Parse JSON, walk an array and total one field",
+        "prompt": (
+            "Write a single RSScript file that totals one field across a JSON array. Write "
+            "fn total_readings(text: read String) -> Result<Int, JsonError> that parses the "
+            "text with the core Json interface, reads the object field `readings`, walks the "
+            "array by index, reads the integer field `value` from each element, and returns "
+            "the sum. Propagate every JsonError rather than unwrapping. Add fn main() -> "
+            "Unit that calls it on a literal document with two readings and writes the total "
+            "or the error message. Use only the core Json interface."
+        ),
+        "interfaces": [],
+        "tags": ["json", "result", "generation"],
+        "invariants": [
+            {"kind": "source_contains", "value": "Json.parse"},
+            {"kind": "source_excludes", "value": ".unwrap()"},
+            {"kind": "diagnostic_absent", "value": "RS0206"},
+        ],
+    },
+    {
+        "id": "option-chain-defaults",
+        "title": "Chain optional lookups down to defaults",
+        "prompt": (
+            "Write a single RSScript file that reads a window definition out of one line of "
+            "text, falling back to defaults. Declare struct Window with fields start: Int "
+            "and width: Int. Write fn field_of(line: read String, delimiter: read String) -> "
+            "Option<String> returning the text after the delimiter, fn parsed_field(line: "
+            "read String, delimiter: read String) -> Option<Int> that chains that lookup "
+            "into an integer parse with the core Option combinator, and fn window_from(line: "
+            'read String) -> fresh Window that defaults start to 0 and width to 60, keeping '
+            "a parsed width only when it is positive. Do not unwrap an Option. Add fn "
+            "main() -> Unit that writes both resolved fields for a literal line."
+        ),
+        "interfaces": [],
+        "tags": ["option", "defaults", "generation"],
+        "invariants": [
+            {"kind": "source_contains", "value": "Option.unwrap_or"},
+            {"kind": "source_excludes", "value": ".unwrap()"},
+            {"kind": "diagnostic_absent", "value": "RS0206"},
+        ],
+    },
+    {
+        "id": "result-question-mapping",
+        "title": "Propagate a domain error with `?` through three stages",
+        "prompt": (
+            "Write a single RSScript file that ingests amounts and reports a typed failure. "
+            "Declare sum IngestError with variants Malformed(detail: String) and "
+            "Rejected(detail: String), and fn IngestError.detail(error: read IngestError) -> "
+            "fresh String rendering each. Write fn parse_amount(raw: read String) -> "
+            "Result<Int, IngestError> returning Malformed when the trimmed text is not an "
+            "integer, fn check_amount(amount: Int) -> Result<Int, IngestError> returning "
+            "Rejected for a non-positive amount, and fn ingest(raw: read String) -> "
+            "Result<Int, IngestError> that calls both with `?` and doubles the accepted "
+            "amount. Write fn ingest_all(raws: read List<String>) -> Result<Int, String> "
+            "that totals a list and returns the rendered detail of the first failure. Add fn "
+            "main() -> Unit that writes the total or the error."
+        ),
+        "interfaces": [],
+        "tags": ["result", "sum-type", "error-mapping", "generation"],
+        "invariants": [
+            {"kind": "source_contains", "value": "sum IngestError"},
+            {"kind": "source_contains", "value": ")?"},
+            {"kind": "diagnostic_absent", "value": "RS0021"},
+        ],
+    },
+    {
+        "id": "select-deadline-cancel",
+        "title": "Race work against a deadline with `select` and cancel the loser",
+        "prompt": (
+            "Write a single RSScript file that races a unit of work against a deadline "
+            "signal. Create two bounded Int channels of capacity 1 — one carrying the work "
+            "result and one carrying the deadline marker — and take a sender and a receiver "
+            "from each. Write one async fn per side that sends a value on its channel. "
+            "Inside one task_group, start an async let for each, then use a `select` block "
+            "with one arm per receiver, where each arm awaits the receive on that receiver; "
+            "the deadline arm writes that the deadline fired and cancels an explicit "
+            "CancellationSource. Await both async let handles in the same task_group. Note "
+            "that `async let` handles cannot be awaited from inside a `select` arm: select "
+            "arms await a direct async operation. Add fn main() -> Unit that runs it and "
+            "reports the outcome."
+        ),
+        "interfaces": [],
+        "tags": ["async", "task-group", "select", "cancellation", "generation"],
+        "invariants": [
+            {"kind": "source_contains", "value": "task_group"},
+            {"kind": "source_contains", "value": "select {"},
+            {"kind": "source_contains", "value": "CancellationSource.cancel"},
+        ],
+    },
+    {
+        "id": "two-host-ordered-calls",
+        "title": "Call two declared host interfaces in a fixed order",
+        "prompt": (
+            "Write a single RSScript file that must use two separate declared host "
+            "interfaces in order. The available host surface is exactly: "
+            "Inventory.reserve(sku: read String, count: Int) -> Result<Int, String> and "
+            "Inventory.release(sku: read String, count: Int) -> Unit, plus Sync.push(id: "
+            "read String, amount: Int) -> Result<Int, SyncError>, SyncError.message(error: "
+            "read SyncError) -> fresh String and Metrics.record(name: read String, value: "
+            "Int) -> Unit. Write fn ship(sku: read String, count: Int) -> Result<Int, "
+            "String> that reserves first and only then pushes the reserved amount; on a "
+            "push failure it releases the reservation and returns the error message, and on "
+            "success it records the accepted count with Metrics.record and returns it. Add "
+            "fn main() -> Unit that ships one sku and writes the outcome. Do not invent, "
+            "import, or assume any other host API."
+        ),
+        "interfaces": [INVENTORY, AUTOMATION],
+        "tags": ["host-boundary", "external-symbol", "ordering", "generation"],
+        "invariants": [
+            {"kind": "source_contains", "value": "Inventory.reserve"},
+            {"kind": "source_contains", "value": "Sync.push"},
+            {"kind": "diagnostic_absent", "value": "RS0206"},
+        ],
+    },
+    {
+        "id": "list-index-assign",
+        "title": "Clamp a list in place with index assignment",
+        "prompt": (
+            "Write a single RSScript file that clamps samples in place. Write fn "
+            "clamp_samples(samples: read List<Int>, ceiling: Int) -> fresh List<Int> that "
+            "copies the samples into a new mutable list and then walks it by index, "
+            "replacing every element above the ceiling by assigning to that index directly "
+            "rather than by rebuilding the list. Only a `let mut` binding can be assigned "
+            "into. Add fn main() -> Unit that clamps a literal list, renders the elements as "
+            "strings and writes them joined by commas."
+        ),
+        "interfaces": [],
+        "tags": ["collections", "assignment", "generation"],
+        "invariants": [
+            {"kind": "source_contains", "value": "] = "},
+            {"kind": "diagnostic_absent", "value": "RS0311"},
+            {"kind": "diagnostic_absent", "value": "RS0206"},
+        ],
+    },
+    {
+        "id": "let-else-early-return",
+        "title": "Return early from a failed pattern with `let ... else`",
+        "prompt": (
+            "Write a single RSScript file that parses a route and leaves early when it does "
+            "not match. Declare struct Route with fields host: String and port: Int. Write "
+            "fn parse_route(raw: read String) -> Option<Route> that splits the text on a "
+            "colon, requires exactly two fields, trims both, and uses a `let ... else` "
+            "binding for the parsed port so a non-integer port returns None without "
+            "nesting; an empty host also returns None. Write fn describe_route(raw: read "
+            'String) -> fresh String that uses `let ... else` on that Option and returns '
+            '"unroutable" when it is None, otherwise `host/port`. The `else` block must '
+            "diverge. Add fn main() -> Unit that writes both a routable and an unroutable "
+            "example."
+        ),
+        "interfaces": [],
+        "tags": ["option", "patterns", "control-flow", "generation"],
+        "invariants": [
+            {"kind": "source_contains", "value": "let Some("},
+            {"kind": "source_contains", "value": "else {"},
+            {"kind": "diagnostic_absent", "value": "RS0206"},
+        ],
+    },
+    {
+        "id": "tuple-destructure-caller",
+        "title": "Return a tuple and destructure it at the call site",
+        "prompt": (
+            "Write a single RSScript file whose helper returns several counts at once. Write "
+            "fn split_levels(lines: read List<String>) -> (Int, Int, Int) that counts the "
+            'lines starting with "error", the lines starting with "warn", and everything '
+            "else, and returns the three counts as one tuple. Add fn main() -> Unit that "
+            "calls it on a literal three-line list, destructures the returned tuple into "
+            "three bindings in a single `let`, and writes each count. Use only the core "
+            "interfaces."
+        ),
+        "interfaces": [],
+        "tags": ["tuples", "destructuring", "generation"],
+        "invariants": [
+            {"kind": "source_contains", "value": "-> (Int, Int, Int)"},
+            {"kind": "source_contains", "value": "let ("},
+            {"kind": "diagnostic_absent", "value": "RS0208"},
         ],
     },
 ]

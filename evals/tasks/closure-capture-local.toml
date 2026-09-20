@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "closure-capture-local"
+version = 1
+mode = "review"
+title = "Call a local closure that captures a surrounding local"
+prompt = "Write a single RSScript file whose helper builds a closure over its own locals. Write fn scaled_total(values: read List<Int>, factor: Int, offset: Int) -> Int that binds a closure capturing factor and offset implicitly, then calls it once per value and sums the results. A closure that will be called by name is bound with `local`; it must not be returned or stored. Add fn main() -> Unit that writes the scaled total of a literal list."
+candidate = "fixtures/closure-capture-local/candidate.rss"
+interfaces = []
+expected = "expected/closure-capture-local.json"
+tags = ["closures", "captures", "generation"]

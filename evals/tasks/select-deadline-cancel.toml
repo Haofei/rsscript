@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "select-deadline-cancel"
+version = 1
+mode = "review"
+title = "Race work against a deadline with `select` and cancel the loser"
+prompt = "Write a single RSScript file that races a unit of work against a deadline signal. Create two bounded Int channels of capacity 1 \u2014 one carrying the work result and one carrying the deadline marker \u2014 and take a sender and a receiver from each. Write one async fn per side that sends a value on its channel. Inside one task_group, start an async let for each, then use a `select` block with one arm per receiver, where each arm awaits the receive on that receiver; the deadline arm writes that the deadline fired and cancels an explicit CancellationSource. Await both async let handles in the same task_group. Note that `async let` handles cannot be awaited from inside a `select` arm: select arms await a direct async operation. Add fn main() -> Unit that runs it and reports the outcome."
+candidate = "fixtures/select-deadline-cancel/candidate.rss"
+interfaces = []
+expected = "expected/select-deadline-cancel.json"
+tags = ["async", "task-group", "select", "cancellation", "generation"]

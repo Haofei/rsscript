@@ -1,0 +1,25 @@
+{
+  "task_id": "variant-payload-match",
+  "candidate_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "target_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "invariants": [
+    {
+      "kind": "source_contains",
+      "value": "sum Command"
+    },
+    {
+      "kind": "diagnostic_absent",
+      "value": "RS0021"
+    },
+    {
+      "kind": "diagnostic_absent",
+      "value": "RS0037"
+    }
+  ]
+}

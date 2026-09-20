@@ -1,0 +1,47 @@
+async fn work(sender: Sender<Int>, value: Int) -> Result<Unit, ChannelError> {
+    local item = value
+    await Sender.send<Int>(sender: sender, value: take item)?
+    return Ok(Unit)
+}
+
+async fn deadline(sender: Sender<Int>) -> Result<Unit, ChannelError> {
+    local marker = 0
+    await Sender.send<Int>(sender: sender, value: take marker)?
+    return Ok(Unit)
+}
+
+fn run_with_deadline() -> Result<Unit, ChannelError> {
+    let mut work_channel = Channel.bounded<Int>(capacity: 1)?
+    let mut deadline_channel = Channel.bounded<Int>(capacity: 1)?
+    let work_sender = Channel.sender<Int>(channel: work_channel)
+    let deadline_sender = Channel.sender<Int>(channel: deadline_channel)
+    let work_receiver = Channel.receiver<Int>(channel: mut work_channel)?
+    let deadline_receiver = Channel.receiver<Int>(channel: mut deadline_channel)?
+    let mut source = CancellationSource.new()
+
+    task_group {
+        async let worker = work(sender: work_sender, value: 7)
+        async let timer = deadline(sender: deadline_sender)
+        select {
+            done = await Receiver.recv<Int>(receiver: work_receiver) => {
+                Output.write(message: "finished")
+            }
+            expired = await Receiver.recv<Int>(receiver: deadline_receiver) => {
+                Output.write(message: "deadline")
+                CancellationSource.cancel(source: mut source)
+            }
+        }
+        await worker?
+        await timer?
+    }
+
+    return Ok(Unit)
+}
+
+fn main() -> Unit {
+    match run_with_deadline() {
+        Ok(done) => { Output.write(message: "done") }
+        Err(error) => { Output.error(message: ChannelError.message(error: error)) }
+    }
+    return Unit
+}

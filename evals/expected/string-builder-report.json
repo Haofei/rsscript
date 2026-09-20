@@ -1,0 +1,25 @@
+{
+  "task_id": "string-builder-report",
+  "candidate_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "target_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "invariants": [
+    {
+      "kind": "source_contains",
+      "value": "StringBuilder.new"
+    },
+    {
+      "kind": "source_contains",
+      "value": "StringBuilder.finish"
+    },
+    {
+      "kind": "diagnostic_absent",
+      "value": "RS0308"
+    }
+  ]
+}

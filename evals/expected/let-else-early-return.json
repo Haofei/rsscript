@@ -1,0 +1,25 @@
+{
+  "task_id": "let-else-early-return",
+  "candidate_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "target_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "invariants": [
+    {
+      "kind": "source_contains",
+      "value": "let Some("
+    },
+    {
+      "kind": "source_contains",
+      "value": "else {"
+    },
+    {
+      "kind": "diagnostic_absent",
+      "value": "RS0206"
+    }
+  ]
+}

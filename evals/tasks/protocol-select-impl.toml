@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "protocol-select-impl"
+version = 1
+mode = "review"
+title = "Pick one of two protocol implementations from an input string"
+prompt = "Write a single RSScript file that picks a sink implementation at run time. Declare a protocol Sink with one method fn deliver(self: read Self, line: read String) -> fresh String, and two structs implementing it: ConsoleSink (field prefix: String) rendering `prefix: line`, and JsonSink (field channel: String) rendering a JSON field with the core Json interface. Provide the implementation functions and an `impl Sink for ...` block for each. Write fn sink_for(kind: read String) -> fresh Dyn<Sink> that returns the JSON sink when kind is \"json\" and the console sink otherwise, and fn deliver_line(kind: read String, line: read String) -> fresh String that dispatches dynamically through it. Add fn main() -> Unit that writes both renderings. Dynamic protocol dispatch is written as Dyn<P>."
+candidate = "fixtures/protocol-select-impl/candidate.rss"
+interfaces = []
+expected = "expected/protocol-select-impl.json"
+tags = ["protocol", "dyn", "dispatch", "generation"]

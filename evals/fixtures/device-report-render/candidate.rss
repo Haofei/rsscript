@@ -1,0 +1,35 @@
+struct Reading {
+    sensor: String
+    value: Int
+}
+
+fn format_reading(reading: read Reading) -> fresh String {
+    return String.concat(
+        left: String.concat(left: reading.sensor, right: "="),
+        right: String.from_int(value: reading.value),
+    )
+}
+
+fn render_report(title: read String, readings: read List<Reading>) -> fresh String {
+    let mut lines = List.new<String>()
+    List.push<String>(list: mut lines, value: title)
+    for reading in readings {
+        List.push<String>(list: mut lines, value: format_reading(reading: reading))
+    }
+    List.push<String>(
+        list: mut lines,
+        value: String.concat(
+            left: "count=",
+            right: String.from_int(value: List.len<Reading>(list: readings)),
+        ),
+    )
+    return List.join(list: lines, separator: "\n")
+}
+
+fn main() -> Unit {
+    let mut readings = List.new<Reading>()
+    List.push<Reading>(list: mut readings, value: Reading(sensor: "intake", value: 21))
+    List.push<Reading>(list: mut readings, value: Reading(sensor: "outlet", value: 34))
+    Output.write(message: render_report(title: "daily", readings: readings))
+    return Unit
+}

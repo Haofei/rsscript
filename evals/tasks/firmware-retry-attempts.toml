@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "firmware-retry-attempts"
+version = 1
+mode = "review"
+title = "Retry a declared host call within an attempt budget"
+prompt = "Write a single RSScript file that retries one fallible host call within an attempt budget. The only host surface available is the declared interface: Sync.push(id: read String, amount: Int) -> Result<Int, SyncError>, Sync.is_retryable(error: read SyncError) -> Bool, SyncError.message(error: read SyncError) -> fresh String, and Metrics.record(name: read String, value: Int) -> Unit. Write fn push_until_accepted(id: read String, amount: Int, budget: Int) -> Result<Int, String> that calls the push at most `budget` times, returns immediately when the error is not retryable, records the attempt number with Metrics.record on success, and otherwise returns the last error message. Add fn main() -> Unit that calls it and writes the outcome. Do not invent any other host API."
+candidate = "fixtures/firmware-retry-attempts/candidate.rss"
+interfaces = ["interfaces/automation_api.rssi"]
+expected = "expected/firmware-retry-attempts.json"
+tags = ["result", "retry", "host-boundary", "generation"]

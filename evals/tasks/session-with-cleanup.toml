@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "session-with-cleanup"
+version = 1
+mode = "review"
+title = "Apply settings in a `with` scope that cleans up on the error path"
+prompt = "Write a single RSScript file that applies a list of settings to a scoped host session. The only host surface available is the declared interface: a resource DeviceSession with DeviceSession.open(device: read String) -> Result<DeviceSession, String>, DeviceSession.apply(session: mut DeviceSession, setting: read String, value: Int) -> Result<Unit, String>, DeviceSession.commit(session: mut DeviceSession) -> Result<Int, String>, plus Audit.note(event: read String) -> Unit. Write fn apply_settings(device: read String, settings: read List<String>, value: Int) -> Result<Int, String> that acquires the session with a `with` scope so cleanup runs on every path, applies each setting in order, and on the first failure notes the aborted setting with Audit.note and returns that error; on success it commits, notes the commit, and returns the version. The session must not escape the `with` scope. Add fn main() -> Unit that calls it and writes the outcome."
+candidate = "fixtures/session-with-cleanup/candidate.rss"
+interfaces = ["interfaces/device_session.rssi"]
+expected = "expected/session-with-cleanup.json"
+tags = ["resource", "with", "host-boundary", "generation"]

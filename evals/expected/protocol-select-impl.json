@@ -1,0 +1,25 @@
+{
+  "task_id": "protocol-select-impl",
+  "candidate_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "target_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "invariants": [
+    {
+      "kind": "source_contains",
+      "value": "protocol Sink"
+    },
+    {
+      "kind": "source_contains",
+      "value": "Dyn<Sink>"
+    },
+    {
+      "kind": "source_contains",
+      "value": "Dyn.from"
+    }
+  ]
+}

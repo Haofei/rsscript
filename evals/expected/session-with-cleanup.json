@@ -1,0 +1,25 @@
+{
+  "task_id": "session-with-cleanup",
+  "candidate_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "target_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "invariants": [
+    {
+      "kind": "source_contains",
+      "value": "with DeviceSession.open"
+    },
+    {
+      "kind": "source_contains",
+      "value": "session: mut session"
+    },
+    {
+      "kind": "diagnostic_absent",
+      "value": "RS0702"
+    }
+  ]
+}

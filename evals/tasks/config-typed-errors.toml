@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "config-typed-errors"
+version = 1
+mode = "review"
+title = "Validate a config and return a typed error"
+prompt = "Write a single RSScript file that validates a configuration and reports failures as a typed error rather than a string. Declare struct PumpConfig with fields name: String, interval_ms: Int and retries: Int, and sum ConfigError with variants MissingField(field: String) and OutOfRange(field: String, value: Int). Write fn ConfigError.describe(error: read ConfigError) -> fresh String rendering each variant, and fn validate(config: read PumpConfig) -> Result<Unit, ConfigError> that rejects an empty name, an interval_ms outside 100..=60000, and a retries count outside 0..=10. Every match must cover both variants. Add fn main() -> Unit that validates a literal config and writes the name or the described error."
+candidate = "fixtures/config-typed-errors/candidate.rss"
+interfaces = []
+expected = "expected/config-typed-errors.json"
+tags = ["validation", "sum-type", "result", "generation"]

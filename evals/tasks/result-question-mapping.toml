@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "result-question-mapping"
+version = 1
+mode = "review"
+title = "Propagate a domain error with `?` through three stages"
+prompt = "Write a single RSScript file that ingests amounts and reports a typed failure. Declare sum IngestError with variants Malformed(detail: String) and Rejected(detail: String), and fn IngestError.detail(error: read IngestError) -> fresh String rendering each. Write fn parse_amount(raw: read String) -> Result<Int, IngestError> returning Malformed when the trimmed text is not an integer, fn check_amount(amount: Int) -> Result<Int, IngestError> returning Rejected for a non-positive amount, and fn ingest(raw: read String) -> Result<Int, IngestError> that calls both with `?` and doubles the accepted amount. Write fn ingest_all(raws: read List<String>) -> Result<Int, String> that totals a list and returns the rendered detail of the first failure. Add fn main() -> Unit that writes the total or the error."
+candidate = "fixtures/result-question-mapping/candidate.rss"
+interfaces = []
+expected = "expected/result-question-mapping.json"
+tags = ["result", "sum-type", "error-mapping", "generation"]

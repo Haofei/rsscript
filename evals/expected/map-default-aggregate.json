@@ -1,0 +1,25 @@
+{
+  "task_id": "map-default-aggregate",
+  "candidate_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "target_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "invariants": [
+    {
+      "kind": "source_contains",
+      "value": "Map.get_or_default"
+    },
+    {
+      "kind": "source_contains",
+      "value": "map: mut"
+    },
+    {
+      "kind": "diagnostic_absent",
+      "value": "RS0202"
+    }
+  ]
+}

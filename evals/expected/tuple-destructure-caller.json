@@ -1,0 +1,25 @@
+{
+  "task_id": "tuple-destructure-caller",
+  "candidate_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "target_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "invariants": [
+    {
+      "kind": "source_contains",
+      "value": "-> (Int, Int, Int)"
+    },
+    {
+      "kind": "source_contains",
+      "value": "let ("
+    },
+    {
+      "kind": "diagnostic_absent",
+      "value": "RS0208"
+    }
+  ]
+}

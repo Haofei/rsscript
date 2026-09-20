@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "string-builder-report"
+version = 1
+mode = "review"
+title = "Build a multi-line report with `StringBuilder`"
+prompt = "Write a single RSScript file that builds a report incrementally rather than by repeated concatenation. Declare struct Entry with fields label: String and count: Int. Write fn render_entries(title: read String, entries: read List<Entry>) -> fresh String that uses the core StringBuilder: create one, push the title and a newline, push an indented `label: count` line per entry, and finish the builder to produce the string. Finishing consumes the builder, so it has to be a binding that can be taken. Add fn main() -> Unit that builds two entries and writes the rendered report."
+candidate = "fixtures/string-builder-report/candidate.rss"
+interfaces = []
+expected = "expected/string-builder-report.json"
+tags = ["strings", "string-builder", "ownership", "generation"]

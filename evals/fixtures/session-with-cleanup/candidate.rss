@@ -1,0 +1,24 @@
+fn apply_settings(device: read String, settings: read List<String>, value: Int) -> Result<Int, String> {
+    with DeviceSession.open(device: device)? as session {
+        for setting in settings {
+            match DeviceSession.apply(session: mut session, setting: setting, value: value) {
+                Ok(applied) => { continue }
+                Err(message) => {
+                    Audit.note(event: String.concat(left: "aborted at ", right: setting))
+                    return Err(message)
+                }
+            }
+        }
+        let version = DeviceSession.commit(session: mut session)?
+        Audit.note(event: "committed")
+        return Ok(version)
+    }
+}
+
+fn main() -> Unit {
+    match apply_settings(device: "pump-1", settings: ["interval", "threshold"], value: 5) {
+        Ok(version) => { Output.write(message: String.from_int(value: version)) }
+        Err(message) => { Output.error(message: message) }
+    }
+    return Unit
+}

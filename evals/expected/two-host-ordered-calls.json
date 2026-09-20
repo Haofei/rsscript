@@ -1,0 +1,25 @@
+{
+  "task_id": "two-host-ordered-calls",
+  "candidate_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "target_check": {
+    "outcome": "pass",
+    "diagnostic_codes": []
+  },
+  "invariants": [
+    {
+      "kind": "source_contains",
+      "value": "Inventory.reserve"
+    },
+    {
+      "kind": "source_contains",
+      "value": "Sync.push"
+    },
+    {
+      "kind": "diagnostic_absent",
+      "value": "RS0206"
+    }
+  ]
+}

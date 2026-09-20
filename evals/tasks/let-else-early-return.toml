@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "let-else-early-return"
+version = 1
+mode = "review"
+title = "Return early from a failed pattern with `let ... else`"
+prompt = "Write a single RSScript file that parses a route and leaves early when it does not match. Declare struct Route with fields host: String and port: Int. Write fn parse_route(raw: read String) -> Option<Route> that splits the text on a colon, requires exactly two fields, trims both, and uses a `let ... else` binding for the parsed port so a non-integer port returns None without nesting; an empty host also returns None. Write fn describe_route(raw: read String) -> fresh String that uses `let ... else` on that Option and returns \"unroutable\" when it is None, otherwise `host/port`. The `else` block must diverge. Add fn main() -> Unit that writes both a routable and an unroutable example."
+candidate = "fixtures/let-else-early-return/candidate.rss"
+interfaces = []
+expected = "expected/let-else-early-return.json"
+tags = ["option", "patterns", "control-flow", "generation"]

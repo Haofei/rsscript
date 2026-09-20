@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "callback-helper-twice"
+version = 1
+mode = "review"
+title = "Call one `noescape Fn` helper twice with different closures"
+prompt = "Write a single RSScript file with one callback-taking helper used twice. Write fn count_matching(values: read List<Int>, predicate: noescape Fn(Int) -> Bool) -> Int that counts the values the predicate accepts, and fn summarise(values: read List<Int>, limit: Int) -> fresh String that calls count_matching twice \u2014 once with a closure keeping values above the limit and once with a closure keeping the rest \u2014 and renders the two counts as `high/low`. Add fn main() -> Unit that writes the summary for a literal list. The callback must not escape its call."
+candidate = "fixtures/callback-helper-twice/candidate.rss"
+interfaces = []
+expected = "expected/callback-helper-twice.json"
+tags = ["closures", "noescape", "generation"]

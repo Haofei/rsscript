@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "variant-payload-match"
+version = 1
+mode = "review"
+title = "Match a sum type whose variants carry payloads"
+prompt = "Write a single RSScript file modelling a command union. Declare sum Command with variants Ping, SetPoint(sensor: String, target: Int) and Shutdown(reason: String). Write fn apply_command(command: read Command, current: Int) -> Int that returns the current value for Ping, the target for SetPoint and 0 for Shutdown, and fn describe(command: read Command) -> fresh String that renders each variant. Bind the payloads in the patterns; every match must cover all three variants and bind exactly the fields each variant declares. Add fn main() -> Unit that builds a SetPoint command and writes both results."
+candidate = "fixtures/variant-payload-match/candidate.rss"
+interfaces = []
+expected = "expected/variant-payload-match.json"
+tags = ["sum-type", "match", "patterns", "generation"]

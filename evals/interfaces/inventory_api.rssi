@@ -1,0 +1,6 @@
+// A second host surface, deliberately separate from `automation_api.rssi`, so
+// a task can require two declared interfaces to be called in a fixed order.
+
+pub fn Inventory.reserve(sku: read String, count: Int) -> Result<Int, String>
+
+pub fn Inventory.release(sku: read String, count: Int) -> Unit

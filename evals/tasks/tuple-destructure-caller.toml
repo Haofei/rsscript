@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "tuple-destructure-caller"
+version = 1
+mode = "review"
+title = "Return a tuple and destructure it at the call site"
+prompt = "Write a single RSScript file whose helper returns several counts at once. Write fn split_levels(lines: read List<String>) -> (Int, Int, Int) that counts the lines starting with \"error\", the lines starting with \"warn\", and everything else, and returns the three counts as one tuple. Add fn main() -> Unit that calls it on a literal three-line list, destructures the returned tuple into three bindings in a single `let`, and writes each count. Use only the core interfaces."
+candidate = "fixtures/tuple-destructure-caller/candidate.rss"
+interfaces = []
+expected = "expected/tuple-destructure-caller.json"
+tags = ["tuples", "destructuring", "generation"]

@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "list-index-assign"
+version = 1
+mode = "review"
+title = "Clamp a list in place with index assignment"
+prompt = "Write a single RSScript file that clamps samples in place. Write fn clamp_samples(samples: read List<Int>, ceiling: Int) -> fresh List<Int> that copies the samples into a new mutable list and then walks it by index, replacing every element above the ceiling by assigning to that index directly rather than by rebuilding the list. Only a `let mut` binding can be assigned into. Add fn main() -> Unit that clamps a literal list, renders the elements as strings and writes them joined by commas."
+candidate = "fixtures/list-index-assign/candidate.rss"
+interfaces = []
+expected = "expected/list-index-assign.json"
+tags = ["collections", "assignment", "generation"]

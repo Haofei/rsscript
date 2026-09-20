@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "option-chain-defaults"
+version = 1
+mode = "review"
+title = "Chain optional lookups down to defaults"
+prompt = "Write a single RSScript file that reads a window definition out of one line of text, falling back to defaults. Declare struct Window with fields start: Int and width: Int. Write fn field_of(line: read String, delimiter: read String) -> Option<String> returning the text after the delimiter, fn parsed_field(line: read String, delimiter: read String) -> Option<Int> that chains that lookup into an integer parse with the core Option combinator, and fn window_from(line: read String) -> fresh Window that defaults start to 0 and width to 60, keeping a parsed width only when it is positive. Do not unwrap an Option. Add fn main() -> Unit that writes both resolved fields for a literal line."
+candidate = "fixtures/option-chain-defaults/candidate.rss"
+interfaces = []
+expected = "expected/option-chain-defaults.json"
+tags = ["option", "defaults", "generation"]

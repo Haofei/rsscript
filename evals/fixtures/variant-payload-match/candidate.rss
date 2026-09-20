@@ -1,0 +1,33 @@
+sum Command {
+    Ping
+    SetPoint(sensor: String, target: Int)
+    Shutdown(reason: String)
+}
+
+fn apply_command(command: read Command, current: Int) -> Int {
+    match command {
+        Ping => { return current }
+        SetPoint(sensor, target) => { return target }
+        Shutdown(reason) => { return 0 }
+    }
+}
+
+fn describe(command: read Command) -> fresh String {
+    match command {
+        Ping => { return "ping" }
+        SetPoint { sensor, target } => {
+            return String.concat(
+                left: String.concat(left: sensor, right: "->"),
+                right: String.from_int(value: target),
+            )
+        }
+        Shutdown { reason } => { return String.concat(left: "shutdown ", right: reason) }
+    }
+}
+
+fn main() -> Unit {
+    let command = SetPoint(sensor: "intake", target: 42)
+    Output.write(message: describe(command: command))
+    Output.write(message: String.from_int(value: apply_command(command: command, current: 7)))
+    return Unit
+}

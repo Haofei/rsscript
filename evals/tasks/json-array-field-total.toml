@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "json-array-field-total"
+version = 1
+mode = "review"
+title = "Parse JSON, walk an array and total one field"
+prompt = "Write a single RSScript file that totals one field across a JSON array. Write fn total_readings(text: read String) -> Result<Int, JsonError> that parses the text with the core Json interface, reads the object field `readings`, walks the array by index, reads the integer field `value` from each element, and returns the sum. Propagate every JsonError rather than unwrapping. Add fn main() -> Unit that calls it on a literal document with two readings and writes the total or the error message. Use only the core Json interface."
+candidate = "fixtures/json-array-field-total/candidate.rss"
+interfaces = []
+expected = "expected/json-array-field-total.json"
+tags = ["json", "result", "generation"]

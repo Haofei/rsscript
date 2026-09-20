@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "map-default-aggregate"
+version = 1
+mode = "review"
+title = "Aggregate totals with `Map.get_or_default`"
+prompt = "Write a single RSScript file that totals amounts per SKU. Write fn total_by_sku(skus: read List<String>, amounts: read List<Int>) -> fresh Map<String, Int> that walks the two parallel lists by index and accumulates each amount into the map, reading the running total with the core map get-or-default rather than branching on presence, and fn total_for(totals: read Map<String, Int>, sku: read String) -> Int returning 0 for an absent key. Mutation of the map is explicit at the call site. Add fn main() -> Unit that writes the total for a present key and for an absent one."
+candidate = "fixtures/map-default-aggregate/candidate.rss"
+interfaces = []
+expected = "expected/map-default-aggregate.json"
+tags = ["collections", "map", "mut", "generation"]

@@ -69,9 +69,17 @@ text and do not establish whether an operation occurs.
 
 ## Generation tasks
 
-Alongside the ten original repair/review fixtures, `tasks/` carries twenty
+Alongside the ten original repair/review fixtures, `tasks/` carries forty
 `generation`-tagged tasks that describe a small embedded-automation program in
 natural language (`prompt`) rather than handing a broken candidate to a model.
+The first twenty were added in September 2026; the second twenty were added on
+2026-09-19 to cover the shapes a host actually asks an agent for — record-to-
+report rendering, typed config errors, bounded retry, channel cancellation,
+`with` cleanup on the error path, protocol selection by input, `noescape Fn`
+helpers, local closures, payload patterns, `StringBuilder`,
+`Map.get_or_default`, sum-type state machines, JSON array walks, `Option`
+chains, `?` propagation, `select` against a deadline, two host interfaces in a
+fixed order, index assignment, `let ... else`, and tuple destructuring.
 Their `fixtures/<id>/candidate.rss` is a *verified reference solution*: each one
 was checked with
 
@@ -86,8 +94,15 @@ invariants record the structural facts a correct solution must exhibit
 (`retains(`, `Dyn<...>`, `take`/`mut` at the call site, `task_group`, `select {`)
 and the diagnostics it must not emit.
 
-`tools/gen_eval_tasks.py` regenerates those twenty task/expected pairs
+`tools/gen_eval_tasks.py` regenerates those forty task/expected pairs
 deterministically; edit the table there rather than the generated files.
+
+Reference solutions are verified twice: with `rss check` against the task's
+interfaces, and — for the core-only tasks — by building and running them with
+`rss run --trusted-in-process --features execution`. A task whose only host
+surface is a declared `.rssi` builds but cannot run, because the corpus ships no
+provider implementation for those external symbols; that is the same for the
+host-boundary tasks added in September.
 
 ## Collecting model samples
 

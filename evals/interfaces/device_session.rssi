@@ -1,0 +1,13 @@
+// A scoped host session. `DeviceSession` must be acquired with `with` so the
+// host runs its cleanup, including on the error path, and it must not escape
+// the scope that acquired it.
+
+resource DeviceSession
+
+pub fn DeviceSession.open(device: read String) -> Result<DeviceSession, String>
+
+pub fn DeviceSession.apply(session: mut DeviceSession, setting: read String, value: Int) -> Result<Unit, String>
+
+pub fn DeviceSession.commit(session: mut DeviceSession) -> Result<Int, String>
+
+pub fn Audit.note(event: read String) -> Unit

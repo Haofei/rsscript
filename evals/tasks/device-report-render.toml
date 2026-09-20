@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "device-report-render"
+version = 1
+mode = "review"
+title = "Render a list of device readings as a report string"
+prompt = "Write a single RSScript file that renders a list of records as one report string. Declare a struct Reading with fields sensor: String and value: Int. Write fn format_reading(reading: read Reading) -> fresh String that renders one reading as `sensor=value`, and fn render_report(title: read String, readings: read List<Reading>) -> fresh String that builds a list of lines holding the title, one line per reading, and a final `count=N` line, then joins the lines with the core list join and a newline separator. Add fn main() -> Unit that builds two readings and writes the report with Output.write. Use only the core interfaces; do not invent a host API."
+candidate = "fixtures/device-report-render/candidate.rss"
+interfaces = []
+expected = "expected/device-report-render.json"
+tags = ["collections", "strings", "report", "generation"]

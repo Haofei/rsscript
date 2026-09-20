@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "two-host-ordered-calls"
+version = 1
+mode = "review"
+title = "Call two declared host interfaces in a fixed order"
+prompt = "Write a single RSScript file that must use two separate declared host interfaces in order. The available host surface is exactly: Inventory.reserve(sku: read String, count: Int) -> Result<Int, String> and Inventory.release(sku: read String, count: Int) -> Unit, plus Sync.push(id: read String, amount: Int) -> Result<Int, SyncError>, SyncError.message(error: read SyncError) -> fresh String and Metrics.record(name: read String, value: Int) -> Unit. Write fn ship(sku: read String, count: Int) -> Result<Int, String> that reserves first and only then pushes the reserved amount; on a push failure it releases the reservation and returns the error message, and on success it records the accepted count with Metrics.record and returns it. Add fn main() -> Unit that ships one sku and writes the outcome. Do not invent, import, or assume any other host API."
+candidate = "fixtures/two-host-ordered-calls/candidate.rss"
+interfaces = ["interfaces/inventory_api.rssi", "interfaces/automation_api.rssi"]
+expected = "expected/two-host-ordered-calls.json"
+tags = ["host-boundary", "external-symbol", "ordering", "generation"]

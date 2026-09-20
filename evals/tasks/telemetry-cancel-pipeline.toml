@@ -1,0 +1,10 @@
+schema = "rsscript.eval.task.v1"
+id = "telemetry-cancel-pipeline"
+version = 1
+mode = "review"
+title = "Producer and consumer over a channel with an explicit cancellation token"
+prompt = "Write a single RSScript file that moves telemetry samples from a producer to a consumer over a bounded channel and cancels both with one token. In main, create a bounded Int channel with capacity 2, take its sender and receiver, and create a CancellationSource whose token is passed into both tasks. Write async fn publish(sender: Sender<Int>, samples: read List<Int>, token: CancellationToken) -> Result<Int, ChannelError> that stops early when the token is cancelled and otherwise sends every sample with the cancellable send, and async fn collect(receiver: Receiver<Int>, limit: Int, token: CancellationToken) -> Result<Int, ChannelError> that sums received values until it has seen `limit` of them or the channel closes. Run both inside one task_group with async let and await both there; cancel the source after the consumer finishes. Channel values transfer ownership, so send with take."
+candidate = "fixtures/telemetry-cancel-pipeline/candidate.rss"
+interfaces = []
+expected = "expected/telemetry-cancel-pipeline.json"
+tags = ["async", "channel", "cancellation", "ownership", "generation"]
