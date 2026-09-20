@@ -1,0 +1,37 @@
+fn apply_settings(device: read String, settings: read List<String>, value: Int) -> Result<Int, String> {
+    with DeviceSession.open(device: device) as session {
+        for setting in settings {
+            match DeviceSession.apply(session: mut session, setting: setting, value: value) {
+                Ok(()) => {}
+                Err(e) => {
+                    Audit.note(event: setting)
+                    return Err(e)
+                }
+            }
+        }
+        
+        match DeviceSession.commit(session: mut session) {
+            Ok(version) => {
+                Audit.note(event: "committed")
+                Ok(version)
+            }
+            Err(e) => {
+                Err(e)
+            }
+        }
+    }
+}
+
+fn main() -> Unit {
+    let settings: List<String> = []
+    let result = apply_settings(device: "device1", settings: settings, value: 42)
+    
+    match result {
+        Ok(version) => {
+            Audit.note(event: "success")
+        }
+        Err(error) => {
+            Audit.note(event: error)
+        }
+    }
+}

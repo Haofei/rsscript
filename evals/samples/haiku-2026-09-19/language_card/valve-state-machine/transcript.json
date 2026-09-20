@@ -1,0 +1,267 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 56473,
+    "check_ok": false,
+    "codes": [
+      "RS0015",
+      "RS0026",
+      "RS0206"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 16,
+        "label": "malformed match arm",
+        "causes": [
+          "Match arms must use `pattern => statement` or `pattern => { ... }`."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 29,
+        "label": "malformed match arm",
+        "causes": [
+          "Match arms must use `pattern => statement` or `pattern => { ... }`."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 40,
+        "label": "malformed match arm",
+        "causes": [
+          "Match arms must use `pattern => statement` or `pattern => { ... }`."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 46,
+        "label": "malformed match arm",
+        "causes": [
+          "Match arms must use `pattern => statement` or `pattern => { ... }`."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `p`.",
+        "line": 17,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `p` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `c`.",
+        "line": 30,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `c` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `String.equal` does not resolve.",
+        "line": 11,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Assert.equal`?",
+            "applicability": "machine-applicable",
+            "replacement": "Assert.equal",
+            "replace_line": 11,
+            "replace_column": 16,
+            "replace_length": 12
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Int.add` does not resolve.",
+        "line": 17,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Duration.add`?",
+            "applicability": "machine-applicable",
+            "replacement": "Duration.add",
+            "replace_line": 17,
+            "replace_column": 33,
+            "replace_length": 7
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Int.gte` does not resolve.",
+        "line": 18,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `String.equal` does not resolve.",
+        "line": 24,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Assert.equal`?",
+            "applicability": "machine-applicable",
+            "replacement": "Assert.equal",
+            "replace_line": 24,
+            "replace_column": 16,
+            "replace_length": 12
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `print` does not resolve.",
+        "line": 61,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 61,
+            "replace_column": 5,
+            "replace_length": 5
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

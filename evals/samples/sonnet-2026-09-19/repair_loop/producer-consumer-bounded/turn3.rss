@@ -1,0 +1,47 @@
+async fn produce(sender: read Sender<Int>, token: read CancellationToken) -> Unit {
+    let mut index: Int = 0
+    while index < 4 {
+        if CancellationToken.is_cancelled(token: token) {
+            return
+        }
+        local value: Int = index + 1
+        await Sender.send(sender: sender, value: take value)
+        index = index + 1
+    }
+}
+
+async fn consume(receiver: read Receiver<Int>) -> Int {
+    let mut seen: Int = 0
+    while seen < 4 {
+        let received = await Receiver.recv(receiver: receiver)
+        match received {
+            Ok(item) => {
+                match item {
+                    Some(value) => {
+                        seen = seen + 1
+                    }
+                    None => {
+                        return seen
+                    }
+                }
+            }
+            Err(error) => {
+                return seen
+            }
+        }
+    }
+    return seen
+}
+
+async fn main() -> Unit {
+    local channel = Channel.bounded(capacity: 2)
+    let sender = Channel.sender(channel: channel)
+    let receiver = Channel.receiver(channel: mut channel)
+    task_group {
+        let token = Task.cancellation_token()
+        async let producer = produce(sender: sender, token: token)
+        async let consumer = consume(receiver: receiver)
+        await producer
+        await consumer
+    }
+}

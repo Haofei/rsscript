@@ -1,0 +1,37 @@
+async fn send_work(tx: read Sender<Int>) -> Unit {
+    await Channel.send(sender: tx, value: 42)
+}
+
+async fn send_deadline(tx: read Sender<Int>) -> Unit {
+    await Channel.send(sender: tx, value: 1)
+}
+
+fn main() -> Unit {
+    let work_channel: Channel<Int> = Channel.bounded(capacity: 1)
+    let deadline_channel: Channel<Int> = Channel.bounded(capacity: 1)
+    let work_tx: Sender<Int> = Channel.sender(channel: work_channel)
+    let work_rx: Receiver<Int> = Channel.receiver(channel: work_channel)
+    let deadline_tx: Sender<Int> = Channel.sender(channel: deadline_channel)
+    let deadline_rx: Receiver<Int> = Channel.receiver(channel: deadline_channel)
+    let source: CancellationSource = CancellationSource.new()
+
+    task_group {
+        async let work_handle = send_work(tx: work_tx)
+        async let deadline_handle = send_deadline(tx: deadline_tx)
+
+        select {
+            work_value = await Channel.recv(receiver: work_rx) => {
+                print(value: "work finished first")
+            }
+            deadline_value = await Channel.recv(receiver: deadline_rx) => {
+                print(value: "deadline fired")
+                CancellationSource.cancel(source: source)
+            }
+        }
+
+        await work_handle
+        await deadline_handle
+    }
+
+    print(value: "race complete")
+}

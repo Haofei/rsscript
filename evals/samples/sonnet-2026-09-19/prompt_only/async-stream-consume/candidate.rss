@@ -1,0 +1,29 @@
+async fn drain(stream: Stream<Int>, limit: Int) -> Result<Int, ChannelError> {
+    let mut sum: Int = 0
+    let mut count: Int = 0
+    while count < limit {
+        match await Stream.next(stream)? {
+            Some(value) => {
+                sum = sum + value
+                count = count + 1
+            }
+            None => {
+                break
+            }
+        }
+    }
+    return Ok(sum)
+}
+
+fn main() -> Result<Unit, ChannelError> {
+    let items: List<Int> = [10, 32]
+    let stream: Stream<Int> = Stream.from_list(items)
+
+    let total: Int = task_group {
+        async let pending = drain(stream, 5)
+        pending
+    }?
+
+    println(total)
+    return Ok(())
+}

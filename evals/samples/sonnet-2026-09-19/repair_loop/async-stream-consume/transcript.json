@@ -1,0 +1,83 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 18377,
+    "check_ok": false,
+    "codes": [
+      "RS0015",
+      "RS0203",
+      "RS0204"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 27,
+        "label": "unawaited async let",
+        "causes": [
+          "`async let` handles are lexical task_group handles and must be consumed by `await` inside the same `task_group { ... }` block."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Stream.from_list` has no argument named `values`.",
+        "line": 25,
+        "label": "unknown argument",
+        "causes": [
+          "`Stream.from_list` does not declare a parameter named `values`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `items`? Declared: items.",
+            "applicability": "machine-applicable",
+            "replacement": "items",
+            "replace_line": 25,
+            "replace_column": 48,
+            "replace_length": 6
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Stream.from_list` is missing required argument `items`.",
+        "line": 25,
+        "label": "missing argument",
+        "causes": [
+          "`Stream.from_list` requires a named argument `items`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `items: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 2,
+    "duration_ms": 9757,
+    "check_ok": true,
+    "codes": [],
+    "source": "turn2.rss",
+    "diagnostics": []
+  }
+]

@@ -1,0 +1,31 @@
+struct EventLog {
+    entries: List<String>,
+    tags: List<String>
+}
+
+fn EventLog.new() -> fresh EventLog {
+    return EventLog {
+        entries: [],
+        tags: []
+    }
+}
+
+fn EventLog.record(log: mut EventLog, entry: String, tag: String) -> Unit
+    retains(entry)
+    retains(tag)
+{
+    List.push(list: mut log.entries, value: entry)
+    List.push(list: mut log.tags, value: tag)
+}
+
+fn EventLog.size(log: read EventLog) -> Int {
+    return List.len(list: log.entries)
+}
+
+fn main() -> Unit {
+    let log = EventLog.new()
+    EventLog.record(log: mut log, entry: "event1", tag: "tag1")
+    EventLog.record(log: mut log, entry: "event2", tag: "tag2")
+    let size = EventLog.size(log: log)
+    Output.write(value: size)
+}

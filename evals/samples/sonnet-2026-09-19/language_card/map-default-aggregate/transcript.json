@@ -1,0 +1,97 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 17217,
+    "check_ok": false,
+    "codes": [
+      "RS0206"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `List.length` does not resolve.",
+        "line": 4,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `List.len`?",
+            "applicability": "machine-applicable",
+            "replacement": "List.len",
+            "replace_line": 4,
+            "replace_column": 22,
+            "replace_length": 11
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `IO.println` does not resolve.",
+        "line": 23,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 23,
+            "replace_column": 5,
+            "replace_length": 10
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `IO.println` does not resolve.",
+        "line": 24,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 24,
+            "replace_column": 5,
+            "replace_length": 10
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

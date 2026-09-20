@@ -1,0 +1,28 @@
+struct Entry {
+    label: String
+    count: Int
+}
+
+fn render_entries(title: read String, entries: read List<Entry>) -> fresh String {
+    local builder = StringBuilder.new()
+    StringBuilder.push(builder: mut builder, value: title)
+    StringBuilder.push(builder: mut builder, value: "\n")
+    for entry in entries {
+        StringBuilder.push(builder: mut builder, value: "  ")
+        StringBuilder.push(builder: mut builder, value: entry.label)
+        StringBuilder.push(builder: mut builder, value: ": ")
+        StringBuilder.push(builder: mut builder, value: Int.to_string(value: entry.count))
+        StringBuilder.push(builder: mut builder, value: "\n")
+    }
+    return StringBuilder.finish(builder: take builder)
+}
+
+fn main() -> Unit {
+    let mut entries: List<Entry> = List.new()
+    let first: Entry = Entry(label: "apples", count: 3)
+    let second: Entry = Entry(label: "pears", count: 5)
+    List.push(list: mut entries, value: first)
+    List.push(list: mut entries, value: second)
+    let report: String = render_entries(title: "Daily report", entries: entries)
+    Output.write(value: report)
+}

@@ -1,0 +1,543 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 33359,
+    "check_ok": false,
+    "codes": [
+      "RS0002",
+      "RS0015",
+      "RS0024",
+      "RS0206",
+      "RS0207",
+      "RS0208",
+      "RS1004"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 17,
+        "label": "unsupported expression",
+        "causes": [
+          "This expression is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 23,
+        "label": "unsupported expression",
+        "causes": [
+          "This expression is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 24,
+        "label": "unsupported expression",
+        "causes": [
+          "This expression is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0002",
+        "severity": "error",
+        "summary": "function `main` must declare an explicit return type.",
+        "line": 20,
+        "label": "missing return type",
+        "causes": [
+          "Public APIs must not rely on inference; this checker applies the canonical rule to all functions."
+        ],
+        "fixes": [
+          {
+            "title": "Add `-> Unit` or another explicit return type.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0024",
+        "severity": "error",
+        "summary": "unknown type `i32`.",
+        "line": 2,
+        "label": "unknown type",
+        "causes": [
+          "RSScript type checking must resolve source-level types before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `i32`, import an `.rssi` contract that declares it, or use a known core/runtime type.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0024",
+        "severity": "error",
+        "summary": "unknown type `i32`.",
+        "line": 3,
+        "label": "unknown type",
+        "causes": [
+          "RSScript type checking must resolve source-level types before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `i32`, import an `.rssi` contract that declares it, or use a known core/runtime type.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0024",
+        "severity": "error",
+        "summary": "unknown type `str`.",
+        "line": 6,
+        "label": "unknown type",
+        "causes": [
+          "RSScript type checking must resolve source-level types before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `str`, import an `.rssi` contract that declares it, or use a known core/runtime type.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0024",
+        "severity": "error",
+        "summary": "unknown type `str`.",
+        "line": 6,
+        "label": "unknown type",
+        "causes": [
+          "RSScript type checking must resolve source-level types before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `str`, import an `.rssi` contract that declares it, or use a known core/runtime type.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0024",
+        "severity": "error",
+        "summary": "unknown type `str`.",
+        "line": 10,
+        "label": "unknown type",
+        "causes": [
+          "RSScript type checking must resolve source-level types before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `str`, import an `.rssi` contract that declares it, or use a known core/runtime type.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0024",
+        "severity": "error",
+        "summary": "unknown type `str`.",
+        "line": 10,
+        "label": "unknown type",
+        "causes": [
+          "RSScript type checking must resolve source-level types before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `str`, import an `.rssi` contract that declares it, or use a known core/runtime type.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0024",
+        "severity": "error",
+        "summary": "unknown type `i32`.",
+        "line": 10,
+        "label": "unknown type",
+        "causes": [
+          "RSScript type checking must resolve source-level types before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `i32`, import an `.rssi` contract that declares it, or use a known core/runtime type.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0024",
+        "severity": "error",
+        "summary": "unknown type `str`.",
+        "line": 14,
+        "label": "unknown type",
+        "causes": [
+          "RSScript type checking must resolve source-level types before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `str`, import an `.rssi` contract that declares it, or use a known core/runtime type.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `field_of` has type `Unit`, expected `Option<String>`.",
+        "line": 6,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `Option<String>` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `parsed_field` has type `Unit`, expected `Option<i32>`.",
+        "line": 10,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `Option<i32>` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `window_from` has type `Unit`, expected `Window`.",
+        "line": 14,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `Window` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `read read read line.split().nth().map` does not resolve.",
+        "line": 7,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `FalliblePipeline.map`, `List.map`, `Option.map`?",
+            "applicability": "maybe-incorrect",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `read s.to_string` does not resolve.",
+        "line": 7,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Bytes.to_string`, `Char.to_string`, `Float.to_string`?",
+            "applicability": "maybe-incorrect",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `read read s.parse().ok` does not resolve.",
+        "line": 11,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Result.ok`, `Option.or`?",
+            "applicability": "maybe-incorrect",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0207",
+        "severity": "error",
+        "summary": "argument `line` for `window_from` has type `String`, expected `str`.",
+        "line": 22,
+        "label": "argument type mismatch",
+        "causes": [
+          "RSScript call argument types must match the resolved callee signature before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Pass a value of type `str` for `line`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1004",
+        "severity": "error",
+        "summary": "surface reference syntax is not part of RSScript.",
+        "line": 6,
+        "label": "surface reference attempt",
+        "causes": [
+          "RSScript uses explicit data effects instead of `&T` or `&mut T` syntax."
+        ],
+        "fixes": [
+          {
+            "title": "Use a parameter effect such as `value: read T` or `value: mut T`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1004",
+        "severity": "error",
+        "summary": "surface reference syntax is not part of RSScript.",
+        "line": 6,
+        "label": "surface reference attempt",
+        "causes": [
+          "RSScript uses explicit data effects instead of `&T` or `&mut T` syntax."
+        ],
+        "fixes": [
+          {
+            "title": "Use a parameter effect such as `value: read T` or `value: mut T`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1004",
+        "severity": "error",
+        "summary": "surface reference syntax is not part of RSScript.",
+        "line": 10,
+        "label": "surface reference attempt",
+        "causes": [
+          "RSScript uses explicit data effects instead of `&T` or `&mut T` syntax."
+        ],
+        "fixes": [
+          {
+            "title": "Use a parameter effect such as `value: read T` or `value: mut T`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1004",
+        "severity": "error",
+        "summary": "surface reference syntax is not part of RSScript.",
+        "line": 10,
+        "label": "surface reference attempt",
+        "causes": [
+          "RSScript uses explicit data effects instead of `&T` or `&mut T` syntax."
+        ],
+        "fixes": [
+          {
+            "title": "Use a parameter effect such as `value: read T` or `value: mut T`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1004",
+        "severity": "error",
+        "summary": "surface reference syntax is not part of RSScript.",
+        "line": 14,
+        "label": "surface reference attempt",
+        "causes": [
+          "RSScript uses explicit data effects instead of `&T` or `&mut T` syntax."
+        ],
+        "fixes": [
+          {
+            "title": "Use a parameter effect such as `value: read T` or `value: mut T`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1004",
+        "severity": "error",
+        "summary": "surface reference syntax is not part of RSScript.",
+        "line": 16,
+        "label": "surface reference attempt",
+        "causes": [
+          "RSScript uses explicit data effects instead of `&T` or `&mut T` syntax."
+        ],
+        "fixes": [
+          {
+            "title": "Use a parameter effect such as `value: read T` or `value: mut T`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

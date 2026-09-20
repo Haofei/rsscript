@@ -1,0 +1,32 @@
+fn total_readings(text: read String) -> Result<Int, JsonError> {
+    let parsed = Json.parse(text: text)?;
+    let readings = Json.get(value: parsed, key: "readings")?;
+    let array = Json.array(value: readings)?;
+    let len = Json.array_len(value: array)?;
+    sum_array(array: array, index: 0, len: len, total: 0)
+}
+
+fn sum_array(array: JsonArray, index: Int, len: Int, total: Int) -> Result<Int, JsonError> {
+    if index >= len {
+        Ok(total)
+    } else {
+        let item = Json.array_get(value: array, index: index)?;
+        let value_json = Json.get(value: item, key: "value")?;
+        let value = Json.as_int(value: value_json)?;
+        sum_array(array: array, index: index + 1, len: len, total: total + value)
+    }
+}
+
+fn main() -> Unit {
+    let json_doc = """{"readings": [{"value": 10}, {"value": 20}]}""";
+    let result = total_readings(text: json_doc);
+    
+    match result {
+        Ok(sum) => {
+            Output.write(message: String.from_int(value: sum))
+        }
+        Err(err) => {
+            Output.write(message: err.message())
+        }
+    }
+}

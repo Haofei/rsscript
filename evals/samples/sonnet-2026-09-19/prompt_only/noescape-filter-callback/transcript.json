@@ -1,0 +1,73 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 9552,
+    "check_ok": false,
+    "codes": [
+      "RS0015"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 7,
+        "label": "unsupported expression",
+        "causes": [
+          "This expression is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 11,
+        "label": "unsupported expression",
+        "causes": [
+          "This expression is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 22,
+        "label": "unsupported expression",
+        "causes": [
+          "This expression is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

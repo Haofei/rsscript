@@ -1,0 +1,266 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 68403,
+    "check_ok": false,
+    "codes": [
+      "RS0206"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `List.length` does not resolve.",
+        "line": 3,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `List.len`?",
+            "applicability": "machine-applicable",
+            "replacement": "List.len",
+            "replace_line": 3,
+            "replace_column": 18,
+            "replace_length": 11
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Range` does not resolve.",
+        "line": 5,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Int.add` does not resolve.",
+        "line": 9,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Duration.add`?",
+            "applicability": "machine-applicable",
+            "replacement": "Duration.add",
+            "replace_line": 9,
+            "replace_column": 25,
+            "replace_length": 7
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Map.put` does not resolve.",
+        "line": 10,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `List.of` does not resolve.",
+        "line": 21,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `List.new`?",
+            "applicability": "machine-applicable",
+            "replacement": "List.new",
+            "replace_line": 21,
+            "replace_column": 16,
+            "replace_length": 7
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `List.of` does not resolve.",
+        "line": 22,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `List.new`?",
+            "applicability": "machine-applicable",
+            "replacement": "List.new",
+            "replace_line": 22,
+            "replace_column": 19,
+            "replace_length": 7
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 2,
+    "duration_ms": 48234,
+    "check_ok": false,
+    "codes": [
+      "RS0202",
+      "RS0203",
+      "RS0313"
+    ],
+    "source": "turn2.rss",
+    "diagnostics": [
+      {
+        "code": "RS0313",
+        "severity": "error",
+        "summary": "cannot assign `Unit` to `totals` of type `Map<String, Int>`.",
+        "line": 11,
+        "label": "assignment type mismatch",
+        "causes": [
+          "The assigned value's type must match the place's type before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Assign a `Map<String, Int>` value to `totals`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `map` for `Map.insert` must use `mut`.",
+        "line": 11,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Write `map: mut ...` at the call site.",
+            "applicability": "machine-applicable",
+            "replacement": "mut ",
+            "replace_line": 11,
+            "replace_column": 34,
+            "replace_length": 0
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `List.new` has no argument named `items`.",
+        "line": 23,
+        "label": "unknown argument",
+        "causes": [
+          "`List.new` does not declare a parameter named `items`."
+        ],
+        "fixes": [
+          {
+            "title": "Use one of: .",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `List.new` has no argument named `items`.",
+        "line": 24,
+        "label": "unknown argument",
+        "causes": [
+          "`List.new` does not declare a parameter named `items`."
+        ],
+        "fixes": [
+          {
+            "title": "Use one of: .",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 3,
+    "duration_ms": 14872,
+    "check_ok": true,
+    "codes": [],
+    "source": "turn3.rss",
+    "diagnostics": []
+  }
+]

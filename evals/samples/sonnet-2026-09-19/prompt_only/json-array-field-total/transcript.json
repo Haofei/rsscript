@@ -1,0 +1,164 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 12896,
+    "check_ok": false,
+    "codes": [
+      "RS0206",
+      "RS0207",
+      "RS0208",
+      "RS1001"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `total_readings` has type `Unit`, expected `Result<Int, JsonError>`.",
+        "line": 5,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `Result<Int, JsonError>` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `read readings.len` does not resolve.",
+        "line": 8,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Buffer.len`, `BufferView.len`, `Bytes.len`?",
+            "applicability": "maybe-incorrect",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0207",
+        "severity": "error",
+        "summary": "argument `path` for `read readings.at` has type `Int`, expected `String`.",
+        "line": 13,
+        "label": "argument type mismatch",
+        "causes": [
+          "RSScript call argument types must match the resolved callee signature before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Pass a value of type `String` for `path`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `read io.println` does not resolve.",
+        "line": 25,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `read io.println` does not resolve.",
+        "line": 26,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1001",
+        "severity": "error",
+        "summary": "arithmetic operators are only built in for numeric values.",
+        "line": 25,
+        "label": "operator on non-numeric value",
+        "causes": [
+          "RSScript does not support user-defined operator overloads."
+        ],
+        "fixes": [
+          {
+            "title": "Use a named function such as `Type.add(left: read a, right: read b)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1001",
+        "severity": "error",
+        "summary": "arithmetic operators are only built in for numeric values.",
+        "line": 26,
+        "label": "operator on non-numeric value",
+        "causes": [
+          "RSScript does not support user-defined operator overloads."
+        ],
+        "fixes": [
+          {
+            "title": "Use a named function such as `Type.add(left: read a, right: read b)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

@@ -1,0 +1,62 @@
+struct ServiceConfig {
+    name: String,
+    port: Int,
+    enabled: Bool
+}
+
+fn load_config(text: String) -> Result<fresh ServiceConfig, String> {
+    return match Json.parse(text: text) {
+        Ok(parsed) => {
+            match Json.get_field(json: parsed, field: "name") {
+                Some(name_value) => {
+                    match Json.as_string(json: name_value) {
+                        Some(name) => {
+                            match Json.get_field(json: parsed, field: "port") {
+                                Some(port_value) => {
+                                    match Json.as_int(json: port_value) {
+                                        Some(port) => {
+                                            if port < 1 || port > 65535 {
+                                                Err("port must be between 1 and 65535")
+                                            } else {
+                                                match Json.get_field(json: parsed, field: "enabled") {
+                                                    Some(enabled_value) => {
+                                                        match Json.as_bool(json: enabled_value) {
+                                                            Some(enabled) => {
+                                                                Ok(ServiceConfig(name, port, enabled))
+                                                            }
+                                                            None => Err("'enabled' field must be a boolean")
+                                                        }
+                                                    }
+                                                    None => Err("Missing 'enabled' field")
+                                                }
+                                            }
+                                        }
+                                        None => Err("'port' field must be an integer")
+                                    }
+                                }
+                                None => Err("Missing 'port' field")
+                            }
+                        }
+                        None => Err("'name' field must be a string")
+                    }
+                }
+                None => Err("Missing 'name' field")
+            }
+        }
+        Err(error) => Err("Failed to parse JSON")
+    }
+}
+
+fn main() -> Unit {
+    local config_text = "{\"name\":\"myservice\",\"port\":8080,\"enabled\":true}"
+    local result = load_config(text: config_text)
+    
+    match result {
+        Ok(config) => {
+            Output.write(message: config.name)
+        }
+        Err(error) => {
+            Output.write(message: error)
+        }
+    }
+}

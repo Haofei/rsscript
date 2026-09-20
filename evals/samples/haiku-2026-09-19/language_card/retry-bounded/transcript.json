@@ -1,0 +1,216 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 65101,
+    "check_ok": false,
+    "codes": [
+      "RS0026",
+      "RS0202",
+      "RS0308",
+      "RS0311"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0311",
+        "severity": "error",
+        "summary": "invalid assignment.",
+        "line": 15,
+        "label": "`last_error_message` is not a binding in scope",
+        "causes": [
+          "The left side of `=` must be a `let mut` local in scope."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the target as a `let mut` local, or remove the assignment.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0311",
+        "severity": "error",
+        "summary": "invalid assignment.",
+        "line": 16,
+        "label": "`attempt` is not a binding in scope",
+        "causes": [
+          "The left side of `=` must be a `let mut` local in scope."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the target as a `let mut` local, or remove the assignment.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `attempt`.",
+        "line": 5,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `attempt` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `attempt`.",
+        "line": 10,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `attempt` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `attempt`.",
+        "line": 16,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `attempt` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `last_error_message`.",
+        "line": 25,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `last_error_message` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `error` for `SyncError.message` uses `take` but the parameter is `read`.",
+        "line": 15,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Remove `take` from `error`: a `read` parameter takes the bare value.",
+            "applicability": "machine-applicable",
+            "replacement": "",
+            "replace_line": 15,
+            "replace_column": 67,
+            "replace_length": 5
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `error` for `SyncError.message` uses `take` but the parameter is `read`.",
+        "line": 18,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Remove `take` from `error`: a `read` parameter takes the bare value.",
+            "applicability": "machine-applicable",
+            "replacement": "",
+            "replace_line": 18,
+            "replace_column": 60,
+            "replace_length": 5
+          }
+        ]
+      },
+      {
+        "code": "RS0308",
+        "severity": "error",
+        "summary": "`take` requires a local value.",
+        "line": 15,
+        "label": "not a local value",
+        "causes": [
+          "`error` is not a local binding and cannot be consumed with `take`."
+        ],
+        "fixes": [
+          {
+            "title": "Pass a local value with `take`, or use `read`/`mut` for managed values.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0308",
+        "severity": "error",
+        "summary": "`take` requires a local value.",
+        "line": 18,
+        "label": "not a local value",
+        "causes": [
+          "`error` is not a local binding and cannot be consumed with `take`."
+        ],
+        "fixes": [
+          {
+            "title": "Pass a local value with `take`, or use `read`/`mut` for managed values.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

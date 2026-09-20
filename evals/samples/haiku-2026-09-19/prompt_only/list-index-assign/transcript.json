@@ -1,0 +1,205 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 54916,
+    "check_ok": false,
+    "codes": [
+      "RS0034",
+      "RS0202",
+      "RS0206",
+      "RS0208",
+      "RS0313"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0313",
+        "severity": "error",
+        "summary": "cannot assign `Int` to `?` place.",
+        "line": 13,
+        "label": "assignment type mismatch",
+        "causes": [
+          "The assigned value's type must match the field or indexed element type before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Assign a `?` value to this place.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `clamp_samples` has type `Unit`, expected `List<Int>`.",
+        "line": 1,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `List<Int>` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `read samples.length` does not resolve.",
+        "line": 5,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "receiver `result` for `push` uses `read` but the method requires `mut`.",
+        "line": 6,
+        "label": "receiver effect mismatch",
+        "causes": [
+          "Receiver-call shorthand is only valid when the visible receiver effect exactly matches the resolved method's `self` effect."
+        ],
+        "fixes": [
+          {
+            "title": "Write `mut result.push(...)`.",
+            "applicability": "machine-applicable",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `read result.length` does not resolve.",
+        "line": 11,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `read clamped.length` does not resolve.",
+        "line": 26,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "receiver `strings` for `push` uses `read` but the method requires `mut`.",
+        "line": 27,
+        "label": "receiver effect mismatch",
+        "causes": [
+          "Receiver-call shorthand is only valid when the visible receiver effect exactly matches the resolved method's `self` effect."
+        ],
+        "fixes": [
+          {
+            "title": "Write `mut strings.push(...)`.",
+            "applicability": "machine-applicable",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `println` does not resolve.",
+        "line": 31,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 31,
+            "replace_column": 3,
+            "replace_length": 7
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0034",
+        "severity": "error",
+        "summary": "the type of `strings` cannot be inferred.",
+        "line": 23,
+        "label": "uninferable binding type",
+        "causes": [
+          "A bare `Ok(...)`, `Err(...)`, `None`, or `[]` leaves a type parameter open, and this binding is never used, so nothing can constrain it \u2014 the type is ambiguous and would not lower to valid Rust."
+        ],
+        "fixes": [
+          {
+            "title": "Add a type annotation (e.g. `let v: Result<Int, String> = ...`, `let xs: List<Int> = []`) or remove the unused binding.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

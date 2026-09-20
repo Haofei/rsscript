@@ -1,0 +1,35 @@
+protocol Formatter {
+    fn format(self: read Self) -> fresh String
+}
+
+struct PlainFormatter {
+    prefix: String
+}
+
+struct JsonFormatter {
+    field: String
+}
+
+impl Formatter for PlainFormatter {
+    fn format(self: read Self) -> fresh String {
+        return self.prefix
+    }
+}
+
+impl Formatter for JsonFormatter {
+    fn format(self: read Self) -> fresh String {
+        return self.field
+    }
+}
+
+fn render(formatter: read Dyn<Formatter>) -> fresh String {
+    return formatter.format()
+}
+
+fn main() -> Unit {
+    local plain = PlainFormatter(prefix: "Hello")
+    local json = JsonFormatter(field: "world")
+    
+    let plainResult = render(formatter: Dyn.from(plain))
+    let jsonResult = render(formatter: Dyn.from(json))
+}

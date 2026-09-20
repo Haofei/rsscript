@@ -1,0 +1,44 @@
+use core::channel::{bounded_channel, Sender, Receiver, ChannelError};
+use core::sync::{CancellationSource, CancellationToken};
+
+async fn publish(sender: Sender<Int>, samples: read List<Int>, token: CancellationToken) -> Result<Int, ChannelError> {
+    let mut count = 0;
+    for sample in samples {
+        sender.send_cancellable(*sample, token).await?;
+        count += 1;
+    }
+    Ok(count)
+}
+
+async fn collect(receiver: Receiver<Int>, limit: Int, token: CancellationToken) -> Result<Int, ChannelError> {
+    let mut sum = 0;
+    let mut count = 0;
+    loop {
+        if count >= limit {
+            break;
+        }
+        match receiver.recv_cancellable(token).await {
+            Ok(value) => {
+                sum += value;
+                count += 1;
+            }
+            Err(_) => break,
+        }
+    }
+    Ok(sum)
+}
+
+async fn main() {
+    let (sender, receiver) = bounded_channel::<Int>(2);
+    let cancel_source = CancellationSource::new();
+    let token = cancel_source.token();
+
+    let samples = [1, 2, 3, 4, 5];
+    
+    task_group(|_| {
+        async let pub_result = publish(sender, &samples, token.clone());
+        async let col_result = collect(receiver, 5, token.clone());
+    }).await;
+    
+    cancel_source.cancel();
+}

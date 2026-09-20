@@ -1,0 +1,261 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 18587,
+    "check_ok": false,
+    "codes": [
+      "RS0203",
+      "RS0204",
+      "RS0206",
+      "RS0209",
+      "RS0210"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Json.error_message` does not resolve.",
+        "line": 8,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Json.get_string` does not resolve.",
+        "line": 19,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Json.field_string`, `Json.at_string`, `Json.as_string`?",
+            "applicability": "machine-applicable",
+            "replacement": "Json.field_string",
+            "replace_line": 19,
+            "replace_column": 24,
+            "replace_length": 15
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Json.get_int` does not resolve.",
+        "line": 26,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Json.field_int`, `Json.at_int`?",
+            "applicability": "machine-applicable",
+            "replacement": "Json.field_int",
+            "replace_line": 26,
+            "replace_column": 22,
+            "replace_length": 12
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Json.get_bool` does not resolve.",
+        "line": 40,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Json.field_bool`, `Json.at_bool`, `Json.as_bool`?",
+            "applicability": "machine-applicable",
+            "replacement": "Json.field_bool",
+            "replace_line": 40,
+            "replace_column": 25,
+            "replace_length": 13
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Output.write` has no argument named `text`.",
+        "line": 52,
+        "label": "unknown argument",
+        "causes": [
+          "`Output.write` does not declare a parameter named `text`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `message`? Declared: message.",
+            "applicability": "machine-applicable",
+            "replacement": "message",
+            "replace_line": 52,
+            "replace_column": 26,
+            "replace_length": 4
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Output.write` is missing required argument `message`.",
+        "line": 52,
+        "label": "missing argument",
+        "causes": [
+          "`Output.write` requires a named argument `message`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `message: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Output.write` has no argument named `text`.",
+        "line": 55,
+        "label": "unknown argument",
+        "causes": [
+          "`Output.write` does not declare a parameter named `text`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `message`? Declared: message.",
+            "applicability": "machine-applicable",
+            "replacement": "message",
+            "replace_line": 55,
+            "replace_column": 26,
+            "replace_length": 4
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Output.write` is missing required argument `message`.",
+        "line": 55,
+        "label": "missing argument",
+        "causes": [
+          "`Output.write` requires a named argument `message`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `message: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0209",
+        "severity": "error",
+        "summary": "match arm has type `Result<T, String>`, expected `fresh JsonValue` from the first produced arm.",
+        "line": 14,
+        "label": "match arm type mismatch",
+        "causes": [
+          "A match expression must produce one compatible value type across every arm."
+        ],
+        "fixes": [
+          {
+            "title": "Return the same value type from every match expression arm.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0210",
+        "severity": "error",
+        "summary": "operator `<` has operands `Result<T, String>` and `Int`, expected numeric operands.",
+        "line": 33,
+        "label": "operator type mismatch",
+        "causes": [
+          "RSScript operators have fixed built-in operand types and do not use implicit conversion or overload resolution."
+        ],
+        "fixes": [
+          {
+            "title": "Compare values of the same supported type, or call an explicit named conversion/function first.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0210",
+        "severity": "error",
+        "summary": "operator `>` has operands `Result<T, String>` and `Int`, expected numeric operands.",
+        "line": 36,
+        "label": "operator type mismatch",
+        "causes": [
+          "RSScript operators have fixed built-in operand types and do not use implicit conversion or overload resolution."
+        ],
+        "fixes": [
+          {
+            "title": "Compare values of the same supported type, or call an explicit named conversion/function first.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

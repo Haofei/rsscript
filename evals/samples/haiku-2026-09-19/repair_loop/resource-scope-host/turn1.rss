@@ -1,0 +1,20 @@
+fn copy_setting(path: read String, key: read String, target: read String) -> Result<Unit, String> {
+    match ConfigStore.open(path: path) {
+        Ok(store) => {
+            with s = store {
+                return match ConfigStore.read_key(store: mut s, key: key) {
+                    Ok(value) => { ConfigStore.write_key(store: mut s, key: target, value: value) }
+                    Err(err) => { Err(err) }
+                }
+            }
+        }
+        Err(err) => { return Err(err) }
+    }
+}
+
+fn main() -> Unit {
+    match copy_setting(path: "config.ini", key: "source_key", target: "dest_key") {
+        Ok(_) => { }
+        Err(_) => { }
+    }
+}

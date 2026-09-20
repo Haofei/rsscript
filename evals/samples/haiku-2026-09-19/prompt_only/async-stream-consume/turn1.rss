@@ -1,0 +1,32 @@
+async fn drain(mut stream: Stream<Int>, limit: Int) -> Result<Int, ChannelError> {
+    let mut sum = 0;
+    let mut count = 0;
+    
+    loop {
+        if count >= limit {
+            break;
+        }
+        
+        match stream.next().await {
+            Some(value) => {
+                sum += value;
+                count += 1;
+            }
+            None => break,
+        }
+    }
+    
+    Ok(sum)
+}
+
+fn main() -> Result<Unit, ChannelError> {
+    let list: List<Int> = [1, 2];
+    let stream = list.into_stream();
+    
+    task_group {
+        async let total = drain(stream, 2);
+        println!("{}", total?);
+    }
+    
+    Ok(())
+}

@@ -1,0 +1,26 @@
+struct Entry {
+    label: String,
+    count: Int,
+}
+
+fn render_entries(title: read String, entries: read List<Entry>) -> fresh String {
+    var sb = StringBuilder.new()
+    sb.push(title)
+    sb.push("\n")
+    for entry in entries {
+        sb.push("  ")
+        sb.push(entry.label)
+        sb.push(": ")
+        sb.push(entry.count.to_string())
+        sb.push("\n")
+    }
+    return sb.finish()
+}
+
+fn main() -> Unit {
+    var entries = List.new()
+    entries.push(Entry { label: "apples", count: 3 })
+    entries.push(Entry { label: "pears", count: 5 })
+    let report = render_entries("Inventory", entries)
+    println(report)
+}

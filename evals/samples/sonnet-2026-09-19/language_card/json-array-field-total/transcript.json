@@ -1,0 +1,313 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 16109,
+    "check_ok": false,
+    "codes": [
+      "RS0206",
+      "RS0207",
+      "RS0209",
+      "RS0210",
+      "RS1001"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0207",
+        "severity": "error",
+        "summary": "argument `value` for `Json.field` has type `Unit`, expected `JsonValue`.",
+        "line": 6,
+        "label": "argument type mismatch",
+        "causes": [
+          "RSScript call argument types must match the resolved callee signature before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Pass a value of type `JsonValue` for `value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0207",
+        "severity": "error",
+        "summary": "argument `value` for `Json.array_len` has type `Unit`, expected `JsonValue`.",
+        "line": 10,
+        "label": "argument type mismatch",
+        "causes": [
+          "RSScript call argument types must match the resolved callee signature before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Pass a value of type `JsonValue` for `value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Json.index` does not resolve.",
+        "line": 17,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0207",
+        "severity": "error",
+        "summary": "argument `value` for `Json.field` has type `Unit`, expected `JsonValue`.",
+        "line": 21,
+        "label": "argument type mismatch",
+        "causes": [
+          "RSScript call argument types must match the resolved callee signature before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Pass a value of type `JsonValue` for `value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0207",
+        "severity": "error",
+        "summary": "argument `value` for `Json.as_int` has type `Unit`, expected `JsonValue`.",
+        "line": 25,
+        "label": "argument type mismatch",
+        "causes": [
+          "RSScript call argument types must match the resolved callee signature before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Pass a value of type `JsonValue` for `value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `print` does not resolve.",
+        "line": 38,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 38,
+            "replace_column": 24,
+            "replace_length": 5
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `print` does not resolve.",
+        "line": 39,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 39,
+            "replace_column": 25,
+            "replace_length": 5
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0209",
+        "severity": "error",
+        "summary": "match arm has type `Result<T, JsonError>`, expected `fresh JsonValue` from the first produced arm.",
+        "line": 4,
+        "label": "match arm type mismatch",
+        "causes": [
+          "A match expression must produce one compatible value type across every arm."
+        ],
+        "fixes": [
+          {
+            "title": "Return the same value type from every match expression arm.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0209",
+        "severity": "error",
+        "summary": "match arm has type `Result<T, JsonError>`, expected `fresh JsonValue` from the first produced arm.",
+        "line": 8,
+        "label": "match arm type mismatch",
+        "causes": [
+          "A match expression must produce one compatible value type across every arm."
+        ],
+        "fixes": [
+          {
+            "title": "Return the same value type from every match expression arm.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0209",
+        "severity": "error",
+        "summary": "match arm has type `Result<T, JsonError>`, expected `Int` from the first produced arm.",
+        "line": 12,
+        "label": "match arm type mismatch",
+        "causes": [
+          "A match expression must produce one compatible value type across every arm."
+        ],
+        "fixes": [
+          {
+            "title": "Return the same value type from every match expression arm.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0209",
+        "severity": "error",
+        "summary": "match arm has type `Result<T, JsonError>`, expected `fresh JsonValue` from the first produced arm.",
+        "line": 23,
+        "label": "match arm type mismatch",
+        "causes": [
+          "A match expression must produce one compatible value type across every arm."
+        ],
+        "fixes": [
+          {
+            "title": "Return the same value type from every match expression arm.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0209",
+        "severity": "error",
+        "summary": "match arm has type `Result<T, JsonError>`, expected `Int` from the first produced arm.",
+        "line": 27,
+        "label": "match arm type mismatch",
+        "causes": [
+          "A match expression must produce one compatible value type across every arm."
+        ],
+        "fixes": [
+          {
+            "title": "Return the same value type from every match expression arm.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0210",
+        "severity": "error",
+        "summary": "operator `<` has operands `Int` and `Unit`, expected numeric operands.",
+        "line": 16,
+        "label": "operator type mismatch",
+        "causes": [
+          "RSScript operators have fixed built-in operand types and do not use implicit conversion or overload resolution."
+        ],
+        "fixes": [
+          {
+            "title": "Compare values of the same supported type, or call an explicit named conversion/function first.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1001",
+        "severity": "error",
+        "summary": "arithmetic operators are only built in for numeric values.",
+        "line": 29,
+        "label": "operator on non-numeric value",
+        "causes": [
+          "RSScript does not support user-defined operator overloads."
+        ],
+        "fixes": [
+          {
+            "title": "Use a named function such as `Type.add(left: read a, right: read b)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

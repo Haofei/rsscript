@@ -1,0 +1,537 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 81153,
+    "check_ok": false,
+    "codes": [
+      "RS0002",
+      "RS0015",
+      "RS0022",
+      "RS0026",
+      "RS0202",
+      "RS0206",
+      "RS0208",
+      "RS0311",
+      "RS1004"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 1,
+        "label": "unsupported top-level item",
+        "causes": [
+          "This top-level construct is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 1,
+        "label": "unsupported top-level item",
+        "causes": [
+          "This top-level construct is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 2,
+        "label": "unsupported top-level item",
+        "causes": [
+          "This top-level construct is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 2,
+        "label": "unsupported top-level item",
+        "causes": [
+          "This top-level construct is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 2,
+        "label": "duplicate import name",
+        "causes": [
+          "Two `use` declarations bind the same local name in this file. Rename one with `use module.name as other_name` so each import is unambiguous."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 7,
+        "label": "unsupported expression",
+        "causes": [
+          "This expression is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 8,
+        "label": "unsupported expression",
+        "causes": [
+          "This expression is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 22,
+        "label": "unsupported expression",
+        "causes": [
+          "This expression is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 23,
+        "label": "unsupported expression",
+        "causes": [
+          "This expression is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 32,
+        "label": "unsupported expression",
+        "causes": [
+          "This expression is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 33,
+        "label": "unsupported expression",
+        "causes": [
+          "This expression is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 38,
+        "label": "unsupported statement",
+        "causes": [
+          "This statement is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0311",
+        "severity": "error",
+        "summary": "invalid assignment.",
+        "line": 8,
+        "label": "the left side of `=` is not a place",
+        "causes": [
+          "Assignment targets must be a place: a local, a field, or an index \u2014 not a call result or literal."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the target as a `let mut` local, or remove the assignment.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0311",
+        "severity": "error",
+        "summary": "invalid assignment.",
+        "line": 22,
+        "label": "the left side of `=` is not a place",
+        "causes": [
+          "Assignment targets must be a place: a local, a field, or an index \u2014 not a call result or literal."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the target as a `let mut` local, or remove the assignment.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0311",
+        "severity": "error",
+        "summary": "invalid assignment.",
+        "line": 23,
+        "label": "the left side of `=` is not a place",
+        "causes": [
+          "Assignment targets must be a place: a local, a field, or an index \u2014 not a call result or literal."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the target as a `let mut` local, or remove the assignment.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0002",
+        "severity": "error",
+        "summary": "function `main` must declare an explicit return type.",
+        "line": 31,
+        "label": "missing return type",
+        "causes": [
+          "Public APIs must not rely on inference; this checker applies the canonical rule to all functions."
+        ],
+        "fixes": [
+          {
+            "title": "Add `-> Unit` or another explicit return type.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `Int`.",
+        "line": 32,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `Int` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `publish` has type `Unit`, expected `Result<Int, ChannelError>`.",
+        "line": 4,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `Result<Int, ChannelError>` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `collect` has type `Unit`, expected `Result<Int, ChannelError>`.",
+        "line": 13,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `Result<Int, ChannelError>` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `value` for `read sender.send_cancellable` must use `take`.",
+        "line": 7,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Write `value: take ...` at the call site.",
+            "applicability": "machine-applicable",
+            "replacement": "take ",
+            "replace_line": 7,
+            "replace_column": 33,
+            "replace_length": 0
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `read cancel_source.token` does not resolve.",
+        "line": 34,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `CancellationSource.token`, `List.take`?",
+            "applicability": "maybe-incorrect",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `read cancel_source.cancel` does not resolve.",
+        "line": 43,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `CancellationSource.cancel`?",
+            "applicability": "maybe-incorrect",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0022",
+        "severity": "error",
+        "summary": "async call `read sender.send_cancellable` must be awaited.",
+        "line": 7,
+        "label": "async call must be awaited",
+        "causes": [
+          "Async calls introduce suspension boundaries that must be visible in source; `spawn` is reserved but not executable in v0.7."
+        ],
+        "fixes": [
+          {
+            "title": "Write `await read sender.send_cancellable(...)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0022",
+        "severity": "error",
+        "summary": "async call `read receiver.recv_cancellable` must be awaited.",
+        "line": 20,
+        "label": "async call must be awaited",
+        "causes": [
+          "Async calls introduce suspension boundaries that must be visible in source; `spawn` is reserved but not executable in v0.7."
+        ],
+        "fixes": [
+          {
+            "title": "Write `await read receiver.recv_cancellable(...)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1004",
+        "severity": "error",
+        "summary": "surface reference syntax is not part of RSScript.",
+        "line": 39,
+        "label": "surface reference attempt",
+        "causes": [
+          "RSScript uses explicit data effects instead of `&T` or `&mut T` syntax."
+        ],
+        "fixes": [
+          {
+            "title": "Use a parameter effect such as `value: read T` or `value: mut T`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

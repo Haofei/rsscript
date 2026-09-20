@@ -1,0 +1,136 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 11449,
+    "check_ok": false,
+    "codes": [
+      "RS0201",
+      "RS0202",
+      "RS0204",
+      "RS0308"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "receiver `report.lines` for `push` uses `read` but the method requires `mut`.",
+        "line": 6,
+        "label": "receiver effect mismatch",
+        "causes": [
+          "Receiver-call shorthand is only valid when the visible receiver effect exactly matches the resolved method's `self` effect."
+        ],
+        "fixes": [
+          {
+            "title": "Write `mut report.lines.push(...)`.",
+            "applicability": "machine-applicable",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `ReportSink.emit` uses an unnamed argument.",
+        "line": 10,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `ReportSink.emit` is missing required argument `report`.",
+        "line": 10,
+        "label": "missing argument",
+        "causes": [
+          "`ReportSink.emit` requires a named argument `report`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `report: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "field `title` for `Report` must be initialized with `take`.",
+        "line": 2,
+        "label": "missing constructor field effect",
+        "causes": [
+          "Inline fields take ownership of non-Copy local values stored inside the constructed struct."
+        ],
+        "fixes": [
+          {
+            "title": "Write `title: take ...` in the constructor.",
+            "applicability": "machine-applicable",
+            "replacement": "take ",
+            "replace_line": 2,
+            "replace_column": 28,
+            "replace_length": 0
+          }
+        ]
+      },
+      {
+        "code": "RS0308",
+        "severity": "error",
+        "summary": "`take` requires a local value.",
+        "line": 15,
+        "label": "not a local value",
+        "causes": [
+          "`title` is not a local binding and cannot be consumed with `take`."
+        ],
+        "fixes": [
+          {
+            "title": "Pass a local value with `take`, or use `read`/`mut` for managed values.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0308",
+        "severity": "error",
+        "summary": "`take` requires a local value.",
+        "line": 18,
+        "label": "not a local value",
+        "causes": [
+          "`report` is not a local binding and cannot be consumed with `take`."
+        ],
+        "fixes": [
+          {
+            "title": "Pass a local value with `take`, or use `read`/`mut` for managed values.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

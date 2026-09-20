@@ -1,0 +1,166 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 14920,
+    "check_ok": false,
+    "codes": [
+      "RS0206",
+      "RS1001"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `read read doc.field().as_array` does not resolve.",
+        "line": 5,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Json.is_array`, `Json.array`?",
+            "applicability": "maybe-incorrect",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `read read item.field().as_int` does not resolve.",
+        "line": 8,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Json.as_int`, `Json.at_int`?",
+            "applicability": "maybe-incorrect",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `write` does not resolve.",
+        "line": 17,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 17,
+            "replace_column": 22,
+            "replace_length": 5
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `write` does not resolve.",
+        "line": 18,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 18,
+            "replace_column": 19,
+            "replace_length": 5
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1001",
+        "severity": "error",
+        "summary": "arithmetic operators are only built in for numeric values.",
+        "line": 17,
+        "label": "operator on non-numeric value",
+        "causes": [
+          "RSScript does not support user-defined operator overloads."
+        ],
+        "fixes": [
+          {
+            "title": "Use a named function such as `Type.add(left: read a, right: read b)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1001",
+        "severity": "error",
+        "summary": "arithmetic operators are only built in for numeric values.",
+        "line": 18,
+        "label": "operator on non-numeric value",
+        "causes": [
+          "RSScript does not support user-defined operator overloads."
+        ],
+        "fixes": [
+          {
+            "title": "Use a named function such as `Type.add(left: read a, right: read b)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

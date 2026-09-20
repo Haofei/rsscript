@@ -1,0 +1,157 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 20577,
+    "check_ok": false,
+    "codes": [
+      "RS0015",
+      "RS0201",
+      "RS0204",
+      "RS0208",
+      "RS1001"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 2,
+        "label": "malformed with statement",
+        "causes": [
+          "`with` statements must use `with resource as name { ... }`."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `apply_settings` has type `Unit`, expected `Result<Int, String>`.",
+        "line": 1,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `Result<Int, String>` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `Audit.note` uses an unnamed argument.",
+        "line": 21,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Audit.note` is missing required argument `event`.",
+        "line": 21,
+        "label": "missing argument",
+        "causes": [
+          "`Audit.note` requires a named argument `event`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `event: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `Audit.note` uses an unnamed argument.",
+        "line": 22,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Audit.note` is missing required argument `event`.",
+        "line": 22,
+        "label": "missing argument",
+        "causes": [
+          "`Audit.note` requires a named argument `event`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `event: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1001",
+        "severity": "error",
+        "summary": "arithmetic operators are only built in for numeric values.",
+        "line": 22,
+        "label": "operator on non-numeric value",
+        "causes": [
+          "RSScript does not support user-defined operator overloads."
+        ],
+        "fixes": [
+          {
+            "title": "Use a named function such as `Type.add(left: read a, right: read b)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

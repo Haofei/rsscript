@@ -1,0 +1,37 @@
+fn main() -> Unit {
+    let channel1 = Channel.make(capacity: 1)
+    let channel2 = Channel.make(capacity: 1)
+    
+    let sender1 = channel1.sender
+    let receiver1 = channel1.receiver
+    let sender2 = channel2.sender
+    let receiver2 = channel2.receiver
+    
+    task_group {
+        async let feed1 = {
+            Sender.send(sender: sender1, value: 1)
+        }
+        
+        async let feed2 = {
+            Sender.send(sender: sender2, value: 2)
+        }
+        
+        local cancellation = CancellationSource.make()
+        
+        select {
+            _ => {
+                await Receiver.recv(receiver: receiver1)
+                Output.write(text: "Channel 1 won\n")
+                CancellationSource.cancel(source: cancellation)
+            }
+            _ => {
+                await Receiver.recv(receiver: receiver2)
+                Output.write(text: "Channel 2 won\n")
+                CancellationSource.cancel(source: cancellation)
+            }
+        }
+        
+        await feed1
+        await feed2
+    }
+}

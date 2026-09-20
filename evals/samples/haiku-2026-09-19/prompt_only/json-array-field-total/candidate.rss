@@ -1,0 +1,28 @@
+fn total_readings(text: read String) -> Result<Int, JsonError> {
+    let json = Json::parse(text)?;
+    let readings = json.get("readings")?;
+    
+    let mut total = 0;
+    let mut i = 0;
+    
+    loop {
+        match readings.get(i) {
+            Ok(element) => {
+                let value = element.get("value")?;
+                total = total + value.as_int()?;
+                i = i + 1;
+            },
+            Err(_) => break,
+        }
+    }
+    
+    Ok(total)
+}
+
+fn main() -> Unit {
+    let document = r#"{"readings":[{"value":10},{"value":20}]}"#;
+    match total_readings(document) {
+        Ok(total) => println!("Total: {}", total),
+        Err(e) => println!("Error: {}", e),
+    }
+}

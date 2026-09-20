@@ -1,0 +1,64 @@
+sum ValveState {
+  Closed,
+  Opening(int percent),
+  Open,
+  Faulted(int code)
+}
+
+fn step(state: read ValveState, command: read String) -> fresh ValveState {
+  match state {
+    Closed => {
+      fresh ValveState result;
+      if command == "open" {
+        result = Opening(percent: 0);
+      } else {
+        result = Closed;
+      }
+      result
+    },
+    Opening(percent) => {
+      fresh ValveState result;
+      if command == "open" {
+        fresh int newPercent = percent + 50;
+        if newPercent >= 100 {
+          result = Open;
+        } else {
+          result = Opening(percent: newPercent);
+        }
+      } else {
+        result = state;
+      }
+      result
+    },
+    Open => {
+      fresh ValveState result;
+      if command == "close" {
+        result = Closed;
+      } else {
+        result = Open;
+      }
+      result
+    },
+    Faulted(_) => {
+      state
+    }
+  }
+}
+
+fn label(state: read ValveState) -> fresh String {
+  match state {
+    Closed => "Closed",
+    Opening(percent) => "Opening(" + percent + "%)",
+    Open => "Open",
+    Faulted(code) => "Faulted(" + code + ")"
+  }
+}
+
+fn main() -> Unit {
+  fresh ValveState valve = Closed;
+  valve = step(valve, "open");
+  valve = step(valve, "open");
+  valve = step(valve, "open");
+  valve = step(valve, "open");
+  write(label(valve));
+}

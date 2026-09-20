@@ -1,0 +1,62 @@
+use tokio::sync::mpsc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+struct CancellationSource {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl CancellationSource {
+    fn new() -> Self {
+        CancellationSource {
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    fn cancel(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+    }
+}
+
+async fn send_work_result(tx: mpsc::Sender<i32>) {
+    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+    let _ = tx.send(42).await;
+}
+
+async fn send_deadline(tx: mpsc::Sender<i32>) {
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    let _ = tx.send(0).await;
+}
+
+#[tokio::main]
+async fn main() -> () {
+    let (work_tx, mut work_rx) = mpsc::channel::<i32>(1);
+    let (deadline_tx, mut deadline_rx) = mpsc::channel::<i32>(1);
+
+    let cancellation = Arc::new(CancellationSource::new());
+    let cancellation_clone = Arc::clone(&cancellation);
+
+    let work_handle = tokio::spawn(send_work_result(work_tx));
+    let deadline_handle = tokio::spawn(send_deadline(deadline_tx));
+
+    let mut outcome = String::new();
+
+    tokio::select! {
+        result = work_rx.recv() => {
+            if result.is_some() {
+                outcome = "Work completed".to_string();
+            }
+        }
+        deadline = deadline_rx.recv() => {
+            if deadline.is_some() {
+                outcome = "Deadline fired".to_string();
+                cancellation_clone.cancel();
+            }
+        }
+    }
+
+    let _ = work_handle.await;
+    let _ = deadline_handle.await;
+
+    println!("{}", outcome);
+}

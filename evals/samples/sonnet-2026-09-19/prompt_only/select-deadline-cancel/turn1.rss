@@ -1,0 +1,37 @@
+async fn send_work(tx: Sender<Int>) -> Unit {
+    await tx.send(42)
+}
+
+async fn send_deadline(tx: Sender<Int>) -> Unit {
+    await tx.send(1)
+}
+
+fn main() -> Unit {
+    let (work_tx, work_rx) = channel<Int>(1)
+    let (deadline_tx, deadline_rx) = channel<Int>(1)
+    let source = CancellationSource()
+
+    task_group {
+        async let work_handle = send_work(work_tx)
+        async let deadline_handle = send_deadline(deadline_tx)
+
+        select {
+            case result = await work_rx.recv() => {
+                println("work finished with result: " + result.to_string())
+            }
+            case marker = await deadline_rx.recv() => {
+                println("deadline fired")
+                source.cancel()
+            }
+        }
+
+        await work_handle
+        await deadline_handle
+    }
+
+    if source.is_cancelled() {
+        println("outcome: deadline won the race")
+    } else {
+        println("outcome: work completed before the deadline")
+    }
+}

@@ -1,0 +1,878 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 104127,
+    "check_ok": false,
+    "codes": [
+      "RS0015",
+      "RS0026",
+      "RS0203",
+      "RS0204",
+      "RS0206",
+      "RS0311"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 16,
+        "label": "malformed match arm",
+        "causes": [
+          "Match arms must use `pattern => statement` or `pattern => { ... }`."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 32,
+        "label": "malformed match arm",
+        "causes": [
+          "Match arms must use `pattern => statement` or `pattern => { ... }`."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 43,
+        "label": "malformed match arm",
+        "causes": [
+          "Match arms must use `pattern => statement` or `pattern => { ... }`."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 49,
+        "label": "malformed match arm",
+        "causes": [
+          "Match arms must use `pattern => statement` or `pattern => { ... }`."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0311",
+        "severity": "error",
+        "summary": "invalid assignment.",
+        "line": 57,
+        "label": "`valve` is not a binding in scope",
+        "causes": [
+          "The left side of `=` must be a `let mut` local in scope."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the target as a `let mut` local, or remove the assignment.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0311",
+        "severity": "error",
+        "summary": "invalid assignment.",
+        "line": 58,
+        "label": "`valve` is not a binding in scope",
+        "causes": [
+          "The left side of `=` must be a `let mut` local in scope."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the target as a `let mut` local, or remove the assignment.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0311",
+        "severity": "error",
+        "summary": "invalid assignment.",
+        "line": 59,
+        "label": "`valve` is not a binding in scope",
+        "causes": [
+          "The left side of `=` must be a `let mut` local in scope."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the target as a `let mut` local, or remove the assignment.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0311",
+        "severity": "error",
+        "summary": "invalid assignment.",
+        "line": 60,
+        "label": "`valve` is not a binding in scope",
+        "causes": [
+          "The left side of `=` must be a `let mut` local in scope."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the target as a `let mut` local, or remove the assignment.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `p`.",
+        "line": 18,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `p` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `p`.",
+        "line": 24,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `p` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `c`.",
+        "line": 33,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `c` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `valve`.",
+        "line": 57,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `valve` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `valve`.",
+        "line": 58,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `valve` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `valve`.",
+        "line": 59,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `valve` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `valve`.",
+        "line": 60,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `valve` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `valve`.",
+        "line": 62,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `valve` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `String.equals` does not resolve.",
+        "line": 11,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Eq.equals`?",
+            "applicability": "machine-applicable",
+            "replacement": "Eq.equals",
+            "replace_line": 11,
+            "replace_column": 16,
+            "replace_length": 13
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `String.equals` does not resolve.",
+        "line": 17,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Eq.equals`?",
+            "applicability": "machine-applicable",
+            "replacement": "Eq.equals",
+            "replace_line": 17,
+            "replace_column": 16,
+            "replace_length": 13
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Int.add` does not resolve.",
+        "line": 18,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Duration.add`?",
+            "applicability": "machine-applicable",
+            "replacement": "Duration.add",
+            "replace_line": 18,
+            "replace_column": 39,
+            "replace_length": 7
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Int.ge` does not resolve.",
+        "line": 19,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `String.equals` does not resolve.",
+        "line": 27,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Eq.equals`?",
+            "applicability": "machine-applicable",
+            "replacement": "Eq.equals",
+            "replace_line": 27,
+            "replace_column": 16,
+            "replace_length": 13
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `String.concat` has no argument named `parts`.",
+        "line": 44,
+        "label": "unknown argument",
+        "causes": [
+          "`String.concat` does not declare a parameter named `parts`."
+        ],
+        "fixes": [
+          {
+            "title": "Use one of: left, right.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `String.concat` is missing required argument `left`.",
+        "line": 44,
+        "label": "missing argument",
+        "causes": [
+          "`String.concat` requires a named argument `left`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `left: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `String.concat` is missing required argument `right`.",
+        "line": 44,
+        "label": "missing argument",
+        "causes": [
+          "`String.concat` requires a named argument `right`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `right: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `String.concat` has no argument named `parts`.",
+        "line": 50,
+        "label": "unknown argument",
+        "causes": [
+          "`String.concat` does not declare a parameter named `parts`."
+        ],
+        "fixes": [
+          {
+            "title": "Use one of: left, right.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `String.concat` is missing required argument `left`.",
+        "line": 50,
+        "label": "missing argument",
+        "causes": [
+          "`String.concat` requires a named argument `left`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `left: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `String.concat` is missing required argument `right`.",
+        "line": 50,
+        "label": "missing argument",
+        "causes": [
+          "`String.concat` requires a named argument `right`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `right: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Console.log` does not resolve.",
+        "line": 63,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`, `Math.log`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 63,
+            "replace_column": 5,
+            "replace_length": 11
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 2,
+    "duration_ms": 31463,
+    "check_ok": false,
+    "codes": [
+      "RS0203",
+      "RS0204"
+    ],
+    "source": "turn2.rss",
+    "diagnostics": [
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Eq.equals` has no argument named `a`.",
+        "line": 11,
+        "label": "unknown argument",
+        "causes": [
+          "`Eq.equals` does not declare a parameter named `a`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `self`? Declared: self, other.",
+            "applicability": "machine-applicable",
+            "replacement": "self",
+            "replace_line": 11,
+            "replace_column": 26,
+            "replace_length": 1
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Eq.equals` has no argument named `b`.",
+        "line": 11,
+        "label": "unknown argument",
+        "causes": [
+          "`Eq.equals` does not declare a parameter named `b`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `other`? Declared: self, other.",
+            "applicability": "machine-applicable",
+            "replacement": "other",
+            "replace_line": 11,
+            "replace_column": 38,
+            "replace_length": 1
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Eq.equals` is missing required argument `self`.",
+        "line": 11,
+        "label": "missing argument",
+        "causes": [
+          "`Eq.equals` requires a named argument `self`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `self: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Eq.equals` is missing required argument `other`.",
+        "line": 11,
+        "label": "missing argument",
+        "causes": [
+          "`Eq.equals` requires a named argument `other`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `other: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Eq.equals` has no argument named `a`.",
+        "line": 17,
+        "label": "unknown argument",
+        "causes": [
+          "`Eq.equals` does not declare a parameter named `a`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `self`? Declared: self, other.",
+            "applicability": "machine-applicable",
+            "replacement": "self",
+            "replace_line": 17,
+            "replace_column": 26,
+            "replace_length": 1
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Eq.equals` has no argument named `b`.",
+        "line": 17,
+        "label": "unknown argument",
+        "causes": [
+          "`Eq.equals` does not declare a parameter named `b`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `other`? Declared: self, other.",
+            "applicability": "machine-applicable",
+            "replacement": "other",
+            "replace_line": 17,
+            "replace_column": 38,
+            "replace_length": 1
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Eq.equals` is missing required argument `self`.",
+        "line": 17,
+        "label": "missing argument",
+        "causes": [
+          "`Eq.equals` requires a named argument `self`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `self: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Eq.equals` is missing required argument `other`.",
+        "line": 17,
+        "label": "missing argument",
+        "causes": [
+          "`Eq.equals` requires a named argument `other`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `other: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Eq.equals` has no argument named `a`.",
+        "line": 27,
+        "label": "unknown argument",
+        "causes": [
+          "`Eq.equals` does not declare a parameter named `a`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `self`? Declared: self, other.",
+            "applicability": "machine-applicable",
+            "replacement": "self",
+            "replace_line": 27,
+            "replace_column": 26,
+            "replace_length": 1
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Eq.equals` has no argument named `b`.",
+        "line": 27,
+        "label": "unknown argument",
+        "causes": [
+          "`Eq.equals` does not declare a parameter named `b`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `other`? Declared: self, other.",
+            "applicability": "machine-applicable",
+            "replacement": "other",
+            "replace_line": 27,
+            "replace_column": 38,
+            "replace_length": 1
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Eq.equals` is missing required argument `self`.",
+        "line": 27,
+        "label": "missing argument",
+        "causes": [
+          "`Eq.equals` requires a named argument `self`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `self: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Eq.equals` is missing required argument `other`.",
+        "line": 27,
+        "label": "missing argument",
+        "causes": [
+          "`Eq.equals` requires a named argument `other`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `other: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 3,
+    "duration_ms": 12290,
+    "check_ok": true,
+    "codes": [],
+    "source": "turn3.rss",
+    "diagnostics": []
+  }
+]

@@ -1,0 +1,699 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 94939,
+    "check_ok": false,
+    "codes": [
+      "RS0015",
+      "RS0203",
+      "RS0206",
+      "RS1002",
+      "RS1301"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 27,
+        "label": "unsupported expression",
+        "causes": [
+          "This expression is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 30,
+        "label": "unsupported expression",
+        "causes": [
+          "This expression is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1301",
+        "severity": "error",
+        "summary": "`ConsoleSink` does not satisfy protocol `Sink` method `deliver`.",
+        "line": 9,
+        "label": "missing protocol method mapping",
+        "causes": [
+          "`ConsoleSink` must map protocol method `deliver` to a concrete function."
+        ],
+        "fixes": [
+          {
+            "title": "Update the protocol impl mapping or concrete function signature to match the protocol contract exactly.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1301",
+        "severity": "error",
+        "summary": "`JsonSink` does not satisfy protocol `Sink` method `deliver`.",
+        "line": 16,
+        "label": "missing protocol method mapping",
+        "causes": [
+          "`JsonSink` must map protocol method `deliver` to a concrete function."
+        ],
+        "fixes": [
+          {
+            "title": "Update the protocol impl mapping or concrete function signature to match the protocol contract exactly.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `String.equals` does not resolve.",
+        "line": 25,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Eq.equals`?",
+            "applicability": "machine-applicable",
+            "replacement": "Eq.equals",
+            "replace_line": 25,
+            "replace_column": 8,
+            "replace_length": 13
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `JsonSink` has no argument named `channel`.",
+        "line": 26,
+        "label": "unknown argument",
+        "causes": [
+          "`JsonSink` does not declare a parameter named `channel`."
+        ],
+        "fixes": [
+          {
+            "title": "Use one of: .",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `ConsoleSink` has no argument named `prefix`.",
+        "line": 29,
+        "label": "unknown argument",
+        "causes": [
+          "`ConsoleSink` does not declare a parameter named `prefix`."
+        ],
+        "fixes": [
+          {
+            "title": "Use one of: .",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1002",
+        "severity": "error",
+        "summary": "cast-style conversions are not part of RSScript.",
+        "line": 27,
+        "label": "implicit conversion attempt",
+        "causes": [
+          "RSScript requires conversions to be explicit named APIs so review tools can see them."
+        ],
+        "fixes": [
+          {
+            "title": "Use a named conversion such as `Target.from(value: read source)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1002",
+        "severity": "error",
+        "summary": "cast-style conversions are not part of RSScript.",
+        "line": 30,
+        "label": "implicit conversion attempt",
+        "causes": [
+          "RSScript requires conversions to be explicit named APIs so review tools can see them."
+        ],
+        "fixes": [
+          {
+            "title": "Use a named conversion such as `Target.from(value: read source)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 2,
+    "duration_ms": 42676,
+    "check_ok": false,
+    "codes": [
+      "RS0025",
+      "RS0028",
+      "RS0201",
+      "RS0203",
+      "RS0204",
+      "RS0206",
+      "RS0208",
+      "RS1301"
+    ],
+    "source": "turn2.rss",
+    "diagnostics": [
+      {
+        "code": "RS1301",
+        "severity": "error",
+        "summary": "`ConsoleSink` does not satisfy protocol `Sink` method `deliver`.",
+        "line": 19,
+        "label": "missing protocol method mapping",
+        "causes": [
+          "`ConsoleSink` must map protocol method `deliver` to a concrete function."
+        ],
+        "fixes": [
+          {
+            "title": "Update the protocol impl mapping or concrete function signature to match the protocol contract exactly.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1301",
+        "severity": "error",
+        "summary": "`JsonSink` does not satisfy protocol `Sink` method `deliver`.",
+        "line": 23,
+        "label": "missing protocol method mapping",
+        "causes": [
+          "`JsonSink` must map protocol method `deliver` to a concrete function."
+        ],
+        "fixes": [
+          {
+            "title": "Update the protocol impl mapping or concrete function signature to match the protocol contract exactly.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0028",
+        "severity": "error",
+        "summary": "invalid `self` parameter in `console_deliver`.",
+        "line": 8,
+        "label": "invalid self parameter",
+        "causes": [
+          "`self` may only be the first parameter of a qualified method signature."
+        ],
+        "fixes": [
+          {
+            "title": "Use a different parameter name, or make this the first parameter of an explicit method/protocol signature.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0028",
+        "severity": "error",
+        "summary": "invalid `self` parameter in `json_deliver`.",
+        "line": 13,
+        "label": "invalid self parameter",
+        "causes": [
+          "`self` may only be the first parameter of a qualified method signature."
+        ],
+        "fixes": [
+          {
+            "title": "Use a different parameter name, or make this the first parameter of an explicit method/protocol signature.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0025",
+        "severity": "error",
+        "summary": "unknown field `prefix` on type `ConsoleSink`.",
+        "line": 9,
+        "label": "unknown field",
+        "causes": [
+          "RSScript field accesses must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Use a field declared on `ConsoleSink` or update the type declaration.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0025",
+        "severity": "error",
+        "summary": "unknown field `channel` on type `JsonSink`.",
+        "line": 15,
+        "label": "unknown field",
+        "causes": [
+          "RSScript field accesses must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Use a field declared on `JsonSink` or update the type declaration.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Json.object` is missing required argument `fields`.",
+        "line": 14,
+        "label": "missing argument",
+        "causes": [
+          "`Json.object` requires a named argument `fields`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `fields: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Json.set` does not resolve.",
+        "line": 15,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `List.set`?",
+            "applicability": "machine-applicable",
+            "replacement": "List.set",
+            "replace_line": 15,
+            "replace_column": 5,
+            "replace_length": 8
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Json.string` does not resolve.",
+        "line": 15,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Json.strings`?",
+            "applicability": "machine-applicable",
+            "replacement": "Json.strings",
+            "replace_line": 15,
+            "replace_column": 54,
+            "replace_length": 11
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Json.stringify` does not resolve.",
+        "line": 16,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Json.string_at`, `Json.strings`?",
+            "applicability": "machine-applicable",
+            "replacement": "Json.string_at",
+            "replace_line": 16,
+            "replace_column": 12,
+            "replace_length": 14
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Eq.equals` has no argument named `a`.",
+        "line": 28,
+        "label": "unknown argument",
+        "causes": [
+          "`Eq.equals` does not declare a parameter named `a`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `self`? Declared: self, other.",
+            "applicability": "machine-applicable",
+            "replacement": "self",
+            "replace_line": 28,
+            "replace_column": 18,
+            "replace_length": 1
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Eq.equals` has no argument named `b`.",
+        "line": 28,
+        "label": "unknown argument",
+        "causes": [
+          "`Eq.equals` does not declare a parameter named `b`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `other`? Declared: self, other.",
+            "applicability": "machine-applicable",
+            "replacement": "other",
+            "replace_line": 28,
+            "replace_column": 27,
+            "replace_length": 1
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Eq.equals` is missing required argument `self`.",
+        "line": 28,
+        "label": "missing argument",
+        "causes": [
+          "`Eq.equals` requires a named argument `self`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `self: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Eq.equals` is missing required argument `other`.",
+        "line": 28,
+        "label": "missing argument",
+        "causes": [
+          "`Eq.equals` requires a named argument `other`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `other: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `JsonSink` uses an unnamed argument.",
+        "line": 29,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `sink_for` has type `JsonSink`, expected `Dyn<Sink>`.",
+        "line": 30,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `Dyn<Sink>` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `ConsoleSink` uses an unnamed argument.",
+        "line": 32,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `sink_for` has type `ConsoleSink`, expected `Dyn<Sink>`.",
+        "line": 33,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `Dyn<Sink>` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 3,
+    "duration_ms": 71336,
+    "check_ok": false,
+    "codes": [
+      "RS0208",
+      "RS1301"
+    ],
+    "source": "turn3.rss",
+    "diagnostics": [
+      {
+        "code": "RS1301",
+        "severity": "error",
+        "summary": "`ConsoleSink` does not satisfy protocol `Sink` method `deliver`.",
+        "line": 8,
+        "label": "missing protocol method mapping",
+        "causes": [
+          "`ConsoleSink` must map protocol method `deliver` to a concrete function."
+        ],
+        "fixes": [
+          {
+            "title": "Update the protocol impl mapping or concrete function signature to match the protocol contract exactly.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1301",
+        "severity": "error",
+        "summary": "`JsonSink` does not satisfy protocol `Sink` method `deliver`.",
+        "line": 15,
+        "label": "missing protocol method mapping",
+        "causes": [
+          "`JsonSink` must map protocol method `deliver` to a concrete function."
+        ],
+        "fixes": [
+          {
+            "title": "Update the protocol impl mapping or concrete function signature to match the protocol contract exactly.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `sink_for` has type `JsonSink`, expected `Dyn<Sink>`.",
+        "line": 28,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `Dyn<Sink>` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `sink_for` has type `ConsoleSink`, expected `Dyn<Sink>`.",
+        "line": 31,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `Dyn<Sink>` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

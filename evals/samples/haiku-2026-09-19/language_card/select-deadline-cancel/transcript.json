@@ -1,0 +1,441 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 76059,
+    "check_ok": false,
+    "codes": [
+      "RS0015",
+      "RS0022",
+      "RS0202",
+      "RS0206",
+      "RS0308"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 26,
+        "label": "malformed select arm",
+        "causes": [
+          "Select arms must use `name = await operation => { ... }`."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 27,
+        "label": "unsupported expression",
+        "causes": [
+          "This expression is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 29,
+        "label": "malformed select arm",
+        "causes": [
+          "Select arms must use `name = await operation => { ... }`."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `value` for `read sender.send` must use `take`.",
+        "line": 2,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Write `value: take ...` at the call site.",
+            "applicability": "machine-applicable",
+            "replacement": "take ",
+            "replace_line": 2,
+            "replace_column": 24,
+            "replace_length": 0
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `value` for `read sender.send` must use `take`.",
+        "line": 6,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Write `value: take ...` at the call site.",
+            "applicability": "machine-applicable",
+            "replacement": "take ",
+            "replace_line": 6,
+            "replace_column": 24,
+            "replace_length": 0
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `read work_channel.sender` does not resolve.",
+        "line": 13,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Channel.sender`, `Sender.send`?",
+            "applicability": "maybe-incorrect",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `read work_channel.receiver` does not resolve.",
+        "line": 14,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Channel.receiver`?",
+            "applicability": "maybe-incorrect",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `read deadline_channel.sender` does not resolve.",
+        "line": 16,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Channel.sender`, `Sender.send`?",
+            "applicability": "maybe-incorrect",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `read deadline_channel.receiver` does not resolve.",
+        "line": 17,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Channel.receiver`?",
+            "applicability": "maybe-incorrect",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `read work_receiver.receive` does not resolve.",
+        "line": 26,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Channel.receiver`?",
+            "applicability": "maybe-incorrect",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `print` does not resolve.",
+        "line": 27,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 27,
+            "replace_column": 17,
+            "replace_length": 5
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `read deadline_receiver.receive` does not resolve.",
+        "line": 29,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Channel.receiver`?",
+            "applicability": "maybe-incorrect",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `print` does not resolve.",
+        "line": 30,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 30,
+            "replace_column": 17,
+            "replace_length": 5
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "receiver `cancellation` for `cancel` uses `read` but the method requires `mut`.",
+        "line": 31,
+        "label": "receiver effect mismatch",
+        "causes": [
+          "Receiver-call shorthand is only valid when the visible receiver effect exactly matches the resolved method's `self` effect."
+        ],
+        "fixes": [
+          {
+            "title": "Write `mut cancellation.cancel(...)`.",
+            "applicability": "machine-applicable",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0022",
+        "severity": "error",
+        "summary": "async call `read sender.send` must be awaited.",
+        "line": 2,
+        "label": "async call must be awaited",
+        "causes": [
+          "Async calls introduce suspension boundaries that must be visible in source; `spawn` is reserved but not executable in v0.7."
+        ],
+        "fixes": [
+          {
+            "title": "Write `await read sender.send(...)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0022",
+        "severity": "error",
+        "summary": "async call `read sender.send` must be awaited.",
+        "line": 6,
+        "label": "async call must be awaited",
+        "causes": [
+          "Async calls introduce suspension boundaries that must be visible in source; `spawn` is reserved but not executable in v0.7."
+        ],
+        "fixes": [
+          {
+            "title": "Write `await read sender.send(...)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0308",
+        "severity": "error",
+        "summary": "`take` requires a local value.",
+        "line": 20,
+        "label": "not a local value",
+        "causes": [
+          "`work_sender` is not a local binding and cannot be consumed with `take`."
+        ],
+        "fixes": [
+          {
+            "title": "Pass a local value with `take`, or use `read`/`mut` for managed values.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0308",
+        "severity": "error",
+        "summary": "`take` requires a local value.",
+        "line": 21,
+        "label": "not a local value",
+        "causes": [
+          "`deadline_sender` is not a local binding and cannot be consumed with `take`."
+        ],
+        "fixes": [
+          {
+            "title": "Pass a local value with `take`, or use `read`/`mut` for managed values.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

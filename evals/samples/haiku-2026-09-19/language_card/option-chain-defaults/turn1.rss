@@ -1,0 +1,35 @@
+struct Window(start: Int, width: Int)
+
+fn field_of(line: read String, delimiter: read String) -> Option<String> {
+    let maybe_index = String.index_of(haystack: line, needle: delimiter)
+    return match maybe_index {
+        Some(i) => {
+            let after_delimiter = Int.add(i, String.length(value: delimiter))
+            Some(value: String.substring(value: line, start: after_delimiter))
+        }
+        None() => { None() }
+    }
+}
+
+fn parsed_field(line: read String, delimiter: read String) -> Option<Int> {
+    return Option.and_then(option: field_of(line: line, delimiter: delimiter), f: noescape |field: String| -> Option<Int> {
+        return Int.parse(value: field)
+    })
+}
+
+fn window_from(line: read String) -> fresh Window {
+    let width = match parsed_field(line: line, delimiter: "width:") {
+        Some(w) => {
+            if Int.greater_than(w, 0) { w } else { 60 }
+        }
+        None() => { 60 }
+    }
+    return Window(start: 0, width: width)
+}
+
+fn main() -> Unit {
+    let line = "width:40"
+    let window = window_from(line: line)
+    write(String.concat(value: "start: ", other: Int.to_string(value: window.start)))
+    write(String.concat(value: "width: ", other: Int.to_string(value: window.width)))
+}

@@ -1,0 +1,320 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 59841,
+    "check_ok": false,
+    "codes": [
+      "RS0015",
+      "RS0203",
+      "RS0204",
+      "RS0206"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Json.parse` has no argument named `value`.",
+        "line": 2,
+        "label": "unknown argument",
+        "causes": [
+          "`Json.parse` does not declare a parameter named `value`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `text`? Declared: text.",
+            "applicability": "machine-applicable",
+            "replacement": "text",
+            "replace_line": 2,
+            "replace_column": 29,
+            "replace_length": 5
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Json.parse` is missing required argument `text`.",
+        "line": 2,
+        "label": "missing argument",
+        "causes": [
+          "`Json.parse` requires a named argument `text`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `text: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Json.to_object` does not resolve.",
+        "line": 3,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Json.is_object`, `Json.object`?",
+            "applicability": "machine-applicable",
+            "replacement": "Json.is_object",
+            "replace_line": 3,
+            "replace_column": 15,
+            "replace_length": 14
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Json.object_get` does not resolve.",
+        "line": 4,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Json.object_len`, `Json.object_keys`?",
+            "applicability": "machine-applicable",
+            "replacement": "Json.object_len",
+            "replace_line": 4,
+            "replace_column": 23,
+            "replace_length": 15
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Json.to_array` does not resolve.",
+        "line": 5,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Json.is_array`, `Json.array`?",
+            "applicability": "machine-applicable",
+            "replacement": "Json.is_array",
+            "replace_line": 5,
+            "replace_column": 23,
+            "replace_length": 13
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Json.array_iterate` does not resolve.",
+        "line": 8,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Json.to_object` does not resolve.",
+        "line": 9,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Json.is_object`, `Json.object`?",
+            "applicability": "machine-applicable",
+            "replacement": "Json.is_object",
+            "replace_line": 9,
+            "replace_column": 24,
+            "replace_length": 14
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Json.object_get` does not resolve.",
+        "line": 10,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Json.object_len`, `Json.object_keys`?",
+            "applicability": "machine-applicable",
+            "replacement": "Json.object_len",
+            "replace_line": 10,
+            "replace_column": 30,
+            "replace_length": 15
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Json.to_int` does not resolve.",
+        "line": 11,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Json.as_int`, `Json.at_int`?",
+            "applicability": "machine-applicable",
+            "replacement": "Json.as_int",
+            "replace_line": 11,
+            "replace_column": 24,
+            "replace_length": 11
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "variant `Ok` must use its conventional RSScript form.",
+        "line": 15,
+        "label": "unsupported variant form",
+        "causes": [
+          "Standard Result and Option variants are call-like for checker purposes, but they are not ordinary named-argument calls."
+        ],
+        "fixes": [
+          {
+            "title": "Write this variant as `Ok(value)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `System.write` does not resolve.",
+        "line": 23,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 23,
+            "replace_column": 13,
+            "replace_length": 12
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `System.write` does not resolve.",
+        "line": 26,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 26,
+            "replace_column": 13,
+            "replace_length": 12
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

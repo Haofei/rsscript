@@ -1,0 +1,53 @@
+struct ServiceConfig {
+    name: String,
+    port: Int,
+    enabled: Bool,
+}
+
+fn describe_json_error(error: read JsonError) -> String {
+    return "invalid config: the JSON text or a required field could not be read"
+}
+
+fn load_config(text: String) -> Result<fresh ServiceConfig, String> {
+    match Json.parse(text: text) {
+        Err(parse_error) => {
+            return Err(describe_json_error(error: parse_error))
+        }
+        Ok(document) => {
+            match Json.field_string(value: document, key: "name") {
+                Err(name_error) => {
+                    return Err(describe_json_error(error: name_error))
+                }
+                Ok(name) => {
+                    match Json.field_int(value: document, key: "port") {
+                        Err(port_error) => {
+                            return Err(describe_json_error(error: port_error))
+                        }
+                        Ok(port) => {
+                            if port < 1 {
+                                return Err("port must be at least 1")
+                            }
+                            if port > 65535 {
+                                return Err("port must be at most 65535")
+                            }
+                            local checked_name = name
+                            return Ok(ServiceConfig(name: take checked_name, port: port, enabled: true))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn main() -> Unit {
+    let literal: String = "{\"name\": \"billing\", \"port\": 8080}"
+    match load_config(text: literal) {
+        Ok(config) => {
+            Output.write(message: config.name)
+        }
+        Err(message) => {
+            Output.write(message: message)
+        }
+    }
+}

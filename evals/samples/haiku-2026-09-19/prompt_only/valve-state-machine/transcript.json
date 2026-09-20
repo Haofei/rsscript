@@ -1,0 +1,709 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 38389,
+    "check_ok": false,
+    "codes": [
+      "RS0015",
+      "RS0026",
+      "RS0037",
+      "RS0203",
+      "RS0206",
+      "RS0208",
+      "RS0311"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 11,
+        "label": "unsupported expression",
+        "causes": [
+          "This expression is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 20,
+        "label": "unsupported expression",
+        "causes": [
+          "This expression is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 22,
+        "label": "unsupported expression",
+        "causes": [
+          "This expression is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 34,
+        "label": "unsupported expression",
+        "causes": [
+          "This expression is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 58,
+        "label": "unsupported expression",
+        "causes": [
+          "This expression is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0311",
+        "severity": "error",
+        "summary": "invalid assignment.",
+        "line": 13,
+        "label": "`result` is not a binding in scope",
+        "causes": [
+          "The left side of `=` must be a `let mut` local in scope."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the target as a `let mut` local, or remove the assignment.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0311",
+        "severity": "error",
+        "summary": "invalid assignment.",
+        "line": 15,
+        "label": "`result` is not a binding in scope",
+        "causes": [
+          "The left side of `=` must be a `let mut` local in scope."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the target as a `let mut` local, or remove the assignment.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0311",
+        "severity": "error",
+        "summary": "invalid assignment.",
+        "line": 22,
+        "label": "the left side of `=` is not a place",
+        "causes": [
+          "Assignment targets must be a place: a local, a field, or an index \u2014 not a call result or literal."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the target as a `let mut` local, or remove the assignment.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0311",
+        "severity": "error",
+        "summary": "invalid assignment.",
+        "line": 24,
+        "label": "`result` is not a binding in scope",
+        "causes": [
+          "The left side of `=` must be a `let mut` local in scope."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the target as a `let mut` local, or remove the assignment.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0311",
+        "severity": "error",
+        "summary": "invalid assignment.",
+        "line": 26,
+        "label": "`result` is not a binding in scope",
+        "causes": [
+          "The left side of `=` must be a `let mut` local in scope."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the target as a `let mut` local, or remove the assignment.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0311",
+        "severity": "error",
+        "summary": "invalid assignment.",
+        "line": 29,
+        "label": "`result` is not a binding in scope",
+        "causes": [
+          "The left side of `=` must be a `let mut` local in scope."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the target as a `let mut` local, or remove the assignment.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0311",
+        "severity": "error",
+        "summary": "invalid assignment.",
+        "line": 36,
+        "label": "`result` is not a binding in scope",
+        "causes": [
+          "The left side of `=` must be a `let mut` local in scope."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the target as a `let mut` local, or remove the assignment.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0311",
+        "severity": "error",
+        "summary": "invalid assignment.",
+        "line": 38,
+        "label": "`result` is not a binding in scope",
+        "causes": [
+          "The left side of `=` must be a `let mut` local in scope."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the target as a `let mut` local, or remove the assignment.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0311",
+        "severity": "error",
+        "summary": "invalid assignment.",
+        "line": 58,
+        "label": "the left side of `=` is not a place",
+        "causes": [
+          "Assignment targets must be a place: a local, a field, or an index \u2014 not a call result or literal."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the target as a `let mut` local, or remove the assignment.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0311",
+        "severity": "error",
+        "summary": "invalid assignment.",
+        "line": 59,
+        "label": "`valve` is not a binding in scope",
+        "causes": [
+          "The left side of `=` must be a `let mut` local in scope."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the target as a `let mut` local, or remove the assignment.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0311",
+        "severity": "error",
+        "summary": "invalid assignment.",
+        "line": 60,
+        "label": "`valve` is not a binding in scope",
+        "causes": [
+          "The left side of `=` must be a `let mut` local in scope."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the target as a `let mut` local, or remove the assignment.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0311",
+        "severity": "error",
+        "summary": "invalid assignment.",
+        "line": 61,
+        "label": "`valve` is not a binding in scope",
+        "causes": [
+          "The left side of `=` must be a `let mut` local in scope."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the target as a `let mut` local, or remove the assignment.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0311",
+        "severity": "error",
+        "summary": "invalid assignment.",
+        "line": 62,
+        "label": "`valve` is not a binding in scope",
+        "causes": [
+          "The left side of `=` must be a `let mut` local in scope."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the target as a `let mut` local, or remove the assignment.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `result`.",
+        "line": 17,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `result` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `newPercent`.",
+        "line": 23,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `newPercent` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `newPercent`.",
+        "line": 26,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `newPercent` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `result`.",
+        "line": 31,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `result` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `result`.",
+        "line": 40,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `result` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `valve`.",
+        "line": 59,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `valve` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `valve`.",
+        "line": 60,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `valve` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `valve`.",
+        "line": 61,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `valve` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `valve`.",
+        "line": 62,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `valve` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `valve`.",
+        "line": 63,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `valve` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `step` has type `Unit`, expected `ValveState`.",
+        "line": 8,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `ValveState` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `label` has type `Unit`, expected `String`.",
+        "line": 48,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `String` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "variant `Opening` has no field `percent`.",
+        "line": 13,
+        "label": "unknown variant field",
+        "causes": [],
+        "fixes": []
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "variant `Opening` has no field `percent`.",
+        "line": 26,
+        "label": "unknown variant field",
+        "causes": [],
+        "fixes": []
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `write` does not resolve.",
+        "line": 63,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 63,
+            "replace_column": 3,
+            "replace_length": 5
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0037",
+        "severity": "error",
+        "summary": "variant pattern `Opening` binds 1 sub-pattern(s) but `Opening` declares 0 fields.",
+        "line": 19,
+        "label": "variant pattern arity mismatch",
+        "causes": [
+          "A positional variant pattern must bind exactly as many sub-patterns as the variant declares fields, in declared order."
+        ],
+        "fixes": []
+      },
+      {
+        "code": "RS0037",
+        "severity": "error",
+        "summary": "variant pattern `Faulted` binds 1 sub-pattern(s) but `Faulted` declares 0 fields.",
+        "line": 42,
+        "label": "variant pattern arity mismatch",
+        "causes": [
+          "A positional variant pattern must bind exactly as many sub-patterns as the variant declares fields, in declared order."
+        ],
+        "fixes": []
+      },
+      {
+        "code": "RS0037",
+        "severity": "error",
+        "summary": "variant pattern `Opening` binds 1 sub-pattern(s) but `Opening` declares 0 fields.",
+        "line": 51,
+        "label": "variant pattern arity mismatch",
+        "causes": [
+          "A positional variant pattern must bind exactly as many sub-patterns as the variant declares fields, in declared order."
+        ],
+        "fixes": []
+      },
+      {
+        "code": "RS0037",
+        "severity": "error",
+        "summary": "variant pattern `Faulted` binds 1 sub-pattern(s) but `Faulted` declares 0 fields.",
+        "line": 53,
+        "label": "variant pattern arity mismatch",
+        "causes": [
+          "A positional variant pattern must bind exactly as many sub-patterns as the variant declares fields, in declared order."
+        ],
+        "fixes": []
+      }
+    ]
+  }
+]

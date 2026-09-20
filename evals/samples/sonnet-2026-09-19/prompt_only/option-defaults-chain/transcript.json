@@ -1,0 +1,153 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 12833,
+    "check_ok": false,
+    "codes": [
+      "RS0206",
+      "RS0208",
+      "RS0209"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `lookup` has type `String`, expected `Option<String>`.",
+        "line": 12,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `Option<String>` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `parse_int` does not resolve.",
+        "line": 31,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `print` does not resolve.",
+        "line": 45,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 45,
+            "replace_column": 5,
+            "replace_length": 5
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `print` does not resolve.",
+        "line": 46,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 46,
+            "replace_column": 5,
+            "replace_length": 5
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `to_string` does not resolve.",
+        "line": 46,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0209",
+        "severity": "error",
+        "summary": "match pattern `Some` cannot match scrutinee type `String`.",
+        "line": 10,
+        "label": "match pattern type mismatch",
+        "causes": [
+          "RSScript match patterns must belong to the scrutinee's type."
+        ],
+        "fixes": []
+      },
+      {
+        "code": "RS0209",
+        "severity": "error",
+        "summary": "match pattern `None` cannot match scrutinee type `String`.",
+        "line": 15,
+        "label": "match pattern type mismatch",
+        "causes": [
+          "RSScript match patterns must belong to the scrutinee's type."
+        ],
+        "fixes": []
+      }
+    ]
+  }
+]

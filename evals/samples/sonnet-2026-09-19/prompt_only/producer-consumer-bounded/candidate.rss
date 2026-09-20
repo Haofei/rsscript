@@ -1,0 +1,38 @@
+// Note: written from the task description alone; no RSScript compiler or reference was available here, so this is unverified.
+async fn producer(tx: Sender<Int>, token: CancellationToken) {
+    var i = 1
+    while i <= 4 {
+        if token.is_cancelled() {
+            break
+        }
+        await tx.send(take i)
+        i = i + 1
+    }
+}
+
+async fn consumer(rx: Receiver<Int>) -> Int {
+    var seen = 0
+    while seen < 4 {
+        match await rx.recv() {
+            Some(v) => {
+                seen = seen + 1
+            }
+            None => {
+                break
+            }
+        }
+    }
+    return seen
+}
+
+async fn main() {
+    let (tx, rx) = channel<Int>(capacity: 2)
+
+    task_group {
+        let token = Task.cancellation_token()
+        let p = spawn producer(take tx, token)
+        let c = spawn consumer(take rx)
+        await p
+        await c
+    }
+}

@@ -1,0 +1,64 @@
+sum ValveState {
+    Closed,
+    Opening(percent: Int),
+    Open,
+    Faulted(code: Int),
+}
+
+fn step(state: read ValveState, command: read String) -> fresh ValveState {
+    match state {
+        Closed => {
+            if Eq.equals(a: command, b: "open") {
+                return ValveState.Opening(percent: 0)
+            }
+            return ValveState.Closed()
+        }
+        Opening(p) => {
+            if Eq.equals(a: command, b: "open") {
+                let newPercent: Int = p + 50
+                if newPercent >= 100 {
+                    return ValveState.Open()
+                }
+                return ValveState.Opening(percent: newPercent)
+            }
+            return ValveState.Opening(percent: p)
+        }
+        Open => {
+            if Eq.equals(a: command, b: "close") {
+                return ValveState.Closed()
+            }
+            return ValveState.Open()
+        }
+        Faulted(c) => {
+            return ValveState.Faulted(code: c)
+        }
+    }
+}
+
+fn label(state: read ValveState) -> fresh String {
+    match state {
+        Closed => {
+            return "Closed"
+        }
+        Opening(p) => {
+            return String.concat(left: "Opening(", right: String.concat(left: Int.to_string(value: p), right: ")"))
+        }
+        Open => {
+            return "Open"
+        }
+        Faulted(c) => {
+            return String.concat(left: "Faulted(", right: String.concat(left: Int.to_string(value: c), right: ")"))
+        }
+    }
+}
+
+fn main() -> Unit {
+    let mut valve: ValveState = ValveState.Closed()
+    valve = step(state: valve, command: "open")
+    valve = step(state: valve, command: "open")
+    valve = step(state: valve, command: "open")
+    valve = step(state: valve, command: "open")
+    
+    let finalLabel: String = label(state: valve)
+    Output.write(message: finalLabel)
+}

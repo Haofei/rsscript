@@ -1,0 +1,379 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 15446,
+    "check_ok": false,
+    "codes": [
+      "RS0031",
+      "RS0202",
+      "RS0207"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `value` for `Sender.send` must use `take`.",
+        "line": 2,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Write `value: take ...` at the call site.",
+            "applicability": "machine-applicable",
+            "replacement": "take ",
+            "replace_line": 2,
+            "replace_column": 51,
+            "replace_length": 0
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `value` for `Sender.send` must use `take`.",
+        "line": 6,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Write `value: take ...` at the call site.",
+            "applicability": "machine-applicable",
+            "replacement": "take ",
+            "replace_line": 6,
+            "replace_column": 51,
+            "replace_length": 0
+          }
+        ]
+      },
+      {
+        "code": "RS0207",
+        "severity": "error",
+        "summary": "binding `left_rx` has initializer type `Result<fresh Receiver<Int>, ChannelError>`, expected `Receiver<Int>`.",
+        "line": 13,
+        "label": "binding type mismatch",
+        "causes": [
+          "Explicit `let` and `local` type annotations are source-level contracts and must match the initializer before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Initialize `left_rx` with a `Receiver<Int>` value, or change the binding annotation.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `channel` for `Channel.receiver` must use `mut`.",
+        "line": 13,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Write `channel: mut ...` at the call site.",
+            "applicability": "machine-applicable",
+            "replacement": "mut",
+            "replace_line": 13,
+            "replace_column": 62,
+            "replace_length": 4
+          }
+        ]
+      },
+      {
+        "code": "RS0207",
+        "severity": "error",
+        "summary": "binding `right_rx` has initializer type `Result<fresh Receiver<Int>, ChannelError>`, expected `Receiver<Int>`.",
+        "line": 15,
+        "label": "binding type mismatch",
+        "causes": [
+          "Explicit `let` and `local` type annotations are source-level contracts and must match the initializer before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Initialize `right_rx` with a `Receiver<Int>` value, or change the binding annotation.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `channel` for `Channel.receiver` must use `mut`.",
+        "line": 15,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Write `channel: mut ...` at the call site.",
+            "applicability": "machine-applicable",
+            "replacement": "mut",
+            "replace_line": 15,
+            "replace_column": 63,
+            "replace_length": 4
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `source` for `CancellationSource.cancel` must use `mut`.",
+        "line": 26,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Write `source: mut ...` at the call site.",
+            "applicability": "machine-applicable",
+            "replacement": "mut",
+            "replace_line": 26,
+            "replace_column": 51,
+            "replace_length": 4
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `source` for `CancellationSource.cancel` must use `mut`.",
+        "line": 30,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Write `source: mut ...` at the call site.",
+            "applicability": "machine-applicable",
+            "replacement": "mut",
+            "replace_line": 30,
+            "replace_column": 51,
+            "replace_length": 4
+          }
+        ]
+      },
+      {
+        "code": "RS0031",
+        "severity": "error",
+        "summary": "local value `sender` cannot live across `await`.",
+        "line": 2,
+        "label": "value live across await",
+        "causes": [
+          "Suspending an RSScript async frame may keep managed handles and Copy snapshots, but local values, resources, and runtime guards must not be retained across suspension."
+        ],
+        "fixes": [
+          {
+            "title": "End the lifetime of `sender` before this `await`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0031",
+        "severity": "error",
+        "summary": "local value `sender` cannot live across `await`.",
+        "line": 6,
+        "label": "value live across await",
+        "causes": [
+          "Suspending an RSScript async frame may keep managed handles and Copy snapshots, but local values, resources, and runtime guards must not be retained across suspension."
+        ],
+        "fixes": [
+          {
+            "title": "End the lifetime of `sender` before this `await`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0031",
+        "severity": "error",
+        "summary": "local value `left_rx` cannot live across `await`.",
+        "line": 24,
+        "label": "value live across await",
+        "causes": [
+          "Suspending an RSScript async frame may keep managed handles and Copy snapshots, but local values, resources, and runtime guards must not be retained across suspension."
+        ],
+        "fixes": [
+          {
+            "title": "End the lifetime of `left_rx` before this `await`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0031",
+        "severity": "error",
+        "summary": "local value `right_rx` cannot live across `await`.",
+        "line": 28,
+        "label": "value live across await",
+        "causes": [
+          "Suspending an RSScript async frame may keep managed handles and Copy snapshots, but local values, resources, and runtime guards must not be retained across suspension."
+        ],
+        "fixes": [
+          {
+            "title": "End the lifetime of `right_rx` before this `await`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 2,
+    "duration_ms": 81644,
+    "check_ok": false,
+    "codes": [
+      "RS0015",
+      "RS0208",
+      "RS0308"
+    ],
+    "source": "turn2.rss",
+    "diagnostics": [
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 30,
+        "label": "unsupported expression",
+        "causes": [
+          "This expression is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `main` has type `Unit`, expected `Result<Unit, ChannelError>`.",
+        "line": 1,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `Result<Unit, ChannelError>` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0308",
+        "severity": "error",
+        "summary": "`take` requires a local value.",
+        "line": 12,
+        "label": "not a local value",
+        "causes": [
+          "`take` can only consume a named local binding or a local field path."
+        ],
+        "fixes": [
+          {
+            "title": "Pass a local value with `take`, or use `read`/`mut` for managed values.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0308",
+        "severity": "error",
+        "summary": "`take` requires a local value.",
+        "line": 13,
+        "label": "not a local value",
+        "causes": [
+          "`take` can only consume a named local binding or a local field path."
+        ],
+        "fixes": [
+          {
+            "title": "Pass a local value with `take`, or use `read`/`mut` for managed values.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 3,
+    "duration_ms": 27178,
+    "check_ok": false,
+    "codes": [
+      "RS0208"
+    ],
+    "source": "turn3.rss",
+    "diagnostics": [
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `main` has type `Unit`, expected `Result<Unit, ChannelError>`.",
+        "line": 1,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `Result<Unit, ChannelError>` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

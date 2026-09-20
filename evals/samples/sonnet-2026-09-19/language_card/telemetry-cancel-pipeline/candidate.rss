@@ -1,0 +1,60 @@
+async fn publish(sender: Sender<Int>, samples: read List<Int>, token: CancellationToken) -> Result<Int, ChannelError> {
+    let mut sent: Int = 0
+    for sample in samples {
+        if CancellationToken.is_cancelled(token: token) {
+            return Ok(sent)
+        }
+        local value = sample
+        match Sender.send_cancellable(sender: sender, value: take value, token: token) {
+            Ok(_) => {
+                sent = sent + 1
+            }
+            Err(error) => {
+                return Err(error)
+            }
+        }
+    }
+    return Ok(sent)
+}
+
+async fn collect(receiver: Receiver<Int>, limit: Int, token: CancellationToken) -> Result<Int, ChannelError> {
+    let mut total: Int = 0
+    let mut seen: Int = 0
+    while seen < limit {
+        match Receiver.recv_cancellable(receiver: receiver, token: token) {
+            Ok(Some(value)) => {
+                total = total + value
+                seen = seen + 1
+            }
+            Ok(None) => {
+                return Ok(total)
+            }
+            Err(error) => {
+                return Err(error)
+            }
+        }
+    }
+    return Ok(total)
+}
+
+async fn main() -> Unit {
+    let mut samples: List<Int> = List.new()
+    List.push(list: mut samples, value: 10)
+    List.push(list: mut samples, value: 20)
+    List.push(list: mut samples, value: 30)
+    List.push(list: mut samples, value: 40)
+
+    local channel = Channel.bounded<Int>(capacity: 2)
+    local sender = Channel.take_sender(channel: mut channel)
+    local receiver = Channel.take_receiver(channel: mut channel)
+    let source = CancellationSource.new()
+    let token = CancellationSource.token(source: source)
+
+    task_group {
+        async let producer = publish(sender: take sender, samples: samples, token: token)
+        async let consumer = collect(receiver: take receiver, limit: 4, token: token)
+        let consumed = await consumer
+        CancellationSource.cancel(source: source)
+        let produced = await producer
+    }
+}

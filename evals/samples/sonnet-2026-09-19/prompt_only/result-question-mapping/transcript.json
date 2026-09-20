@@ -1,0 +1,338 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 14861,
+    "check_ok": false,
+    "codes": [
+      "RS0201",
+      "RS0206",
+      "RS0208",
+      "RS1001"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `IngestError.detail` has type `Unit`, expected `String`.",
+        "line": 6,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `String` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `parse_amount` has type `Unit`, expected `Result<Int, IngestError>`.",
+        "line": 13,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `Result<Int, IngestError>` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `check_amount` has type `Unit`, expected `Result<Int, IngestError>`.",
+        "line": 21,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `Result<Int, IngestError>` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `ingest` has type `Unit`, expected `Result<Int, IngestError>`.",
+        "line": 28,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `Result<Int, IngestError>` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `ingest_all` has type `Unit`, expected `Result<Int, String>`.",
+        "line": 34,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `Result<Int, String>` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Int.parse` does not resolve.",
+        "line": 15,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `String.parse_int`, `Json.parse`, `Yaml.parse`?",
+            "applicability": "machine-applicable",
+            "replacement": "String.parse_int",
+            "replace_line": 15,
+            "replace_column": 11,
+            "replace_length": 9
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "variant `Malformed` must be constructed with named fields, e.g. `Malformed(field: value)`.",
+        "line": 17,
+        "label": "variant field must be named",
+        "causes": [],
+        "fixes": []
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "variant `Rejected` must be constructed with named fields, e.g. `Rejected(field: value)`.",
+        "line": 23,
+        "label": "variant field must be named",
+        "causes": [],
+        "fixes": []
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `print` does not resolve.",
+        "line": 52,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 52,
+            "replace_column": 22,
+            "replace_length": 5
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `print` does not resolve.",
+        "line": 53,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 53,
+            "replace_column": 25,
+            "replace_length": 5
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1001",
+        "severity": "error",
+        "summary": "arithmetic operators are only built in for numeric values.",
+        "line": 52,
+        "label": "operator on non-numeric value",
+        "causes": [
+          "RSScript does not support user-defined operator overloads."
+        ],
+        "fixes": [
+          {
+            "title": "Use a named function such as `Type.add(left: read a, right: read b)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1001",
+        "severity": "error",
+        "summary": "arithmetic operators are only built in for numeric values.",
+        "line": 53,
+        "label": "operator on non-numeric value",
+        "causes": [
+          "RSScript does not support user-defined operator overloads."
+        ],
+        "fixes": [
+          {
+            "title": "Use a named function such as `Type.add(left: read a, right: read b)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1001",
+        "severity": "error",
+        "summary": "arithmetic operators are only built in for numeric values.",
+        "line": 17,
+        "label": "operator on non-numeric value",
+        "causes": [
+          "RSScript does not support user-defined operator overloads."
+        ],
+        "fixes": [
+          {
+            "title": "Use a named function such as `Type.add(left: read a, right: read b)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1001",
+        "severity": "error",
+        "summary": "arithmetic operators are only built in for numeric values.",
+        "line": 8,
+        "label": "operator on non-numeric value",
+        "causes": [
+          "RSScript does not support user-defined operator overloads."
+        ],
+        "fixes": [
+          {
+            "title": "Use a named function such as `Type.add(left: read a, right: read b)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1001",
+        "severity": "error",
+        "summary": "arithmetic operators are only built in for numeric values.",
+        "line": 9,
+        "label": "operator on non-numeric value",
+        "causes": [
+          "RSScript does not support user-defined operator overloads."
+        ],
+        "fixes": [
+          {
+            "title": "Use a named function such as `Type.add(left: read a, right: read b)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1001",
+        "severity": "error",
+        "summary": "arithmetic operators are only built in for numeric values.",
+        "line": 23,
+        "label": "operator on non-numeric value",
+        "causes": [
+          "RSScript does not support user-defined operator overloads."
+        ],
+        "fixes": [
+          {
+            "title": "Use a named function such as `Type.add(left: read a, right: read b)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

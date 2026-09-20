@@ -1,0 +1,20 @@
+fn parse_first(values: read List<String>) -> Result<Int, String> {
+    match EvalApi.first(values: values) {
+        Some(value) => { return EvalApi.parse(input: value) }
+        None => { return Err("no values") }
+    }
+}
+
+fn main() -> Unit {
+    let values = ["42"]
+    match parse_first(values: values) {
+        Ok(value) => {
+            local buffer = Buffer(text: "parsed")
+            EvalApi.consume(value: take buffer)
+        }
+        Err(message) => {
+            local buffer = Buffer(text: "failed")
+            EvalApi.consume(value: take buffer)
+        }
+    }
+}

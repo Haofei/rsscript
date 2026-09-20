@@ -1,0 +1,388 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 69432,
+    "check_ok": false,
+    "codes": [
+      "RS0026",
+      "RS0203",
+      "RS0204",
+      "RS0206"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `port`.",
+        "line": 22,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `port` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `route`.",
+        "line": 27,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `route` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `route`.",
+        "line": 28,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `route` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Array.len` does not resolve.",
+        "line": 9,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Buffer.len`, `BufferView.len`, `Bytes.len`?",
+            "applicability": "machine-applicable",
+            "replacement": "Buffer.len",
+            "replace_line": 9,
+            "replace_column": 8,
+            "replace_length": 9
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `String.is_empty` has no argument named `string`.",
+        "line": 16,
+        "label": "unknown argument",
+        "causes": [
+          "`String.is_empty` does not declare a parameter named `string`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `value`? Declared: value.",
+            "applicability": "machine-applicable",
+            "replacement": "value",
+            "replace_line": 16,
+            "replace_column": 24,
+            "replace_length": 6
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `String.is_empty` is missing required argument `value`.",
+        "line": 16,
+        "label": "missing argument",
+        "causes": [
+          "`String.is_empty` requires a named argument `value`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `value: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Int.parse` does not resolve.",
+        "line": 20,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `String.parse_int`, `Json.parse`, `Yaml.parse`?",
+            "applicability": "machine-applicable",
+            "replacement": "String.parse_int",
+            "replace_line": 20,
+            "replace_column": 43,
+            "replace_length": 9
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `String.concat` has no argument named `a`.",
+        "line": 27,
+        "label": "unknown argument",
+        "causes": [
+          "`String.concat` does not declare a parameter named `a`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `left`? Declared: left, right.",
+            "applicability": "machine-applicable",
+            "replacement": "left",
+            "replace_line": 27,
+            "replace_column": 36,
+            "replace_length": 1
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `String.concat` has no argument named `b`.",
+        "line": 27,
+        "label": "unknown argument",
+        "causes": [
+          "`String.concat` does not declare a parameter named `b`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `right`? Declared: left, right.",
+            "applicability": "machine-applicable",
+            "replacement": "right",
+            "replace_line": 27,
+            "replace_column": 51,
+            "replace_length": 1
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `String.concat` is missing required argument `left`.",
+        "line": 27,
+        "label": "missing argument",
+        "causes": [
+          "`String.concat` requires a named argument `left`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `left: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `String.concat` is missing required argument `right`.",
+        "line": 27,
+        "label": "missing argument",
+        "causes": [
+          "`String.concat` requires a named argument `right`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `right: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `String.concat` has no argument named `a`.",
+        "line": 28,
+        "label": "unknown argument",
+        "causes": [
+          "`String.concat` does not declare a parameter named `a`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `left`? Declared: left, right.",
+            "applicability": "machine-applicable",
+            "replacement": "left",
+            "replace_line": 28,
+            "replace_column": 26,
+            "replace_length": 1
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `String.concat` has no argument named `b`.",
+        "line": 28,
+        "label": "unknown argument",
+        "causes": [
+          "`String.concat` does not declare a parameter named `b`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `right`? Declared: left, right.",
+            "applicability": "machine-applicable",
+            "replacement": "right",
+            "replace_line": 28,
+            "replace_column": 41,
+            "replace_length": 1
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `String.concat` is missing required argument `left`.",
+        "line": 28,
+        "label": "missing argument",
+        "causes": [
+          "`String.concat` requires a named argument `left`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `left: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `String.concat` is missing required argument `right`.",
+        "line": 28,
+        "label": "missing argument",
+        "causes": [
+          "`String.concat` requires a named argument `right`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `right: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `print` does not resolve.",
+        "line": 32,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 32,
+            "replace_column": 5,
+            "replace_length": 5
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `print` does not resolve.",
+        "line": 33,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 33,
+            "replace_column": 5,
+            "replace_length": 5
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

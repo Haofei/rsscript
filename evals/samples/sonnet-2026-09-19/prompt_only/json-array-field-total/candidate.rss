@@ -1,0 +1,28 @@
+// NOTE: no RSScript spec or compiler was available in this environment, so the
+// Json method names (parse, field, len, at, as_int), the output call
+// (io.println) and JsonError.message() are assumed and not compiler-verified.
+
+fn total_readings(text: read String) -> Result<Int, JsonError> {
+    let doc = Json.parse(text)?;
+    let readings = doc.field("readings")?;
+    let count = readings.len()?;
+
+    let mut sum: Int = 0;
+    let mut i: Int = 0;
+    while i < count {
+        let item = readings.at(i)?;
+        let value = item.field("value")?.as_int()?;
+        sum = sum + value;
+        i = i + 1;
+    }
+
+    Ok(sum)
+}
+
+fn main() -> Unit {
+    let doc = "{\"readings\": [{\"value\": 12}, {\"value\": 30}]}";
+    match total_readings(doc) {
+        Ok(total) => io.println("total: " + total.to_string()),
+        Err(err) => io.println("error: " + err.message()),
+    }
+}

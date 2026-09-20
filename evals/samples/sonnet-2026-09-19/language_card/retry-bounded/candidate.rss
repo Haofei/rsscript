@@ -1,0 +1,33 @@
+fn push_with_retry(id: read String, amount: Int, max_attempts: Int) -> Result<Int, String> {
+    let mut attempt: Int = 0
+    let mut last_message: String = "no attempts made"
+    while attempt < max_attempts {
+        attempt = attempt + 1
+        match Sync.push(id: id, amount: amount) {
+            Ok(value) => {
+                Metrics.record(name: "sync.attempts", value: attempt)
+                return Ok(value)
+            }
+            Err(error) => {
+                last_message = SyncError.message(error: error)
+                let retryable: Bool = Sync.is_retryable(error: error)
+                if retryable == false {
+                    return Err(last_message)
+                }
+            }
+        }
+    }
+    return Err(last_message)
+}
+
+fn main() -> Unit {
+    let outcome: Result<Int, String> = push_with_retry(id: "order-1", amount: 10, max_attempts: 3)
+    match outcome {
+        Ok(total) => {
+            Metrics.record(name: "sync.result", value: total)
+        }
+        Err(_) => {
+            Metrics.record(name: "sync.failed", value: 1)
+        }
+    }
+}

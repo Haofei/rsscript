@@ -1,0 +1,29 @@
+// Note: written without access to an RSScript compiler or reference; syntax is unverified.
+fn feed(tx: Sender<Int>, value: Int) async {
+    tx.send(value).await;
+}
+
+fn main() async {
+    let (tx_a, rx_a) = channel<Int>(1);
+    let (tx_b, rx_b) = channel<Int>(1);
+    let cancel = CancellationSource.new();
+
+    task_group {
+        async let feeder_a = feed(tx_a, 1);
+        async let feeder_b = feed(tx_b, 2);
+
+        select {
+            a = Receiver.recv(rx_a) => {
+                println("winner: a");
+                cancel.cancel();
+            }
+            b = Receiver.recv(rx_b) => {
+                println("winner: b");
+                cancel.cancel();
+            }
+        }
+
+        await feeder_a;
+        await feeder_b;
+    }
+}

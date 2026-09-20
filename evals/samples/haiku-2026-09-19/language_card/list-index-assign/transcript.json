@@ -1,0 +1,368 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 60843,
+    "check_ok": false,
+    "codes": [
+      "RS0203",
+      "RS0204",
+      "RS0206",
+      "RS0601"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `List.copy` does not resolve.",
+        "line": 2,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `List.pop`, `String.copy`?",
+            "applicability": "machine-applicable",
+            "replacement": "List.pop",
+            "replace_line": 2,
+            "replace_column": 33,
+            "replace_length": 9
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Range.range` does not resolve.",
+        "line": 3,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `List.length` does not resolve.",
+        "line": 3,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `List.len`?",
+            "applicability": "machine-applicable",
+            "replacement": "List.len",
+            "replace_line": 3,
+            "replace_column": 41,
+            "replace_length": 11
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Range.range` does not resolve.",
+        "line": 17,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `List.length` does not resolve.",
+        "line": 17,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `List.len`?",
+            "applicability": "machine-applicable",
+            "replacement": "List.len",
+            "replace_line": 17,
+            "replace_column": 41,
+            "replace_length": 11
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `String.concat` has no argument named `first`.",
+        "line": 20,
+        "label": "unknown argument",
+        "causes": [
+          "`String.concat` does not declare a parameter named `first`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `left`? Declared: left, right.",
+            "applicability": "machine-applicable",
+            "replacement": "left",
+            "replace_line": 20,
+            "replace_column": 36,
+            "replace_length": 5
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `String.concat` has no argument named `second`.",
+        "line": 20,
+        "label": "unknown argument",
+        "causes": [
+          "`String.concat` does not declare a parameter named `second`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `right`? Declared: left, right.",
+            "applicability": "machine-applicable",
+            "replacement": "right",
+            "replace_line": 20,
+            "replace_column": 51,
+            "replace_length": 6
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `String.concat` is missing required argument `left`.",
+        "line": 20,
+        "label": "missing argument",
+        "causes": [
+          "`String.concat` requires a named argument `left`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `left: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `String.concat` is missing required argument `right`.",
+        "line": 20,
+        "label": "missing argument",
+        "causes": [
+          "`String.concat` requires a named argument `right`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `right: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `String.concat` has no argument named `first`.",
+        "line": 22,
+        "label": "unknown argument",
+        "causes": [
+          "`String.concat` does not declare a parameter named `first`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `left`? Declared: left, right.",
+            "applicability": "machine-applicable",
+            "replacement": "left",
+            "replace_line": 22,
+            "replace_column": 32,
+            "replace_length": 5
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `String.concat` has no argument named `second`.",
+        "line": 22,
+        "label": "unknown argument",
+        "causes": [
+          "`String.concat` does not declare a parameter named `second`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `right`? Declared: left, right.",
+            "applicability": "machine-applicable",
+            "replacement": "right",
+            "replace_line": 22,
+            "replace_column": 47,
+            "replace_length": 6
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `String.concat` is missing required argument `left`.",
+        "line": 22,
+        "label": "missing argument",
+        "causes": [
+          "`String.concat` requires a named argument `left`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `left: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `String.concat` is missing required argument `right`.",
+        "line": 22,
+        "label": "missing argument",
+        "causes": [
+          "`String.concat` requires a named argument `right`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `right: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Int.string` does not resolve.",
+        "line": 22,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Stdio.write` does not resolve.",
+        "line": 25,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 25,
+            "replace_column": 5,
+            "replace_length": 11
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0601",
+        "severity": "error",
+        "summary": "fresh function `clamp_samples` returns non-fresh value `result`.",
+        "line": 9,
+        "label": "non-fresh value returned",
+        "causes": [
+          "A `fresh` return must be newly created or a clean local binding created inside the function."
+        ],
+        "fixes": [
+          {
+            "title": "Return a struct constructor, fresh call, or clean local binding created inside the function.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

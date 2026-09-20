@@ -1,0 +1,207 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 34433,
+    "check_ok": false,
+    "codes": [
+      "RS0034",
+      "RS0203",
+      "RS0204",
+      "RS0206",
+      "RS0209"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `List` does not resolve.",
+        "line": 20,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `List.append` has no argument named `value`.",
+        "line": 27,
+        "label": "unknown argument",
+        "causes": [
+          "`List.append` does not declare a parameter named `value`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `values`? Declared: list, values.",
+            "applicability": "machine-applicable",
+            "replacement": "values",
+            "replace_line": 27,
+            "replace_column": 40,
+            "replace_length": 5
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `List.append` is missing required argument `values`.",
+        "line": 27,
+        "label": "missing argument",
+        "causes": [
+          "`List.append` requires a named argument `values`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `values: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `String.join` has no argument named `values`.",
+        "line": 29,
+        "label": "unknown argument",
+        "causes": [
+          "`String.join` does not declare a parameter named `values`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `parts`? Declared: parts, separator.",
+            "applicability": "machine-applicable",
+            "replacement": "parts",
+            "replace_line": 29,
+            "replace_column": 24,
+            "replace_length": 6
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `String.join` is missing required argument `parts`.",
+        "line": 29,
+        "label": "missing argument",
+        "causes": [
+          "`String.join` requires a named argument `parts`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `parts: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `List` does not resolve.",
+        "line": 33,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `print` does not resolve.",
+        "line": 40,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 40,
+            "replace_column": 5,
+            "replace_length": 5
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0034",
+        "severity": "error",
+        "summary": "the type arguments of `Map` cannot be inferred.",
+        "line": 2,
+        "label": "uninferable construction type",
+        "causes": [
+          "A generic construction takes its type arguments from its arguments' types, and at least one argument here has no known type: an unannotated closure, a bare `None`, an empty `[]`, or a value whose own binding was never given a type."
+        ],
+        "fixes": [
+          {
+            "title": "Annotate the binding or parameter the untyped argument comes from (e.g. `let n: Int = ...`), so every type argument is proved at the construction.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0209",
+        "severity": "error",
+        "summary": "match pattern `Some` cannot match scrutinee type `String`.",
+        "line": 6,
+        "label": "match pattern type mismatch",
+        "causes": [
+          "RSScript match patterns must belong to the scrutinee's type."
+        ],
+        "fixes": []
+      },
+      {
+        "code": "RS0209",
+        "severity": "error",
+        "summary": "match pattern `None` cannot match scrutinee type `String`.",
+        "line": 7,
+        "label": "match pattern type mismatch",
+        "causes": [
+          "RSScript match patterns must belong to the scrutinee's type."
+        ],
+        "fixes": []
+      }
+    ]
+  }
+]

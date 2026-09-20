@@ -1,0 +1,47 @@
+fn count_by_level(lines: read List<String>) -> fresh Map<String, Int> {
+    let mut counts: Map<String, Int> = Map.new()
+    for line in lines {
+        let parts: List<String> = String.split(value: line, delimiter: " ")
+        let first: String = List.get(list: parts, index: 0)
+        let mut level: String = first
+        if first == "" {
+            level = "unknown"
+        }
+        let current: Int = match Map.get(map: counts, key: level) {
+            Some(existing) => { existing }
+            None => { 0 }
+        }
+        Map.insert(map: mut counts, key: level, value: current + 1)
+    }
+    return counts
+}
+
+fn render_counts(counts: read Map<String, Int>) -> fresh String {
+    let mut out: String = ""
+    let mut first: Bool = true
+    for key in Map.keys(map: counts) {
+        let count: Int = match Map.get(map: counts, key: key) {
+            Some(existing) => { existing }
+            None => { 0 }
+        }
+        if first {
+            first = false
+        } else {
+            out = String.concat(left: out, right: ",")
+        }
+        out = String.concat(left: out, right: key)
+        out = String.concat(left: out, right: "=")
+        out = String.concat(left: out, right: Int.to_string(value: count))
+    }
+    return out
+}
+
+fn main() -> Unit {
+    let mut lines: List<String> = List.new()
+    List.push(list: mut lines, value: "INFO started")
+    List.push(list: mut lines, value: "ERROR failed")
+    List.push(list: mut lines, value: "INFO done")
+    let counts: Map<String, Int> = count_by_level(lines: lines)
+    let rendered: String = render_counts(counts: counts)
+    Output.write(value: rendered)
+}

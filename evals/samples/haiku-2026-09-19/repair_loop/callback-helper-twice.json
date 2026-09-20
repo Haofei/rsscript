@@ -1,0 +1,12 @@
+{
+  "schema": "rsscript.eval.candidate.v1",
+  "task_id": "callback-helper-twice",
+  "source": "callback-helper-twice/candidate.rss",
+  "mode": "repair_loop",
+  "model": "haiku",
+  "model_version": "unknown",
+  "temperature": null,
+  "attempt": 1,
+  "generation_duration_ms": 145140,
+  "repair_turns": 2
+}

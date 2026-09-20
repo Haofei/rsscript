@@ -1,0 +1,695 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 11232,
+    "check_ok": false,
+    "codes": [
+      "RS0201",
+      "RS0204",
+      "RS0206"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `List.len` uses an unnamed argument.",
+        "line": 4,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `List.len` is missing required argument `list`.",
+        "line": 4,
+        "label": "missing argument",
+        "causes": [
+          "`List.len` requires a named argument `list`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `list: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `List.get` uses an unnamed argument.",
+        "line": 5,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `List.get` uses an unnamed argument.",
+        "line": 5,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `List.get` is missing required argument `list`.",
+        "line": 5,
+        "label": "missing argument",
+        "causes": [
+          "`List.get` requires a named argument `list`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `list: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `List.get` is missing required argument `index`.",
+        "line": 5,
+        "label": "missing argument",
+        "causes": [
+          "`List.get` requires a named argument `index`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `index: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `List.get` uses an unnamed argument.",
+        "line": 6,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `List.get` uses an unnamed argument.",
+        "line": 6,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `List.get` is missing required argument `list`.",
+        "line": 6,
+        "label": "missing argument",
+        "causes": [
+          "`List.get` requires a named argument `list`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `list: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `List.get` is missing required argument `index`.",
+        "line": 6,
+        "label": "missing argument",
+        "causes": [
+          "`List.get` requires a named argument `index`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `index: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `Map.get_or_default` uses an unnamed argument.",
+        "line": 7,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `Map.get_or_default` uses an unnamed argument.",
+        "line": 7,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `Map.get_or_default` uses an unnamed argument.",
+        "line": 7,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Map.get_or_default` is missing required argument `map`.",
+        "line": 7,
+        "label": "missing argument",
+        "causes": [
+          "`Map.get_or_default` requires a named argument `map`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `map: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Map.get_or_default` is missing required argument `key`.",
+        "line": 7,
+        "label": "missing argument",
+        "causes": [
+          "`Map.get_or_default` requires a named argument `key`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `key: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Map.get_or_default` is missing required argument `default`.",
+        "line": 7,
+        "label": "missing argument",
+        "causes": [
+          "`Map.get_or_default` requires a named argument `default`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `default: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `Map.insert` uses an unnamed argument.",
+        "line": 8,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `Map.insert` uses an unnamed argument.",
+        "line": 8,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `Map.insert` uses an unnamed argument.",
+        "line": 8,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Map.insert` is missing required argument `map`.",
+        "line": 8,
+        "label": "missing argument",
+        "causes": [
+          "`Map.insert` requires a named argument `map`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `map: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Map.insert` is missing required argument `key`.",
+        "line": 8,
+        "label": "missing argument",
+        "causes": [
+          "`Map.insert` requires a named argument `key`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `key: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Map.insert` is missing required argument `value`.",
+        "line": 8,
+        "label": "missing argument",
+        "causes": [
+          "`Map.insert` requires a named argument `value`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `value: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `Map.get_or_default` uses an unnamed argument.",
+        "line": 15,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `Map.get_or_default` uses an unnamed argument.",
+        "line": 15,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `Map.get_or_default` uses an unnamed argument.",
+        "line": 15,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Map.get_or_default` is missing required argument `map`.",
+        "line": 15,
+        "label": "missing argument",
+        "causes": [
+          "`Map.get_or_default` requires a named argument `map`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `map: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Map.get_or_default` is missing required argument `key`.",
+        "line": 15,
+        "label": "missing argument",
+        "causes": [
+          "`Map.get_or_default` requires a named argument `key`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `key: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Map.get_or_default` is missing required argument `default`.",
+        "line": 15,
+        "label": "missing argument",
+        "causes": [
+          "`Map.get_or_default` requires a named argument `default`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `default: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `read io.println` does not resolve.",
+        "line": 22,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `Int.to_string` uses an unnamed argument.",
+        "line": 22,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Int.to_string` is missing required argument `value`.",
+        "line": 22,
+        "label": "missing argument",
+        "causes": [
+          "`Int.to_string` requires a named argument `value`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `value: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `read io.println` does not resolve.",
+        "line": 23,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `Int.to_string` uses an unnamed argument.",
+        "line": 23,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Int.to_string` is missing required argument `value`.",
+        "line": 23,
+        "label": "missing argument",
+        "causes": [
+          "`Int.to_string` requires a named argument `value`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `value: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

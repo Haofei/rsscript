@@ -1,0 +1,196 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 34931,
+    "check_ok": false,
+    "codes": [
+      "RS0015",
+      "RS0202"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 14,
+        "label": "unsupported expression",
+        "causes": [
+          "This expression is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 18,
+        "label": "unsupported expression",
+        "causes": [
+          "This expression is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `channel` for `Channel.receiver` must use `mut`.",
+        "line": 6,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Write `channel: mut ...` at the call site.",
+            "applicability": "machine-applicable",
+            "replacement": "mut ",
+            "replace_line": 6,
+            "replace_column": 47,
+            "replace_length": 0
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `channel` for `Channel.receiver` must use `mut`.",
+        "line": 9,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Write `channel: mut ...` at the call site.",
+            "applicability": "machine-applicable",
+            "replacement": "mut ",
+            "replace_line": 9,
+            "replace_column": 47,
+            "replace_length": 0
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 2,
+    "duration_ms": 45668,
+    "check_ok": false,
+    "codes": [
+      "RS0202"
+    ],
+    "source": "turn2.rss",
+    "diagnostics": [
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `value` for `Sender.send` must use `take`.",
+        "line": 14,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Write `value: take ...` at the call site.",
+            "applicability": "machine-applicable",
+            "replacement": "take ",
+            "replace_line": 14,
+            "replace_column": 63,
+            "replace_length": 0
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `value` for `Sender.send` must use `take`.",
+        "line": 15,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Write `value: take ...` at the call site.",
+            "applicability": "machine-applicable",
+            "replacement": "take ",
+            "replace_line": 15,
+            "replace_column": 63,
+            "replace_length": 0
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 3,
+    "duration_ms": 14632,
+    "check_ok": false,
+    "codes": [
+      "RS0308"
+    ],
+    "source": "turn3.rss",
+    "diagnostics": [
+      {
+        "code": "RS0308",
+        "severity": "error",
+        "summary": "`take` requires a local value.",
+        "line": 14,
+        "label": "not a local value",
+        "causes": [
+          "`take` can only consume a named local binding or a local field path."
+        ],
+        "fixes": [
+          {
+            "title": "Pass a local value with `take`, or use `read`/`mut` for managed values.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0308",
+        "severity": "error",
+        "summary": "`take` requires a local value.",
+        "line": 15,
+        "label": "not a local value",
+        "causes": [
+          "`take` can only consume a named local binding or a local field path."
+        ],
+        "fixes": [
+          {
+            "title": "Pass a local value with `take`, or use `read`/`mut` for managed values.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

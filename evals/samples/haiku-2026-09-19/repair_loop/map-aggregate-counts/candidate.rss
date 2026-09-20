@@ -1,0 +1,57 @@
+fn count_by_level(lines: read List<String>) -> fresh Map<String, Int> {
+    let mut counts: Map<String, Int> = Map<String, Int>()
+    
+    for line in lines {
+        let level = extract_level(line: line)
+        let current = get_or_zero(map: counts, key: level)
+        Map.insert(map: mut counts, key: level, value: current + 1)
+    }
+    
+    return counts
+}
+
+fn extract_level(line: read String) -> fresh String {
+    let parts = String.split(value: line, delimiter: " ")
+    for part in parts {
+        return part
+    }
+    return "unknown"
+}
+
+fn get_or_zero(map: read Map<String, Int>, key: read String) -> fresh Int {
+    return match Map.get(map: map, key: key) {
+        Some(count) => { count }
+        None => { 0 }
+    }
+}
+
+fn render_counts(counts: read Map<String, Int>) -> fresh String {
+    let keys = Map.keys(map: counts)
+    let mut result: String = ""
+    let mut is_first: Bool = true
+    
+    for key in keys {
+        if !is_first {
+            result = String.concat(left: result, right: ", ")
+        }
+        is_first = false
+        
+        let value = match Map.get(map: counts, key: key) {
+            Some(v) => { v }
+            None => { 0 }
+        }
+        
+        result = String.concat(left: result, right: key)
+        result = String.concat(left: result, right: ":")
+        result = String.concat(left: result, right: Int.to_string(value: value))
+    }
+    
+    return result
+}
+
+fn main() -> Unit {
+    local lines: List<String> = ["ERROR something", "WARN another", "INFO msg"]
+    local counts = count_by_level(lines: lines)
+    local result = render_counts(counts: counts)
+    return ()
+}

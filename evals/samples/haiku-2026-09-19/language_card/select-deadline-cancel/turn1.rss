@@ -1,0 +1,38 @@
+async fn send_work_result(sender: take Sender<Int>) -> Unit {
+    sender.send(value: 42)
+}
+
+async fn send_deadline_marker(sender: take Sender<Int>) -> Unit {
+    sender.send(value: 1)
+}
+
+fn main() -> Unit {
+    let work_channel = Channel.bounded<Int>(capacity: 1)
+    let deadline_channel = Channel.bounded<Int>(capacity: 1)
+    
+    let work_sender = work_channel.sender()
+    let work_receiver = work_channel.receiver()
+    
+    let deadline_sender = deadline_channel.sender()
+    let deadline_receiver = deadline_channel.receiver()
+    
+    task_group {
+        async let work_task = send_work_result(sender: take work_sender)
+        async let deadline_task = send_deadline_marker(sender: take deadline_sender)
+        
+        let cancellation = CancellationSource()
+        
+        select {
+            work_result = work_receiver.receive() => {
+                print("Work completed: " ++ String.from_int(value: work_result))
+            }
+            _ = deadline_receiver.receive() => {
+                print("Deadline fired")
+                cancellation.cancel()
+            }
+        }
+        
+        await work_task
+        await deadline_task
+    }
+}

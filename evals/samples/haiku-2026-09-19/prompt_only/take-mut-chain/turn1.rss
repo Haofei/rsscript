@@ -1,0 +1,21 @@
+fn build_report(title: take String) -> fresh Report {
+    Report {
+        title: title,
+        lines: []
+    }
+}
+
+fn add_line(report: mut Report, line: read String) -> Unit {
+    report.lines.append(line)
+}
+
+fn finish_report(report: take Report) -> Unit {
+    ReportSink.emit(report)
+}
+
+fn main() -> Unit {
+    let report = build_report(take "My Report")
+    add_line(mut report, "First line")
+    add_line(mut report, "Second line")
+    finish_report(take report)
+}

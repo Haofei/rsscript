@@ -1,0 +1,35 @@
+fn apply_settings(device: read String, settings: read List<String>, value: Int) -> Result<Int, String> {
+    with session = DeviceSession.open(device: device)? {
+        for setting in settings {
+            match DeviceSession.apply(session: mut session, setting: setting, value: value) {
+                Ok(_) => { }
+                Err(error) => {
+                    Audit.note(event: "aborted setting: " + setting)
+                    return Err(error)
+                }
+            }
+        }
+        match DeviceSession.commit(session: mut session) {
+            Ok(version) => {
+                Audit.note(event: "committed")
+                return Ok(version)
+            }
+            Err(error) => {
+                Audit.note(event: "commit failed")
+                return Err(error)
+            }
+        }
+    }
+}
+
+fn main() -> Unit {
+    let settings: List<String> = ["brightness", "contrast", "volume"]
+    match apply_settings(device: "device0", settings: settings, value: 1) {
+        Ok(_) => {
+            Audit.note(event: "apply_settings succeeded")
+        }
+        Err(error) => {
+            Audit.note(event: "apply_settings failed: " + error)
+        }
+    }
+}

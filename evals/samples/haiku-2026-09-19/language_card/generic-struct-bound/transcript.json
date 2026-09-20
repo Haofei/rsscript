@@ -1,0 +1,199 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 66469,
+    "check_ok": false,
+    "codes": [
+      "RS0202",
+      "RS0203",
+      "RS0204",
+      "RS0206",
+      "RS0308",
+      "RS0401",
+      "RS0501"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `List.len` has no argument named `value`.",
+        "line": 16,
+        "label": "unknown argument",
+        "causes": [
+          "`List.len` does not declare a parameter named `value`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `list`? Declared: list.",
+            "applicability": "machine-applicable",
+            "replacement": "list",
+            "replace_line": 16,
+            "replace_column": 21,
+            "replace_length": 5
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `List.len` is missing required argument `list`.",
+        "line": 16,
+        "label": "missing argument",
+        "causes": [
+          "`List.len` requires a named argument `list`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `list: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `List.empty<Reading>` does not resolve.",
+        "line": 21,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `List.append` has no argument named `value`.",
+        "line": 22,
+        "label": "unknown argument",
+        "causes": [
+          "`List.append` does not declare a parameter named `value`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `values`? Declared: list, values.",
+            "applicability": "machine-applicable",
+            "replacement": "values",
+            "replace_line": 22,
+            "replace_column": 55,
+            "replace_length": 5
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `List.append` is missing required argument `values`.",
+        "line": 22,
+        "label": "missing argument",
+        "causes": [
+          "`List.append` requires a named argument `values`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `values: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `list` for `List.append` must use `mut`.",
+        "line": 22,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Write `list: mut ...` at the call site.",
+            "applicability": "machine-applicable",
+            "replacement": "mut",
+            "replace_line": 22,
+            "replace_column": 40,
+            "replace_length": 4
+          }
+        ]
+      },
+      {
+        "code": "RS0401",
+        "severity": "error",
+        "summary": "`readings` was moved out of this scope by `take readings`.",
+        "line": 23,
+        "label": "used after take",
+        "causes": [
+          "The move happened at 22:40."
+        ],
+        "fixes": [
+          {
+            "title": "Move this use before `take readings`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0501",
+        "severity": "error",
+        "summary": "retaining API `List.append` cannot retain local value `reading`.",
+        "line": 22,
+        "label": "local value retained",
+        "causes": [
+          "`List.append` declares `retains(values)`."
+        ],
+        "fixes": [
+          {
+            "title": "Pass `values` through `manage reading` before retaining it.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0308",
+        "severity": "error",
+        "summary": "`take` requires a local value.",
+        "line": 23,
+        "label": "not a local value",
+        "causes": [
+          "`take` can only consume a named local binding or a local field path."
+        ],
+        "fixes": [
+          {
+            "title": "Pass a local value with `take`, or use `read`/`mut` for managed values.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

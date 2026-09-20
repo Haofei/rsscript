@@ -1,0 +1,22 @@
+fn clamp_samples(samples: read List<Int>, ceiling: Int) -> fresh List<Int> {
+    let mut out: List<Int> = samples.copy();
+    let mut i: Int = 0;
+    while i < out.len() {
+        if out[i] > ceiling {
+            out[i] = ceiling;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+fn main() -> Unit {
+    let clamped: List<Int> = clamp_samples([3, 12, 7, 25, 10, -4], 10);
+    let mut parts: List<String> = [];
+    let mut i: Int = 0;
+    while i < clamped.len() {
+        parts.push(clamped[i].to_string());
+        i = i + 1;
+    }
+    println(parts.join(","));
+}

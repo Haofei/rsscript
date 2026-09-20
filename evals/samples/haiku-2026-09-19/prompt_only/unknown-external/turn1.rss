@@ -1,0 +1,4 @@
+fn main() -> Unit {
+    let value = RemoteLedger.fetch("acct-7")
+    Output.write(value)
+}

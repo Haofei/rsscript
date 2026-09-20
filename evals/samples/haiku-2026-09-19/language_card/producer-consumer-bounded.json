@@ -1,0 +1,12 @@
+{
+  "schema": "rsscript.eval.candidate.v1",
+  "task_id": "producer-consumer-bounded",
+  "source": "producer-consumer-bounded/candidate.rss",
+  "mode": "language_card",
+  "model": "haiku",
+  "model_version": "unknown",
+  "temperature": null,
+  "attempt": 1,
+  "generation_duration_ms": 148742,
+  "repair_turns": 0
+}

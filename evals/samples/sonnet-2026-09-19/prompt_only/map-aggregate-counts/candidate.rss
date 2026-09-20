@@ -1,0 +1,41 @@
+fn level_of(line: read String) -> String {
+    let idx = line.index_of(" ");
+    if idx <= 0 {
+        return "unknown";
+    }
+    return line.slice(0, idx);
+}
+
+fn count_by_level(lines: read List<String>) -> fresh Map<String, Int> {
+    let counts: Map<String, Int> = Map.new();
+    for line in lines {
+        let level = level_of(line);
+        let current = counts.get(level).unwrap_or(0);
+        mut counts.put(level, current + 1);
+    }
+    return counts;
+}
+
+fn render_counts(counts: read Map<String, Int>) -> fresh String {
+    let out: String = String.new();
+    let first = true;
+    for entry in counts {
+        if !first {
+            mut out.push(",");
+        }
+        mut out.push(entry.key);
+        mut out.push("=");
+        mut out.push(entry.value.to_string());
+        first = false;
+    }
+    return out;
+}
+
+fn main() -> Unit {
+    let lines: List<String> = List.new();
+    mut lines.push("INFO service started");
+    mut lines.push("ERROR disk full");
+    mut lines.push("INFO request handled");
+    let counts = count_by_level(lines);
+    write(render_counts(counts));
+}

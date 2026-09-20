@@ -1,0 +1,34 @@
+struct Reading {
+    sensor: String,
+    value: Int,
+}
+
+fn format_reading(reading: read Reading) -> fresh String {
+    local parts: List<String> = List.new()
+    List.push(list: mut parts, value: reading.sensor)
+    List.push(list: mut parts, value: "=")
+    List.push(list: mut parts, value: Int.to_string(value: reading.value))
+    return List.join(list: parts, separator: "")
+}
+
+fn render_report(title: read String, readings: read List<Reading>) -> fresh String {
+    local lines: List<String> = List.new()
+    List.push(list: mut lines, value: title)
+    for reading in readings {
+        List.push(list: mut lines, value: format_reading(reading: reading))
+    }
+    let total: Int = List.len(list: readings)
+    local count_parts: List<String> = List.new()
+    List.push(list: mut count_parts, value: "count=")
+    List.push(list: mut count_parts, value: Int.to_string(value: total))
+    List.push(list: mut lines, value: List.join(list: count_parts, separator: ""))
+    return List.join(list: lines, separator: "\n")
+}
+
+fn main() -> Unit {
+    local readings: List<Reading> = List.new()
+    List.push(list: mut readings, value: Reading(sensor: "temp", value: 21))
+    List.push(list: mut readings, value: Reading(sensor: "humidity", value: 48))
+    let report: String = render_report(title: "daily", readings: readings)
+    Output.write(message: report)
+}

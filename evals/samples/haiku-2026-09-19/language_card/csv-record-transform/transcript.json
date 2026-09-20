@@ -1,0 +1,361 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 50075,
+    "check_ok": false,
+    "codes": [
+      "RS0015",
+      "RS0026",
+      "RS0206",
+      "RS0311",
+      "RS0501"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 18,
+        "label": "unsupported expression",
+        "causes": [
+          "This expression is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 43,
+        "label": "unsupported expression",
+        "causes": [
+          "This expression is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0311",
+        "severity": "error",
+        "summary": "invalid assignment.",
+        "line": 50,
+        "label": "`total` is not a binding in scope",
+        "causes": [
+          "The left side of `=` must be a `let mut` local in scope."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the target as a `let mut` local, or remove the assignment.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `records`.",
+        "line": 34,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `records` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `total`.",
+        "line": 50,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `total` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `total`.",
+        "line": 53,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `total` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "variant `Err` must use its conventional RSScript form.",
+        "line": 10,
+        "label": "unsupported variant form",
+        "causes": [
+          "Standard Result and Option variants are call-like for checker purposes, but they are not ordinary named-argument calls."
+        ],
+        "fixes": [
+          {
+            "title": "Write this variant as `Err(error)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Int.parse` does not resolve.",
+        "line": 16,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `String.parse_int`, `Json.parse`, `Yaml.parse`?",
+            "applicability": "machine-applicable",
+            "replacement": "String.parse_int",
+            "replace_line": 16,
+            "replace_column": 11,
+            "replace_length": 9
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "variant `Ok` must use its conventional RSScript form.",
+        "line": 18,
+        "label": "unsupported variant form",
+        "causes": [
+          "Standard Result and Option variants are call-like for checker purposes, but they are not ordinary named-argument calls."
+        ],
+        "fixes": [
+          {
+            "title": "Write this variant as `Ok(value)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "variant `Err` must use its conventional RSScript form.",
+        "line": 21,
+        "label": "unsupported variant form",
+        "causes": [
+          "Standard Result and Option variants are call-like for checker purposes, but they are not ordinary named-argument calls."
+        ],
+        "fixes": [
+          {
+            "title": "Write this variant as `Err(error)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `List` does not resolve.",
+        "line": 28,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "variant `Err` must use its conventional RSScript form.",
+        "line": 37,
+        "label": "unsupported variant form",
+        "causes": [
+          "Standard Result and Option variants are call-like for checker purposes, but they are not ordinary named-argument calls."
+        ],
+        "fixes": [
+          {
+            "title": "Write this variant as `Err(error)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "variant `Ok` must use its conventional RSScript form.",
+        "line": 43,
+        "label": "unsupported variant form",
+        "causes": [
+          "Standard Result and Option variants are call-like for checker purposes, but they are not ordinary named-argument calls."
+        ],
+        "fixes": [
+          {
+            "title": "Write this variant as `Ok(value)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `print` does not resolve.",
+        "line": 62,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 62,
+            "replace_column": 13,
+            "replace_length": 5
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `print` does not resolve.",
+        "line": 65,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 65,
+            "replace_column": 13,
+            "replace_length": 5
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0501",
+        "severity": "error",
+        "summary": "retaining API `List.push` cannot retain local value `record`.",
+        "line": 34,
+        "label": "local value retained",
+        "causes": [
+          "`List.push` declares `retains(value)`."
+        ],
+        "fixes": [
+          {
+            "title": "Pass `value` through `manage record` before retaining it.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

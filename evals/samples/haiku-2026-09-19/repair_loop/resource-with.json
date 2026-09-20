@@ -1,0 +1,12 @@
+{
+  "schema": "rsscript.eval.candidate.v1",
+  "task_id": "resource-with",
+  "source": "resource-with/candidate.rss",
+  "mode": "repair_loop",
+  "model": "haiku",
+  "model_version": "unknown",
+  "temperature": null,
+  "attempt": 1,
+  "generation_duration_ms": 10006,
+  "repair_turns": 0
+}

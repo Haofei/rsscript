@@ -1,0 +1,30 @@
+struct Entry {
+    label: String,
+    count: Int,
+}
+
+fn render_entries(title: read String, entries: read List<Entry>) -> fresh String {
+    let mut builder = StringBuilder::new();
+    builder.push(title);
+    builder.push("\n");
+    
+    for entry in entries {
+        builder.push("  ");
+        builder.push(entry.label);
+        builder.push(": ");
+        builder.push(entry.count.to_string());
+        builder.push("\n");
+    }
+    
+    builder.finish()
+}
+
+fn main() -> Unit {
+    let entries = [
+        Entry { label: "apples", count: 5 },
+        Entry { label: "oranges", count: 3 },
+    ];
+    
+    let report = render_entries("Fruit Count", entries);
+    println!(report);
+}

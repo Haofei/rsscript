@@ -1,0 +1,421 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 75942,
+    "check_ok": false,
+    "codes": [
+      "RS0015",
+      "RS0025",
+      "RS0203",
+      "RS0204",
+      "RS0206"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0025",
+        "severity": "error",
+        "summary": "unknown field `name` on type `fresh ServiceConfig`.",
+        "line": 50,
+        "label": "unknown field",
+        "causes": [
+          "RSScript field accesses must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Use a field declared on `fresh ServiceConfig` or update the type declaration.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Json.parse` has no argument named `input`.",
+        "line": 4,
+        "label": "unknown argument",
+        "causes": [
+          "`Json.parse` does not declare a parameter named `input`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `text`? Declared: text.",
+            "applicability": "machine-applicable",
+            "replacement": "text",
+            "replace_line": 4,
+            "replace_column": 35,
+            "replace_length": 5
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Json.parse` is missing required argument `text`.",
+        "line": 4,
+        "label": "missing argument",
+        "causes": [
+          "`Json.parse` requires a named argument `text`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `text: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Json.get_string` does not resolve.",
+        "line": 8,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Json.field_string`, `Json.at_string`, `Json.as_string`?",
+            "applicability": "machine-applicable",
+            "replacement": "Json.field_string",
+            "replace_line": 8,
+            "replace_column": 31,
+            "replace_length": 15
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Json.get_int` does not resolve.",
+        "line": 11,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Json.field_int`, `Json.at_int`?",
+            "applicability": "machine-applicable",
+            "replacement": "Json.field_int",
+            "replace_line": 11,
+            "replace_column": 39,
+            "replace_length": 12
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "variant `Err` must use its conventional RSScript form.",
+        "line": 15,
+        "label": "unsupported variant form",
+        "causes": [
+          "Standard Result and Option variants are call-like for checker purposes, but they are not ordinary named-argument calls."
+        ],
+        "fixes": [
+          {
+            "title": "Write this variant as `Err(error)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Json.get_bool` does not resolve.",
+        "line": 17,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Json.field_bool`, `Json.at_bool`, `Json.as_bool`?",
+            "applicability": "machine-applicable",
+            "replacement": "Json.field_bool",
+            "replace_line": 17,
+            "replace_column": 50,
+            "replace_length": 13
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `ServiceConfig` has no argument named `name`.",
+        "line": 20,
+        "label": "unknown argument",
+        "causes": [
+          "`ServiceConfig` does not declare a parameter named `name`."
+        ],
+        "fixes": [
+          {
+            "title": "Use one of: .",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `ServiceConfig` has no argument named `port`.",
+        "line": 20,
+        "label": "unknown argument",
+        "causes": [
+          "`ServiceConfig` does not declare a parameter named `port`."
+        ],
+        "fixes": [
+          {
+            "title": "Use one of: .",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `ServiceConfig` has no argument named `enabled`.",
+        "line": 20,
+        "label": "unknown argument",
+        "causes": [
+          "`ServiceConfig` does not declare a parameter named `enabled`."
+        ],
+        "fixes": [
+          {
+            "title": "Use one of: .",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "variant `Ok` must use its conventional RSScript form.",
+        "line": 21,
+        "label": "unsupported variant form",
+        "causes": [
+          "Standard Result and Option variants are call-like for checker purposes, but they are not ordinary named-argument calls."
+        ],
+        "fixes": [
+          {
+            "title": "Write this variant as `Ok(value)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "variant `Err` must use its conventional RSScript form.",
+        "line": 24,
+        "label": "unsupported variant form",
+        "causes": [
+          "Standard Result and Option variants are call-like for checker purposes, but they are not ordinary named-argument calls."
+        ],
+        "fixes": [
+          {
+            "title": "Write this variant as `Err(error)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "variant `Err` must use its conventional RSScript form.",
+        "line": 29,
+        "label": "unsupported variant form",
+        "causes": [
+          "Standard Result and Option variants are call-like for checker purposes, but they are not ordinary named-argument calls."
+        ],
+        "fixes": [
+          {
+            "title": "Write this variant as `Err(error)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "variant `Err` must use its conventional RSScript form.",
+        "line": 34,
+        "label": "unsupported variant form",
+        "causes": [
+          "Standard Result and Option variants are call-like for checker purposes, but they are not ordinary named-argument calls."
+        ],
+        "fixes": [
+          {
+            "title": "Write this variant as `Err(error)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "variant `Err` must use its conventional RSScript form.",
+        "line": 39,
+        "label": "unsupported variant form",
+        "causes": [
+          "Standard Result and Option variants are call-like for checker purposes, but they are not ordinary named-argument calls."
+        ],
+        "fixes": [
+          {
+            "title": "Write this variant as `Err(error)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Output.write` has no argument named `line`.",
+        "line": 50,
+        "label": "unknown argument",
+        "causes": [
+          "`Output.write` does not declare a parameter named `line`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `message`? Declared: message.",
+            "applicability": "machine-applicable",
+            "replacement": "message",
+            "replace_line": 50,
+            "replace_column": 26,
+            "replace_length": 4
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Output.write` is missing required argument `message`.",
+        "line": 50,
+        "label": "missing argument",
+        "causes": [
+          "`Output.write` requires a named argument `message`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `message: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Output.write` has no argument named `line`.",
+        "line": 53,
+        "label": "unknown argument",
+        "causes": [
+          "`Output.write` does not declare a parameter named `line`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `message`? Declared: message.",
+            "applicability": "machine-applicable",
+            "replacement": "message",
+            "replace_line": 53,
+            "replace_column": 26,
+            "replace_length": 4
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Output.write` is missing required argument `message`.",
+        "line": 53,
+        "label": "missing argument",
+        "causes": [
+          "`Output.write` requires a named argument `message`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `message: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

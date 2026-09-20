@@ -1,0 +1,52 @@
+fn read_quantity(item: read JsonValue) -> Result<Int, JsonError> {
+    match Json.object_get(value: item, key: "quantity") {
+        Ok(field) => { Json.as_int(value: field) }
+        Err(error) => { Err(error) }
+    }
+}
+
+fn sum_from(items: read JsonValue, index: read Int, count: read Int, acc: read Int) -> Result<Int, JsonError> {
+    if index >= count {
+        return Ok(acc)
+    }
+    match Json.array_get(value: items, index: index) {
+        Ok(item) => {
+            match read_quantity(item: item) {
+                Ok(quantity) => {
+                    sum_from(items: items, index: index + 1, count: count, acc: acc + quantity)
+                }
+                Err(error) => { Err(error) }
+            }
+        }
+        Err(error) => { Err(error) }
+    }
+}
+
+fn sum_items(items: read JsonValue) -> Result<Int, JsonError> {
+    match Json.array_len(value: items) {
+        Ok(count) => { sum_from(items: items, index: 0, count: count, acc: 0) }
+        Err(error) => { Err(error) }
+    }
+}
+
+fn sum_document(doc: read JsonValue) -> Result<Int, JsonError> {
+    match Json.object_get(value: doc, key: "items") {
+        Ok(items) => { sum_items(items: items) }
+        Err(error) => { Err(error) }
+    }
+}
+
+fn sum_quantities(text: read String) -> Result<Int, JsonError> {
+    match Json.parse(text: text) {
+        Ok(doc) => { sum_document(doc: doc) }
+        Err(error) => { Err(error) }
+    }
+}
+
+fn main() -> Unit {
+    let document = "{\"items\": [{\"quantity\": 3}, {\"quantity\": 4}]}"
+    match sum_quantities(text: document) {
+        Ok(total) => { Io.print_line(value: Int.to_string(value: total)) }
+        Err(error) => { Io.print_line(value: JsonError.message(error: error)) }
+    }
+}

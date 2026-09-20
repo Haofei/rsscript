@@ -1,0 +1,47 @@
+protocol Sink {
+    fn deliver(self: read Self, line: read String) -> fresh String
+}
+
+struct ConsoleSink {
+    prefix: String
+}
+
+struct JsonSink {
+    channel: String
+}
+
+impl Sink for ConsoleSink {
+    fn deliver(self: read Self, line: read String) -> fresh String {
+        return String.concat(left: String.concat(left: self.prefix, right: ": "), right: line)
+    }
+}
+
+impl Sink for JsonSink {
+    fn deliver(self: read Self, line: read String) -> fresh String {
+        local obj = Json.object()
+        Json.insert(json: mut obj, key: self.channel, value: Json.string(value: line))
+        return Json.encode(json: obj)
+    }
+}
+
+fn sink_for(kind: read String) -> fresh Dyn<Sink> {
+    if String.equal(left: kind, right: "json") {
+        local sink = JsonSink(channel: "message")
+        return manage sink as Dyn<Sink>
+    }
+    local sink = ConsoleSink(prefix: "LOG")
+    return manage sink as Dyn<Sink>
+}
+
+fn deliver_line(kind: read String, line: read String) -> fresh String {
+    local sink = sink_for(kind: kind)
+    return sink.deliver(line: line)
+}
+
+fn main() -> Unit {
+    local console_output = deliver_line(kind: "console", line: "Hello, World!")
+    Io.print(value: console_output)
+    
+    local json_output = deliver_line(kind: "json", line: "Hello, World!")
+    Io.print(value: json_output)
+}

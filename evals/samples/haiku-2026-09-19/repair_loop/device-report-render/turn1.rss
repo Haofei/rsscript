@@ -1,0 +1,22 @@
+struct Reading(sensor: String, value: Int)
+
+fn format_reading(reading: read Reading) -> fresh String {
+    return String.concat(parts: [reading.sensor, "=", Int.to_string(value: reading.value)])
+}
+
+fn render_report(title: read String, readings: read List<Reading>) -> fresh String {
+    local formatted = List.map(list: readings, fn: fn(item: read Reading) -> fresh String {
+        return format_reading(reading: item)
+    })
+    local count_line = String.concat(parts: ["count=", Int.to_string(value: List.length(list: readings))])
+    local all_lines = List.concat(lists: [[title], formatted, [count_line]])
+    return List.join(list: all_lines, separator: "\n")
+}
+
+fn main() -> Unit {
+    local reading1 = Reading(sensor: "temp", value: 72)
+    local reading2 = Reading(sensor: "humidity", value: 45)
+    local readings = [reading1, reading2]
+    local report = render_report(title: "Daily Report", readings: readings)
+    Output.write(value: report)
+}

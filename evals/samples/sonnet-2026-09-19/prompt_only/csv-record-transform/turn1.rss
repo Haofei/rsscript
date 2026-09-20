@@ -1,0 +1,59 @@
+struct Record {
+    id: String,
+    amount: Int,
+}
+
+fn parse_record(line: read String) -> Result<fresh Record, String> {
+    let fields = line.split(",")
+    if fields.len() != 2 {
+        return Err("expected exactly two fields: " + line)
+    }
+    let id = fields.get(0).trim()
+    let raw_amount = fields.get(1).trim()
+    match raw_amount.parse_int() {
+        Ok(amount) => {
+            return Ok(Record { id: id, amount: amount })
+        }
+        Err(_) => {
+            return Err("invalid amount: " + raw_amount)
+        }
+    }
+}
+
+fn parse_all(text: read String) -> Result<fresh List<Record>, String> {
+    let records = List::new()
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue
+        }
+        match parse_record(line) {
+            Ok(record) => {
+                records.push(record)
+            }
+            Err(message) => {
+                return Err(message)
+            }
+        }
+    }
+    return Ok(records)
+}
+
+fn total_amount(records: read List<Record>) -> Int {
+    let mut total = 0
+    for record in records {
+        total = total + record.amount
+    }
+    return total
+}
+
+fn main() -> Unit {
+    let text = "alpha, 10\nbeta, 32\n"
+    match parse_all(text) {
+        Ok(records) => {
+            println("total: " + total_amount(records).to_string())
+        }
+        Err(message) => {
+            println("error: " + message)
+        }
+    }
+}

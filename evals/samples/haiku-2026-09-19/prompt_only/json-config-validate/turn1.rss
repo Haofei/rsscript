@@ -1,0 +1,45 @@
+struct ServiceConfig {
+  name: String,
+  port: Int,
+  enabled: Bool
+}
+
+fn load_config(text: String) -> Result<fresh ServiceConfig, String> {
+  match Json.parse(text) {
+    Ok(json) => {
+      match json.get_string("name") {
+        Ok(name) => {
+          match json.get_int("port") {
+            Ok(port) => {
+              if port < 1 || port > 65535 {
+                Err("Port must be between 1 and 65535".to_string())
+              } else {
+                match json.get_bool("enabled") {
+                  Ok(enabled) => {
+                    Ok(ServiceConfig { 
+                      name: name, 
+                      port: port, 
+                      enabled: enabled 
+                    })
+                  }
+                  Err(e) => Err("Invalid enabled field".to_string())
+                }
+              }
+            }
+            Err(e) => Err("Invalid port field".to_string())
+          }
+        }
+        Err(e) => Err("Invalid name field".to_string())
+      }
+    }
+    Err(e) => Err("JSON parse error".to_string())
+  }
+}
+
+fn main() -> Unit {
+  let config_json = "{\"name\": \"api\", \"port\": 8080, \"enabled\": true}";
+  match load_config(config_json) {
+    Ok(cfg) => Output.write(cfg.name),
+    Err(err) => Output.write(err)
+  }
+}

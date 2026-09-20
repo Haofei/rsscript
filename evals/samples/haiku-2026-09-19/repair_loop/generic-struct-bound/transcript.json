@@ -1,0 +1,183 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 35703,
+    "check_ok": false,
+    "codes": [
+      "RS0206",
+      "RS0308"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `List.cons` does not resolve.",
+        "line": 21,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `List.empty` does not resolve.",
+        "line": 21,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `write` does not resolve.",
+        "line": 24,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 24,
+            "replace_column": 5,
+            "replace_length": 5
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0308",
+        "severity": "error",
+        "summary": "`take` requires a local value.",
+        "line": 22,
+        "label": "not a local value",
+        "causes": [
+          "`take` can only consume a named local binding or a local field path."
+        ],
+        "fixes": [
+          {
+            "title": "Pass a local value with `take`, or use `read`/`mut` for managed values.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 2,
+    "duration_ms": 20270,
+    "check_ok": false,
+    "codes": [
+      "RS0203",
+      "RS0204",
+      "RS0308"
+    ],
+    "source": "turn2.rss",
+    "diagnostics": [
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Output.write` has no argument named `value`.",
+        "line": 24,
+        "label": "unknown argument",
+        "causes": [
+          "`Output.write` does not declare a parameter named `value`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `message`? Declared: message.",
+            "applicability": "machine-applicable",
+            "replacement": "message",
+            "replace_line": 24,
+            "replace_column": 18,
+            "replace_length": 5
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Output.write` is missing required argument `message`.",
+        "line": 24,
+        "label": "missing argument",
+        "causes": [
+          "`Output.write` requires a named argument `message`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `message: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0308",
+        "severity": "error",
+        "summary": "`take` requires a local value.",
+        "line": 22,
+        "label": "not a local value",
+        "causes": [
+          "`take` can only consume a named local binding or a local field path."
+        ],
+        "fixes": [
+          {
+            "title": "Pass a local value with `take`, or use `read`/`mut` for managed values.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 3,
+    "duration_ms": 14357,
+    "check_ok": true,
+    "codes": [],
+    "source": "turn3.rss",
+    "diagnostics": []
+  }
+]

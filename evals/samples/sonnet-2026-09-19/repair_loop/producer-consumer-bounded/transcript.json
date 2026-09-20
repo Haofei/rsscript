@@ -1,0 +1,375 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 14054,
+    "check_ok": false,
+    "codes": [
+      "RS0015",
+      "RS0021",
+      "RS0030",
+      "RS0031",
+      "RS0206",
+      "RS0209",
+      "RS0301",
+      "RS0501"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 34,
+        "label": "unsupported spawn expression",
+        "causes": [
+          "`spawn` is not a v0.7 source-level task feature. Use `task_group { async let ... }` for structured isolate-local async work."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 35,
+        "label": "unsupported spawn expression",
+        "causes": [
+          "`spawn` is not a v0.7 source-level task feature. Use `task_group { async let ... }` for structured isolate-local async work."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0021",
+        "severity": "error",
+        "summary": "match statement is not exhaustive.",
+        "line": 16,
+        "label": "non-exhaustive match",
+        "causes": [
+          "Supported match statements must cover `Some`/`None`, `Ok`/`Err`, all sum type variants, or include `_`."
+        ],
+        "fixes": [
+          {
+            "title": "Add the missing variant arm or a final `_` fallback.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Task.is_cancelled` does not resolve.",
+        "line": 4,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `CancellationToken.is_cancelled`?",
+            "applicability": "machine-applicable",
+            "replacement": "CancellationToken.is_cancelled",
+            "replace_line": 4,
+            "replace_column": 12,
+            "replace_length": 17
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Channel.take_sender` does not resolve.",
+        "line": 30,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Channel.take_receiver` does not resolve.",
+        "line": 31,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Channel.receiver`?",
+            "applicability": "machine-applicable",
+            "replacement": "Channel.receiver",
+            "replace_line": 31,
+            "replace_column": 22,
+            "replace_length": 21
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0301",
+        "severity": "error",
+        "summary": "managed value cannot be converted to local binding `value`.",
+        "line": 7,
+        "label": "managed value used as local",
+        "causes": [
+          "`index` is already managed; RSScript has no managed -> local conversion."
+        ],
+        "fixes": [
+          {
+            "title": "Create the value as `local` at its creation point.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0031",
+        "severity": "error",
+        "summary": "local value `sender` cannot live across `await`.",
+        "line": 8,
+        "label": "value live across await",
+        "causes": [
+          "Suspending an RSScript async frame may keep managed handles and Copy snapshots, but local values, resources, and runtime guards must not be retained across suspension."
+        ],
+        "fixes": [
+          {
+            "title": "End the lifetime of `sender` before this `await`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0209",
+        "severity": "error",
+        "summary": "match pattern `Some` cannot match scrutinee type `Result<Option<Int>, ChannelError>`.",
+        "line": 17,
+        "label": "match variant type mismatch",
+        "causes": [
+          "RSScript match patterns must belong to the scrutinee's type."
+        ],
+        "fixes": [
+          {
+            "title": "Use variants of `Result`: Ok, Err.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0209",
+        "severity": "error",
+        "summary": "match pattern `None` cannot match scrutinee type `Result<Option<Int>, ChannelError>`.",
+        "line": 20,
+        "label": "match variant type mismatch",
+        "causes": [
+          "RSScript match patterns must belong to the scrutinee's type."
+        ],
+        "fixes": [
+          {
+            "title": "Use variants of `Result`: Ok, Err.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0031",
+        "severity": "error",
+        "summary": "local value `receiver` cannot live across `await`.",
+        "line": 16,
+        "label": "value live across await",
+        "causes": [
+          "Suspending an RSScript async frame may keep managed handles and Copy snapshots, but local values, resources, and runtime guards must not be retained across suspension."
+        ],
+        "fixes": [
+          {
+            "title": "End the lifetime of `receiver` before this `await`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0501",
+        "severity": "error",
+        "summary": "spawn cannot capture local value `sender`.",
+        "line": 34,
+        "label": "local captured by spawn",
+        "causes": [
+          "`spawn` may retain captured values until task completion."
+        ],
+        "fixes": [
+          {
+            "title": "Convert `sender` through `manage` before spawning the task.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0501",
+        "severity": "error",
+        "summary": "spawn cannot capture local value `receiver`.",
+        "line": 35,
+        "label": "local captured by spawn",
+        "causes": [
+          "`spawn` may retain captured values until task completion."
+        ],
+        "fixes": [
+          {
+            "title": "Convert `receiver` through `manage` before spawning the task.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0030",
+        "severity": "error",
+        "summary": "`await` must consume an async call.",
+        "line": 36,
+        "label": "await non-async expression",
+        "causes": [
+          "RSScript does not expose Future or Task values in source; the executable async MVP only awaits direct async calls."
+        ],
+        "fixes": [
+          {
+            "title": "Await an `async fn` call directly.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0030",
+        "severity": "error",
+        "summary": "`await` must consume an async call.",
+        "line": 37,
+        "label": "await non-async expression",
+        "causes": [
+          "RSScript does not expose Future or Task values in source; the executable async MVP only awaits direct async calls."
+        ],
+        "fixes": [
+          {
+            "title": "Await an `async fn` call directly.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 2,
+    "duration_ms": 62024,
+    "check_ok": false,
+    "codes": [
+      "RS0202"
+    ],
+    "source": "turn2.rss",
+    "diagnostics": [
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `channel` for `Channel.receiver` must use `mut`.",
+        "line": 39,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Write `channel: mut ...` at the call site.",
+            "applicability": "machine-applicable",
+            "replacement": "mut ",
+            "replace_line": 39,
+            "replace_column": 46,
+            "replace_length": 0
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 3,
+    "duration_ms": 6228,
+    "check_ok": true,
+    "codes": [],
+    "source": "turn3.rss",
+    "diagnostics": []
+  }
+]

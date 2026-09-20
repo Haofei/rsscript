@@ -1,0 +1,12 @@
+{
+  "schema": "rsscript.eval.candidate.v1",
+  "task_id": "resource-escape",
+  "source": "resource-escape/candidate.rss",
+  "mode": "prompt_only",
+  "model": "haiku",
+  "model_version": "unknown",
+  "temperature": null,
+  "attempt": 1,
+  "generation_duration_ms": 28271,
+  "repair_turns": 0
+}

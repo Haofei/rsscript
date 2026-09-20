@@ -1,0 +1,751 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 70534,
+    "check_ok": false,
+    "codes": [
+      "RS0026",
+      "RS0203",
+      "RS0204",
+      "RS0206"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `port`.",
+        "line": 20,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `port` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `route`.",
+        "line": 25,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `route` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `route`.",
+        "line": 26,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `route` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Array.length` does not resolve.",
+        "line": 5,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Array.get` does not resolve.",
+        "line": 11,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Arguments.get`, `List.get`, `Map.get`?",
+            "applicability": "machine-applicable",
+            "replacement": "Arguments.get",
+            "replace_line": 11,
+            "replace_column": 35,
+            "replace_length": 9
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Array.get` does not resolve.",
+        "line": 12,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Arguments.get`, `List.get`, `Map.get`?",
+            "applicability": "machine-applicable",
+            "replacement": "Arguments.get",
+            "replace_line": 12,
+            "replace_column": 39,
+            "replace_length": 9
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Int.parse` does not resolve.",
+        "line": 18,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `String.parse_int`, `Json.parse`, `Yaml.parse`?",
+            "applicability": "machine-applicable",
+            "replacement": "String.parse_int",
+            "replace_line": 18,
+            "replace_column": 43,
+            "replace_length": 9
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Route` has no argument named `host`.",
+        "line": 20,
+        "label": "unknown argument",
+        "causes": [
+          "`Route` does not declare a parameter named `host`."
+        ],
+        "fixes": [
+          {
+            "title": "Use one of: .",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Route` has no argument named `port`.",
+        "line": 20,
+        "label": "unknown argument",
+        "causes": [
+          "`Route` does not declare a parameter named `port`."
+        ],
+        "fixes": [
+          {
+            "title": "Use one of: .",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `String.concat` has no argument named `value`.",
+        "line": 26,
+        "label": "unknown argument",
+        "causes": [
+          "`String.concat` does not declare a parameter named `value`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `left`? Declared: left, right.",
+            "applicability": "machine-applicable",
+            "replacement": "left",
+            "replace_line": 26,
+            "replace_column": 36,
+            "replace_length": 5
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `String.concat` has no argument named `other`.",
+        "line": 26,
+        "label": "unknown argument",
+        "causes": [
+          "`String.concat` does not declare a parameter named `other`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `right`? Declared: left, right.",
+            "applicability": "machine-applicable",
+            "replacement": "right",
+            "replace_line": 26,
+            "replace_column": 55,
+            "replace_length": 5
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `String.concat` is missing required argument `left`.",
+        "line": 26,
+        "label": "missing argument",
+        "causes": [
+          "`String.concat` requires a named argument `left`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `left: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `String.concat` is missing required argument `right`.",
+        "line": 26,
+        "label": "missing argument",
+        "causes": [
+          "`String.concat` requires a named argument `right`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `right: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `String.concat` has no argument named `value`.",
+        "line": 27,
+        "label": "unknown argument",
+        "causes": [
+          "`String.concat` does not declare a parameter named `value`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `left`? Declared: left, right.",
+            "applicability": "machine-applicable",
+            "replacement": "left",
+            "replace_line": 27,
+            "replace_column": 26,
+            "replace_length": 5
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `String.concat` has no argument named `other`.",
+        "line": 27,
+        "label": "unknown argument",
+        "causes": [
+          "`String.concat` does not declare a parameter named `other`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `right`? Declared: left, right.",
+            "applicability": "machine-applicable",
+            "replacement": "right",
+            "replace_line": 27,
+            "replace_column": 45,
+            "replace_length": 5
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `String.concat` is missing required argument `left`.",
+        "line": 27,
+        "label": "missing argument",
+        "causes": [
+          "`String.concat` requires a named argument `left`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `left: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `String.concat` is missing required argument `right`.",
+        "line": 27,
+        "label": "missing argument",
+        "causes": [
+          "`String.concat` requires a named argument `right`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `right: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `print` does not resolve.",
+        "line": 33,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 33,
+            "replace_column": 5,
+            "replace_length": 5
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `print` does not resolve.",
+        "line": 34,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 34,
+            "replace_column": 5,
+            "replace_length": 5
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 2,
+    "duration_ms": 41518,
+    "check_ok": false,
+    "codes": [
+      "RS0026",
+      "RS0201",
+      "RS0203",
+      "RS0204",
+      "RS0206"
+    ],
+    "source": "turn2.rss",
+    "diagnostics": [
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `port`.",
+        "line": 20,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `port` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `route`.",
+        "line": 25,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `route` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0026",
+        "severity": "error",
+        "summary": "unknown value binding `route`.",
+        "line": 26,
+        "label": "unknown binding",
+        "causes": [
+          "RSScript values must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `route` before using it or pass it as a parameter.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `List.length` does not resolve.",
+        "line": 5,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `List.len`?",
+            "applicability": "machine-applicable",
+            "replacement": "List.len",
+            "replace_line": 5,
+            "replace_column": 15,
+            "replace_length": 11
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `Route` uses an unnamed argument.",
+        "line": 20,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `Route` uses an unnamed argument.",
+        "line": 20,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Output.write` has no argument named `value`.",
+        "line": 33,
+        "label": "unknown argument",
+        "causes": [
+          "`Output.write` does not declare a parameter named `value`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `message`? Declared: message.",
+            "applicability": "machine-applicable",
+            "replacement": "message",
+            "replace_line": 33,
+            "replace_column": 18,
+            "replace_length": 5
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Output.write` is missing required argument `message`.",
+        "line": 33,
+        "label": "missing argument",
+        "causes": [
+          "`Output.write` requires a named argument `message`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `message: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Output.write` has no argument named `value`.",
+        "line": 34,
+        "label": "unknown argument",
+        "causes": [
+          "`Output.write` does not declare a parameter named `value`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `message`? Declared: message.",
+            "applicability": "machine-applicable",
+            "replacement": "message",
+            "replace_line": 34,
+            "replace_column": 18,
+            "replace_length": 5
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Output.write` is missing required argument `message`.",
+        "line": 34,
+        "label": "missing argument",
+        "causes": [
+          "`Output.write` requires a named argument `message`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `message: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 3,
+    "duration_ms": 16411,
+    "check_ok": false,
+    "codes": [
+      "RS0025",
+      "RS0203"
+    ],
+    "source": "turn3.rss",
+    "diagnostics": [
+      {
+        "code": "RS0025",
+        "severity": "error",
+        "summary": "unknown field `port` on type `Route`.",
+        "line": 25,
+        "label": "unknown field",
+        "causes": [
+          "RSScript field accesses must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Use a field declared on `Route` or update the type declaration.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0025",
+        "severity": "error",
+        "summary": "unknown field `host` on type `Route`.",
+        "line": 26,
+        "label": "unknown field",
+        "causes": [
+          "RSScript field accesses must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Use a field declared on `Route` or update the type declaration.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Route` has no argument named `host`.",
+        "line": 20,
+        "label": "unknown argument",
+        "causes": [
+          "`Route` does not declare a parameter named `host`."
+        ],
+        "fixes": [
+          {
+            "title": "Use one of: .",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Route` has no argument named `port`.",
+        "line": 20,
+        "label": "unknown argument",
+        "causes": [
+          "`Route` does not declare a parameter named `port`."
+        ],
+        "fixes": [
+          {
+            "title": "Use one of: .",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

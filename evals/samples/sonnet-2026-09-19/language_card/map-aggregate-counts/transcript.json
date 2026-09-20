@@ -1,0 +1,118 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 16597,
+    "check_ok": false,
+    "codes": [
+      "RS0203",
+      "RS0204",
+      "RS0209",
+      "RS1001"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `String.join` has no argument named `values`.",
+        "line": 36,
+        "label": "unknown argument",
+        "causes": [
+          "`String.join` does not declare a parameter named `values`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `parts`? Declared: parts, separator.",
+            "applicability": "machine-applicable",
+            "replacement": "parts",
+            "replace_line": 36,
+            "replace_column": 24,
+            "replace_length": 6
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `String.join` is missing required argument `parts`.",
+        "line": 36,
+        "label": "missing argument",
+        "causes": [
+          "`String.join` requires a named argument `parts`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `parts: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0209",
+        "severity": "error",
+        "summary": "match pattern `Some` cannot match scrutinee type `String`.",
+        "line": 4,
+        "label": "match pattern type mismatch",
+        "causes": [
+          "RSScript match patterns must belong to the scrutinee's type."
+        ],
+        "fixes": []
+      },
+      {
+        "code": "RS0209",
+        "severity": "error",
+        "summary": "match pattern `None` cannot match scrutinee type `String`.",
+        "line": 10,
+        "label": "match pattern type mismatch",
+        "causes": [
+          "RSScript match patterns must belong to the scrutinee's type."
+        ],
+        "fixes": []
+      },
+      {
+        "code": "RS0209",
+        "severity": "error",
+        "summary": "match arm has type `String`, expected `Unit` from the first produced arm.",
+        "line": 10,
+        "label": "match arm type mismatch",
+        "causes": [
+          "A match expression must produce one compatible value type across every arm."
+        ],
+        "fixes": [
+          {
+            "title": "Return the same value type from every match expression arm.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1001",
+        "severity": "error",
+        "summary": "arithmetic operators are only built in for numeric values.",
+        "line": 34,
+        "label": "operator on non-numeric value",
+        "causes": [
+          "RSScript does not support user-defined operator overloads."
+        ],
+        "fixes": [
+          {
+            "title": "Use a named function such as `Type.add(left: read a, right: read b)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

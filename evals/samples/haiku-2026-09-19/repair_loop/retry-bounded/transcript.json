@@ -1,0 +1,61 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 41024,
+    "check_ok": false,
+    "codes": [
+      "RS0308"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0308",
+        "severity": "error",
+        "summary": "`take` requires a local value.",
+        "line": 16,
+        "label": "not a local value",
+        "causes": [
+          "`last_error_msg` is not a local binding and cannot be consumed with `take`."
+        ],
+        "fixes": [
+          {
+            "title": "Pass a local value with `take`, or use `read`/`mut` for managed values.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0308",
+        "severity": "error",
+        "summary": "`take` requires a local value.",
+        "line": 22,
+        "label": "not a local value",
+        "causes": [
+          "`last_error_msg` is not a local binding and cannot be consumed with `take`."
+        ],
+        "fixes": [
+          {
+            "title": "Pass a local value with `take`, or use `read`/`mut` for managed values.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 2,
+    "duration_ms": 33958,
+    "check_ok": true,
+    "codes": [],
+    "source": "turn2.rss",
+    "diagnostics": []
+  }
+]

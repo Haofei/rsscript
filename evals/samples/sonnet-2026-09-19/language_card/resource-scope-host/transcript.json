@@ -1,0 +1,33 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 16732,
+    "check_ok": false,
+    "codes": [
+      "RS0015"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 2,
+        "label": "malformed with statement",
+        "causes": [
+          "`with` statements must use `with resource as name { ... }`."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

@@ -1,0 +1,245 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 45084,
+    "check_ok": false,
+    "codes": [
+      "RS0015",
+      "RS0206",
+      "RS0307",
+      "RS1002",
+      "RS1301"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 30,
+        "label": "unsupported expression",
+        "causes": [
+          "This expression is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 33,
+        "label": "unsupported expression",
+        "causes": [
+          "This expression is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1301",
+        "severity": "error",
+        "summary": "`ConsoleSink` does not satisfy protocol `Sink` method `deliver`.",
+        "line": 13,
+        "label": "missing protocol method mapping",
+        "causes": [
+          "`ConsoleSink` must map protocol method `deliver` to a concrete function."
+        ],
+        "fixes": [
+          {
+            "title": "Update the protocol impl mapping or concrete function signature to match the protocol contract exactly.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1301",
+        "severity": "error",
+        "summary": "`JsonSink` does not satisfy protocol `Sink` method `deliver`.",
+        "line": 19,
+        "label": "missing protocol method mapping",
+        "causes": [
+          "`JsonSink` must map protocol method `deliver` to a concrete function."
+        ],
+        "fixes": [
+          {
+            "title": "Update the protocol impl mapping or concrete function signature to match the protocol contract exactly.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `String.equal` does not resolve.",
+        "line": 28,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Assert.equal`?",
+            "applicability": "machine-applicable",
+            "replacement": "Assert.equal",
+            "replace_line": 28,
+            "replace_column": 8,
+            "replace_length": 12
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Io.print` does not resolve.",
+        "line": 43,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Io.print` does not resolve.",
+        "line": 46,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0307",
+        "severity": "error",
+        "summary": "`manage` requires a local binding.",
+        "line": 30,
+        "label": "not a local binding",
+        "causes": [
+          "`manage` can only move a named local binding or a freshly produced value."
+        ],
+        "fixes": [
+          {
+            "title": "Remove `manage`, or create the value as `local` at its origin.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0307",
+        "severity": "error",
+        "summary": "`manage` requires a local binding.",
+        "line": 33,
+        "label": "not a local binding",
+        "causes": [
+          "`manage` can only move a named local binding or a freshly produced value."
+        ],
+        "fixes": [
+          {
+            "title": "Remove `manage`, or create the value as `local` at its origin.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1002",
+        "severity": "error",
+        "summary": "cast-style conversions are not part of RSScript.",
+        "line": 30,
+        "label": "implicit conversion attempt",
+        "causes": [
+          "RSScript requires conversions to be explicit named APIs so review tools can see them."
+        ],
+        "fixes": [
+          {
+            "title": "Use a named conversion such as `Target.from(value: read source)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1002",
+        "severity": "error",
+        "summary": "cast-style conversions are not part of RSScript.",
+        "line": 33,
+        "label": "implicit conversion attempt",
+        "causes": [
+          "RSScript requires conversions to be explicit named APIs so review tools can see them."
+        ],
+        "fixes": [
+          {
+            "title": "Use a named conversion such as `Target.from(value: read source)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

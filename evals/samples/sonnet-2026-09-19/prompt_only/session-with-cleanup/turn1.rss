@@ -1,0 +1,24 @@
+fn apply_settings(device: read String, settings: read List<String>, value: Int) -> Result<Int, String> {
+    with session = DeviceSession.open(device)? {
+        for setting in settings {
+            match DeviceSession.apply(session, setting, value) {
+                Ok(_) => {}
+                Err(e) => {
+                    Audit.note("aborted setting: " + setting)
+                    return Err(e)
+                }
+            }
+        }
+        let version = DeviceSession.commit(session)?
+        Audit.note("committed device session")
+        Ok(version)
+    }
+}
+
+fn main() -> Unit {
+    let settings: List<String> = ["hostname", "timezone", "ntp"]
+    match apply_settings("router-1", settings, 1) {
+        Ok(_) => Audit.note("apply_settings succeeded")
+        Err(e) => Audit.note("apply_settings failed: " + e)
+    }
+}

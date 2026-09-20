@@ -1,0 +1,312 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 53172,
+    "check_ok": false,
+    "codes": [
+      "RS0203",
+      "RS0204",
+      "RS0206",
+      "RS0501"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `String.equal` does not resolve.",
+        "line": 9,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Assert.equal`?",
+            "applicability": "machine-applicable",
+            "replacement": "Assert.equal",
+            "replace_line": 9,
+            "replace_column": 16,
+            "replace_length": 12
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Alert` has no argument named `level`.",
+        "line": 14,
+        "label": "unknown argument",
+        "causes": [
+          "`Alert` does not declare a parameter named `level`."
+        ],
+        "fixes": [
+          {
+            "title": "Use one of: .",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Alert` has no argument named `message`.",
+        "line": 14,
+        "label": "unknown argument",
+        "causes": [
+          "`Alert` does not declare a parameter named `message`."
+        ],
+        "fixes": [
+          {
+            "title": "Use one of: .",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Alert` has no argument named `level`.",
+        "line": 15,
+        "label": "unknown argument",
+        "causes": [
+          "`Alert` does not declare a parameter named `level`."
+        ],
+        "fixes": [
+          {
+            "title": "Use one of: .",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Alert` has no argument named `message`.",
+        "line": 15,
+        "label": "unknown argument",
+        "causes": [
+          "`Alert` does not declare a parameter named `message`."
+        ],
+        "fixes": [
+          {
+            "title": "Use one of: .",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `List.empty` does not resolve.",
+        "line": 16,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `List.append` has no argument named `item`.",
+        "line": 17,
+        "label": "unknown argument",
+        "causes": [
+          "`List.append` does not declare a parameter named `item`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `values`? Declared: list, values.",
+            "applicability": "machine-applicable",
+            "replacement": "values",
+            "replace_line": 17,
+            "replace_column": 35,
+            "replace_length": 4
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `List.append` is missing required argument `values`.",
+        "line": 17,
+        "label": "missing argument",
+        "causes": [
+          "`List.append` requires a named argument `values`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `values: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `List.append` has no argument named `item`.",
+        "line": 18,
+        "label": "unknown argument",
+        "causes": [
+          "`List.append` does not declare a parameter named `item`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `values`? Declared: list, values.",
+            "applicability": "machine-applicable",
+            "replacement": "values",
+            "replace_line": 18,
+            "replace_column": 35,
+            "replace_length": 4
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `List.append` is missing required argument `values`.",
+        "line": 18,
+        "label": "missing argument",
+        "causes": [
+          "`List.append` requires a named argument `values`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `values: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `List.length` does not resolve.",
+        "line": 20,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `List.len`?",
+            "applicability": "machine-applicable",
+            "replacement": "List.len",
+            "replace_line": 20,
+            "replace_column": 19,
+            "replace_length": 11
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `IO.print` does not resolve.",
+        "line": 21,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0501",
+        "severity": "error",
+        "summary": "retaining API `List.append` cannot retain local value `alert1`.",
+        "line": 17,
+        "label": "local value retained",
+        "causes": [
+          "`List.append` declares `retains(values)`."
+        ],
+        "fixes": [
+          {
+            "title": "Pass `values` through `manage alert1` before retaining it.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0501",
+        "severity": "error",
+        "summary": "retaining API `List.append` cannot retain local value `alert2`.",
+        "line": 18,
+        "label": "local value retained",
+        "causes": [
+          "`List.append` declares `retains(values)`."
+        ],
+        "fixes": [
+          {
+            "title": "Pass `values` through `manage alert2` before retaining it.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

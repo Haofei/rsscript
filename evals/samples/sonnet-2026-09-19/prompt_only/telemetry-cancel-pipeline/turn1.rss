@@ -1,0 +1,65 @@
+// Note: no RSScript spec or compiler was available where this was written, so
+// the standard-library names below are unverified assumptions, not compiled output.
+
+async fn publish(sender: Sender<Int>, samples: read List<Int>, token: CancellationToken) -> Result<Int, ChannelError> {
+    var sent: Int = 0
+    for sample in samples {
+        if token.is_cancelled() {
+            break
+        }
+        let value: Int = sample
+        await sender.send_cancellable(take value, token)?
+        sent = sent + 1
+    }
+    return Ok(sent)
+}
+
+async fn collect(receiver: Receiver<Int>, limit: Int, token: CancellationToken) -> Result<Int, ChannelError> {
+    var total: Int = 0
+    var seen: Int = 0
+    while seen < limit {
+        if token.is_cancelled() {
+            break
+        }
+        match await receiver.recv() {
+            Some(value) => {
+                total = total + value
+                seen = seen + 1
+            }
+            None => {
+                break
+            }
+        }
+    }
+    return Ok(total)
+}
+
+async fn main() {
+    let channel: Channel<Int> = Channel.bounded(2)
+    let sender: Sender<Int> = channel.take_sender()
+    let receiver: Receiver<Int> = channel.take_receiver()
+
+    let source = CancellationSource()
+    let token: CancellationToken = source.token()
+
+    let samples: List<Int> = [12, 15, 9, 21, 18]
+    let limit: Int = 5
+
+    await task_group {
+        async let published = publish(take sender, samples, token)
+        async let collected = collect(take receiver, limit, token)
+
+        let total_result = await collected
+        source.cancel()
+        let sent_result = await published
+
+        match total_result {
+            Ok(total) => print("collected total: " + total.to_string())
+            Err(error) => print("collect failed: " + error.to_string())
+        }
+        match sent_result {
+            Ok(sent) => print("published samples: " + sent.to_string())
+            Err(error) => print("publish failed: " + error.to_string())
+        }
+    }
+}

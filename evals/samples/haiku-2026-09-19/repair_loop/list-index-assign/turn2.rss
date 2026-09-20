@@ -1,0 +1,26 @@
+fn clamp_samples(samples: read List<Int>, ceiling: Int) -> fresh List<Int> {
+    let mut result: List<Int> = []
+    for value in samples {
+        List.append(list: mut result, values: [value])
+    }
+    let len = List.len(list: result)
+    let mut i = 0
+    while i < len {
+        let sample_value: Int = List.get(list: result, index: i)
+        if sample_value > ceiling {
+            List.set(list: mut result, index: i, value: ceiling)
+        }
+        i = i + 1
+    }
+    return result
+}
+
+fn main() -> Unit {
+    let clamped = clamp_samples(samples: [1, 5, 3, 10, 2, 8], ceiling: 7)
+    let mut strings: List<String> = []
+    for value in clamped {
+        List.append(list: mut strings, values: [Int.to_string(value: value)])
+    }
+    let joined = String.join(parts: strings, separator: ",")
+    print(text: joined)
+}

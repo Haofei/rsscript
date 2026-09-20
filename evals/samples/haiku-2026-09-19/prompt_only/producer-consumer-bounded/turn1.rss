@@ -1,0 +1,36 @@
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
+
+#[tokio::main]
+async fn main() {
+    let (tx, rx) = mpsc::channel::<i32>(2);
+    let cancel_token = CancellationToken::new();
+    
+    let tx_clone = tx.clone();
+    let cancel_clone = cancel_token.clone();
+    
+    let producer_handle = tokio::spawn(producer(tx_clone, cancel_clone));
+    let consumer_handle = tokio::spawn(consumer(rx));
+    
+    let _ = producer_handle.await;
+    let _ = consumer_handle.await;
+}
+
+async fn producer(tx: mpsc::Sender<i32>, cancel_token: CancellationToken) {
+    for i in 0..4 {
+        if cancel_token.is_cancelled() {
+            break;
+        }
+        let _ = tx.send(i).await;
+    }
+}
+
+async fn consumer(mut rx: mpsc::Receiver<i32>) {
+    let mut count = 0;
+    while count < 4 {
+        match rx.recv().await {
+            Some(_) => count += 1,
+            None => break,
+        }
+    }
+}

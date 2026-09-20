@@ -1,0 +1,29 @@
+fn sum_quantities(text: read String) -> Result<Int, JsonError> {
+    let parsed = Json.parse(value: text)?;
+    let obj = Json.to_object(value: parsed)?;
+    let items_value = Json.object_get(object: obj, key: "items")?;
+    let items_array = Json.to_array(value: items_value)?;
+    
+    let mut total: Int = 0;
+    for item in Json.array_iterate(array: items_array) {
+        let item_obj = Json.to_object(value: item)?;
+        let quantity_value = Json.object_get(object: item_obj, key: "quantity")?;
+        let quantity = Json.to_int(value: quantity_value)?;
+        total = total + quantity;
+    }
+    
+    return Ok(value: total);
+}
+
+fn main() -> Unit {
+    let doc = "{\"items\": [{\"quantity\": 10}, {\"quantity\": 20}]}";
+    let result = sum_quantities(text: doc);
+    match result {
+        Ok(total) => {
+            System.write(output: Int.to_string(value: total));
+        }
+        Err(err) => {
+            System.write(output: "error");
+        }
+    }
+}

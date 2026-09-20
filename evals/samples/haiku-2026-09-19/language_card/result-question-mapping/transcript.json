@@ -1,0 +1,524 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 68184,
+    "check_ok": false,
+    "codes": [
+      "RS0015",
+      "RS0021",
+      "RS0202",
+      "RS0203",
+      "RS0204",
+      "RS0206",
+      "RS0208",
+      "RS0209"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0021",
+        "severity": "error",
+        "summary": "match statement is not exhaustive.",
+        "line": 7,
+        "label": "non-exhaustive match",
+        "causes": [
+          "Supported match statements must cover `Some`/`None`, `Ok`/`Err`, all sum type variants, or include `_`."
+        ],
+        "fixes": [
+          {
+            "title": "Add the missing variant arm or a final `_` fallback.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Int.parse` does not resolve.",
+        "line": 15,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `String.parse_int`, `Json.parse`, `Yaml.parse`?",
+            "applicability": "machine-applicable",
+            "replacement": "String.parse_int",
+            "replace_line": 15,
+            "replace_column": 11,
+            "replace_length": 9
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "variant `Ok` must use its conventional RSScript form.",
+        "line": 16,
+        "label": "unsupported variant form",
+        "causes": [
+          "Standard Result and Option variants are call-like for checker purposes, but they are not ordinary named-argument calls."
+        ],
+        "fixes": [
+          {
+            "title": "Write this variant as `Ok(value)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "variant `Err` must use its conventional RSScript form.",
+        "line": 17,
+        "label": "unsupported variant form",
+        "causes": [
+          "Standard Result and Option variants are call-like for checker purposes, but they are not ordinary named-argument calls."
+        ],
+        "fixes": [
+          {
+            "title": "Write this variant as `Err(error)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "variant `Err` must use its conventional RSScript form.",
+        "line": 23,
+        "label": "unsupported variant form",
+        "causes": [
+          "Standard Result and Option variants are call-like for checker purposes, but they are not ordinary named-argument calls."
+        ],
+        "fixes": [
+          {
+            "title": "Write this variant as `Err(error)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "variant `Ok` must use its conventional RSScript form.",
+        "line": 25,
+        "label": "unsupported variant form",
+        "causes": [
+          "Standard Result and Option variants are call-like for checker purposes, but they are not ordinary named-argument calls."
+        ],
+        "fixes": [
+          {
+            "title": "Write this variant as `Ok(value)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "variant `Ok` must use its conventional RSScript form.",
+        "line": 31,
+        "label": "unsupported variant form",
+        "causes": [
+          "Standard Result and Option variants are call-like for checker purposes, but they are not ordinary named-argument calls."
+        ],
+        "fixes": [
+          {
+            "title": "Write this variant as `Ok(value)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "variant `Err` must use its conventional RSScript form.",
+        "line": 42,
+        "label": "unsupported variant form",
+        "causes": [
+          "Standard Result and Option variants are call-like for checker purposes, but they are not ordinary named-argument calls."
+        ],
+        "fixes": [
+          {
+            "title": "Write this variant as `Err(error)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "variant `Ok` must use its conventional RSScript form.",
+        "line": 46,
+        "label": "unsupported variant form",
+        "causes": [
+          "Standard Result and Option variants are call-like for checker purposes, but they are not ordinary named-argument calls."
+        ],
+        "fixes": [
+          {
+            "title": "Write this variant as `Ok(value)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `List.empty` does not resolve.",
+        "line": 50,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `List.append` has no argument named `value`.",
+        "line": 51,
+        "label": "unknown argument",
+        "causes": [
+          "`List.append` does not declare a parameter named `value`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `values`? Declared: list, values.",
+            "applicability": "machine-applicable",
+            "replacement": "values",
+            "replace_line": 51,
+            "replace_column": 36,
+            "replace_length": 5
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `List.append` is missing required argument `values`.",
+        "line": 51,
+        "label": "missing argument",
+        "causes": [
+          "`List.append` requires a named argument `values`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `values: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `list` for `List.append` must use `mut`.",
+        "line": 51,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Write `list: mut ...` at the call site.",
+            "applicability": "machine-applicable",
+            "replacement": "mut ",
+            "replace_line": 51,
+            "replace_column": 32,
+            "replace_length": 0
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `List.append` has no argument named `value`.",
+        "line": 52,
+        "label": "unknown argument",
+        "causes": [
+          "`List.append` does not declare a parameter named `value`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `values`? Declared: list, values.",
+            "applicability": "machine-applicable",
+            "replacement": "values",
+            "replace_line": 52,
+            "replace_column": 36,
+            "replace_length": 5
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `List.append` is missing required argument `values`.",
+        "line": 52,
+        "label": "missing argument",
+        "causes": [
+          "`List.append` requires a named argument `values`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `values: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `list` for `List.append` must use `mut`.",
+        "line": 52,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Write `list: mut ...` at the call site.",
+            "applicability": "machine-applicable",
+            "replacement": "mut ",
+            "replace_line": 52,
+            "replace_column": 32,
+            "replace_length": 0
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `List.append` has no argument named `value`.",
+        "line": 53,
+        "label": "unknown argument",
+        "causes": [
+          "`List.append` does not declare a parameter named `value`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `values`? Declared: list, values.",
+            "applicability": "machine-applicable",
+            "replacement": "values",
+            "replace_line": 53,
+            "replace_column": 36,
+            "replace_length": 5
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `List.append` is missing required argument `values`.",
+        "line": 53,
+        "label": "missing argument",
+        "causes": [
+          "`List.append` requires a named argument `values`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `values: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `list` for `List.append` must use `mut`.",
+        "line": 53,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Write `list: mut ...` at the call site.",
+            "applicability": "machine-applicable",
+            "replacement": "mut ",
+            "replace_line": 53,
+            "replace_column": 32,
+            "replace_length": 0
+          }
+        ]
+      },
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `build_test_data` has type `Unit`, expected `List<String>`.",
+        "line": 54,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `List<String>` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `write` does not resolve.",
+        "line": 61,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 61,
+            "replace_column": 13,
+            "replace_length": 5
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `write` does not resolve.",
+        "line": 64,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 64,
+            "replace_column": 13,
+            "replace_length": 5
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0209",
+        "severity": "error",
+        "summary": "match pattern `IngestError.Malformed` cannot match scrutinee type `IngestError`.",
+        "line": 8,
+        "label": "match variant type mismatch",
+        "causes": [
+          "RSScript match patterns must belong to the scrutinee's type."
+        ],
+        "fixes": [
+          {
+            "title": "Use variants of `IngestError`: Malformed, Rejected.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0209",
+        "severity": "error",
+        "summary": "match pattern `IngestError.Rejected` cannot match scrutinee type `IngestError`.",
+        "line": 9,
+        "label": "match variant type mismatch",
+        "causes": [
+          "RSScript match patterns must belong to the scrutinee's type."
+        ],
+        "fixes": [
+          {
+            "title": "Use variants of `IngestError`: Malformed, Rejected.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

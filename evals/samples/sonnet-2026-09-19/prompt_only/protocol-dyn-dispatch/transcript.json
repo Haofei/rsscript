@@ -1,0 +1,414 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 16011,
+    "check_ok": false,
+    "codes": [
+      "RS0028",
+      "RS0201",
+      "RS0204",
+      "RS0206",
+      "RS0208",
+      "RS1301"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS1301",
+        "severity": "error",
+        "summary": "`PlainFormatter` does not satisfy protocol `Formatter` method `format`.",
+        "line": 21,
+        "label": "missing protocol method mapping",
+        "causes": [
+          "`PlainFormatter` must map protocol method `format` to a concrete function."
+        ],
+        "fixes": [
+          {
+            "title": "Update the protocol impl mapping or concrete function signature to match the protocol contract exactly.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1301",
+        "severity": "error",
+        "summary": "`JsonFormatter` does not satisfy protocol `Formatter` method `format`.",
+        "line": 27,
+        "label": "missing protocol method mapping",
+        "causes": [
+          "`JsonFormatter` must map protocol method `format` to a concrete function."
+        ],
+        "fixes": [
+          {
+            "title": "Update the protocol impl mapping or concrete function signature to match the protocol contract exactly.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0028",
+        "severity": "error",
+        "summary": "invalid `self` parameter in `plain_format`.",
+        "line": 13,
+        "label": "invalid self parameter",
+        "causes": [
+          "`self` may only be the first parameter of a qualified method signature."
+        ],
+        "fixes": [
+          {
+            "title": "Use a different parameter name, or make this the first parameter of an explicit method/protocol signature.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0028",
+        "severity": "error",
+        "summary": "invalid `self` parameter in `json_format`.",
+        "line": 17,
+        "label": "invalid self parameter",
+        "causes": [
+          "`self` may only be the first parameter of a qualified method signature."
+        ],
+        "fixes": [
+          {
+            "title": "Use a different parameter name, or make this the first parameter of an explicit method/protocol signature.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `String.concat` uses an unnamed argument.",
+        "line": 14,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `String.concat` uses an unnamed argument.",
+        "line": 14,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `String.concat` is missing required argument `left`.",
+        "line": 14,
+        "label": "missing argument",
+        "causes": [
+          "`String.concat` requires a named argument `left`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `left: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `String.concat` is missing required argument `right`.",
+        "line": 14,
+        "label": "missing argument",
+        "causes": [
+          "`String.concat` requires a named argument `right`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `right: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `json_format` has type `Result<fresh JsonValue, JsonError>`, expected `String`.",
+        "line": 18,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `String` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `Json.field` uses an unnamed argument.",
+        "line": 18,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `Json.field` uses an unnamed argument.",
+        "line": 18,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Json.field` is missing required argument `value`.",
+        "line": 18,
+        "label": "missing argument",
+        "causes": [
+          "`Json.field` requires a named argument `value`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `value: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Json.field` is missing required argument `name`.",
+        "line": 18,
+        "label": "missing argument",
+        "causes": [
+          "`Json.field` requires a named argument `name`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `name: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `Dyn<Formatter>.from` uses an unnamed argument.",
+        "line": 41,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Dyn<Formatter>.from` is missing required argument `value`.",
+        "line": 41,
+        "label": "missing argument",
+        "causes": [
+          "`Dyn<Formatter>.from` requires a named argument `value`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `value: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `Dyn<Formatter>.from` uses an unnamed argument.",
+        "line": 42,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Dyn<Formatter>.from` is missing required argument `value`.",
+        "line": 42,
+        "label": "missing argument",
+        "causes": [
+          "`Dyn<Formatter>.from` requires a named argument `value`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `value: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `write` does not resolve.",
+        "line": 44,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 44,
+            "replace_column": 5,
+            "replace_length": 5
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `write` does not resolve.",
+        "line": 45,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 45,
+            "replace_column": 5,
+            "replace_length": 5
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

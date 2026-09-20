@@ -1,0 +1,41 @@
+fn count_by_level(lines: read List<String>) -> fresh Map<String, Int> {
+    let counts = {};
+    
+    for line in lines {
+        let space_idx = line.find(" ");
+        let level = if space_idx >= 0 {
+            line.substring(0, space_idx)
+        } else {
+            "unknown"
+        };
+        
+        let current = counts.get(level);
+        let next = if current != null { current + 1 } else { 1 };
+        counts.put(level, next);
+    }
+    
+    counts
+}
+
+fn render_counts(counts: read Map<String, Int>) -> fresh String {
+    let parts = [];
+    
+    for level in counts.keys() {
+        parts.push(level + ":" + counts.get(level).to_string());
+    }
+    
+    parts.join(",")
+}
+
+fn main() -> Unit {
+    let lines = [
+        "ERROR something bad",
+        "WARN careful now",
+        "INFO all good"
+    ];
+    
+    let counts = count_by_level(lines);
+    let rendered = render_counts(counts);
+    
+    println(rendered);
+}

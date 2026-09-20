@@ -1,0 +1,22 @@
+struct Reading {
+  sensor: String,
+  value: Int
+}
+
+fn format_reading(reading: read Reading) -> fresh String {
+  reading.sensor + "=" + Int.to_string(reading.value)
+}
+
+fn render_report(title: read String, readings: read List<Reading>) -> fresh String {
+  let reading_strs = List.map(readings, format_reading)
+  let all_lines = [title] + reading_strs + ["count=" + Int.to_string(List.length(readings))]
+  List.join(all_lines, "\n")
+}
+
+fn main() -> Unit {
+  let readings = [
+    Reading { sensor: "temp", value: 25 },
+    Reading { sensor: "humidity", value: 60 }
+  ]
+  Output.write(render_report("Weather Report", readings))
+}

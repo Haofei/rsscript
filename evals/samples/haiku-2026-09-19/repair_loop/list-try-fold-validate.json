@@ -1,0 +1,12 @@
+{
+  "schema": "rsscript.eval.candidate.v1",
+  "task_id": "list-try-fold-validate",
+  "source": "list-try-fold-validate/candidate.rss",
+  "mode": "repair_loop",
+  "model": "haiku",
+  "model_version": "unknown",
+  "temperature": null,
+  "attempt": 1,
+  "generation_duration_ms": 211421,
+  "repair_turns": 2
+}

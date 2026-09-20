@@ -1,0 +1,905 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 70826,
+    "check_ok": false,
+    "codes": [
+      "RS0024",
+      "RS0206"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0024",
+        "severity": "error",
+        "summary": "unknown type `ChannelSender<Int>`.",
+        "line": 1,
+        "label": "unknown type",
+        "causes": [
+          "RSScript type checking must resolve source-level types before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `ChannelSender<Int>`, import an `.rssi` contract that declares it, or use a known core/runtime type.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0024",
+        "severity": "error",
+        "summary": "unknown type `ChannelSender<Int>`.",
+        "line": 5,
+        "label": "unknown type",
+        "causes": [
+          "RSScript type checking must resolve source-level types before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `ChannelSender<Int>`, import an `.rssi` contract that declares it, or use a known core/runtime type.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `read sender.send` does not resolve.",
+        "line": 2,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Sender.send`, `Buffer.len`, `BufferView.len`?",
+            "applicability": "maybe-incorrect",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `read sender.send` does not resolve.",
+        "line": 6,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Sender.send`, `Buffer.len`, `BufferView.len`?",
+            "applicability": "maybe-incorrect",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Channel.create<Int>` does not resolve.",
+        "line": 10,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Channel.create<Int>` does not resolve.",
+        "line": 11,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `CancellationSource.create` does not resolve.",
+        "line": 18,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 2,
+    "duration_ms": 97808,
+    "check_ok": false,
+    "codes": [
+      "RS0022",
+      "RS0024",
+      "RS0025",
+      "RS0034",
+      "RS0201",
+      "RS0202",
+      "RS0204",
+      "RS0206",
+      "RS0207",
+      "RS0208"
+    ],
+    "source": "turn2.rss",
+    "diagnostics": [
+      {
+        "code": "RS0024",
+        "severity": "error",
+        "summary": "unknown type `sender`.",
+        "line": 37,
+        "label": "unknown type",
+        "causes": [
+          "RSScript type checking must resolve source-level types before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `sender`, import an `.rssi` contract that declares it, or use a known core/runtime type.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0024",
+        "severity": "error",
+        "summary": "unknown type `receiver`.",
+        "line": 37,
+        "label": "unknown type",
+        "causes": [
+          "RSScript type checking must resolve source-level types before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `receiver`, import an `.rssi` contract that declares it, or use a known core/runtime type.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0024",
+        "severity": "error",
+        "summary": "unknown type `Cancellation`.",
+        "line": 41,
+        "label": "unknown type",
+        "causes": [
+          "RSScript type checking must resolve source-level types before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `Cancellation`, import an `.rssi` contract that declares it, or use a known core/runtime type.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0025",
+        "severity": "error",
+        "summary": "unknown field `sender` on type `__Tuple2<sender, receiver>`.",
+        "line": 13,
+        "label": "unknown field",
+        "causes": [
+          "RSScript field accesses must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Use a field declared on `__Tuple2<sender, receiver>` or update the type declaration.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0025",
+        "severity": "error",
+        "summary": "unknown field `receiver` on type `__Tuple2<sender, receiver>`.",
+        "line": 14,
+        "label": "unknown field",
+        "causes": [
+          "RSScript field accesses must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Use a field declared on `__Tuple2<sender, receiver>` or update the type declaration.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0025",
+        "severity": "error",
+        "summary": "unknown field `sender` on type `__Tuple2<sender, receiver>`.",
+        "line": 15,
+        "label": "unknown field",
+        "causes": [
+          "RSScript field accesses must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Use a field declared on `__Tuple2<sender, receiver>` or update the type declaration.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0025",
+        "severity": "error",
+        "summary": "unknown field `receiver` on type `__Tuple2<sender, receiver>`.",
+        "line": 16,
+        "label": "unknown field",
+        "causes": [
+          "RSScript field accesses must resolve before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Use a field declared on `__Tuple2<sender, receiver>` or update the type declaration.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `createChannel` has type `Unit`, expected `__Tuple2<sender, receiver>`.",
+        "line": 37,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `__Tuple2<sender, receiver>` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `createCancellation` has type `Unit`, expected `Cancellation`.",
+        "line": 41,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `Cancellation` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `Sender.send` uses an unnamed argument.",
+        "line": 2,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Sender.send` is missing required argument `value`.",
+        "line": 2,
+        "label": "missing argument",
+        "causes": [
+          "`Sender.send` requires a named argument `value`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `value: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0207",
+        "severity": "error",
+        "summary": "argument `sender` for `Sender.send` has type `Sender`, expected `Sender<Int>`.",
+        "line": 2,
+        "label": "argument type mismatch",
+        "causes": [
+          "RSScript call argument types must match the resolved callee signature before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Pass a value of type `Sender<Int>` for `sender`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0201",
+        "severity": "error",
+        "summary": "call to `Sender.send` uses an unnamed argument.",
+        "line": 6,
+        "label": "argument must be named",
+        "causes": [
+          "Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand."
+        ],
+        "fixes": [
+          {
+            "title": "Write the argument as `name: value`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Sender.send` is missing required argument `value`.",
+        "line": 6,
+        "label": "missing argument",
+        "causes": [
+          "`Sender.send` requires a named argument `value`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `value: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0207",
+        "severity": "error",
+        "summary": "argument `sender` for `Sender.send` has type `Sender`, expected `Sender<Int>`.",
+        "line": 6,
+        "label": "argument type mismatch",
+        "causes": [
+          "RSScript call argument types must match the resolved callee signature before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Pass a value of type `Sender<Int>` for `sender`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `sender` for `sendWork` uses `mut` but the parameter is `read`.",
+        "line": 21,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Remove `mut` from `sender`: a `read` parameter takes the bare value.",
+            "applicability": "machine-applicable",
+            "replacement": "",
+            "replace_line": 21,
+            "replace_column": 49,
+            "replace_length": 4
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `sender` for `sendDeadline` uses `mut` but the parameter is `read`.",
+        "line": 22,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Remove `mut` from `sender`: a `read` parameter takes the bare value.",
+            "applicability": "machine-applicable",
+            "replacement": "",
+            "replace_line": 22,
+            "replace_column": 57,
+            "replace_length": 4
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `read <expr>.create` does not resolve.",
+        "line": 38,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `read <expr>.create` does not resolve.",
+        "line": 38,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Cancellation.create` does not resolve.",
+        "line": 42,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0022",
+        "severity": "error",
+        "summary": "async call `Sender.send` must be awaited.",
+        "line": 2,
+        "label": "async call must be awaited",
+        "causes": [
+          "Async calls introduce suspension boundaries that must be visible in source; `spawn` is reserved but not executable in v0.7."
+        ],
+        "fixes": [
+          {
+            "title": "Write `await Sender.send(...)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0022",
+        "severity": "error",
+        "summary": "async call `Sender.send` must be awaited.",
+        "line": 6,
+        "label": "async call must be awaited",
+        "causes": [
+          "Async calls introduce suspension boundaries that must be visible in source; `spawn` is reserved but not executable in v0.7."
+        ],
+        "fixes": [
+          {
+            "title": "Write `await Sender.send(...)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0034",
+        "severity": "error",
+        "summary": "the type arguments of this tuple cannot be inferred.",
+        "line": 38,
+        "label": "uninferable construction type",
+        "causes": [
+          "A generic construction takes its type arguments from its arguments' types, and at least one argument here has no known type: an unannotated closure, a bare `None`, an empty `[]`, or a value whose own binding was never given a type."
+        ],
+        "fixes": [
+          {
+            "title": "Annotate the binding or parameter the untyped argument comes from (e.g. `let n: Int = ...`), so every type argument is proved at the construction.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 3,
+    "duration_ms": 47131,
+    "check_ok": false,
+    "codes": [
+      "RS0015",
+      "RS0024",
+      "RS0202",
+      "RS0206",
+      "RS0208"
+    ],
+    "source": "turn3.rss",
+    "diagnostics": [
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 13,
+        "label": "unsupported expression",
+        "causes": [
+          "This expression is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 14,
+        "label": "unsupported expression",
+        "causes": [
+          "This expression is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 15,
+        "label": "unsupported expression",
+        "causes": [
+          "This expression is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 16,
+        "label": "unsupported expression",
+        "causes": [
+          "This expression is outside the current RSScript parser surface."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0024",
+        "severity": "error",
+        "summary": "unknown type `Cancellation`.",
+        "line": 43,
+        "label": "unknown type",
+        "causes": [
+          "RSScript type checking must resolve source-level types before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Declare `Cancellation`, import an `.rssi` contract that declares it, or use a known core/runtime type.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `createChannel` has type `Unit`, expected `__Tuple2<Sender<Int>, Receiver<Int>>`.",
+        "line": 37,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `__Tuple2<Sender<Int>, Receiver<Int>>` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `createCancellation` has type `Unit`, expected `Cancellation`.",
+        "line": 43,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `Cancellation` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `value` for `Sender.send` must use `take`.",
+        "line": 2,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Write `value: take ...` at the call site.",
+            "applicability": "machine-applicable",
+            "replacement": "take ",
+            "replace_line": 2,
+            "replace_column": 46,
+            "replace_length": 0
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `value` for `Sender.send` must use `take`.",
+        "line": 6,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Write `value: take ...` at the call site.",
+            "applicability": "machine-applicable",
+            "replacement": "take ",
+            "replace_line": 6,
+            "replace_column": 46,
+            "replace_length": 0
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Sender.create` does not resolve.",
+        "line": 38,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Receiver.create` does not resolve.",
+        "line": 39,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Cancellation.create` does not resolve.",
+        "line": 44,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

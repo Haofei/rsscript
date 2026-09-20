@@ -1,0 +1,45 @@
+struct PumpConfig {
+  name: String,
+  interval_ms: Int,
+  retries: Int
+}
+
+data ConfigError
+  = MissingField(field: String)
+  | OutOfRange(field: String, value: Int)
+
+fn ConfigError.describe(error: read ConfigError) -> fresh String {
+  match error {
+    case MissingField(field) => "Missing field: " + field
+    case OutOfRange(field, value) => "Field " + field + " out of range: " + value.toString()
+  }
+}
+
+fn validate(config: read PumpConfig) -> Result<Unit, ConfigError> {
+  if config.name.isEmpty() {
+    return Err(MissingField("name"))
+  }
+  
+  if config.interval_ms < 100 || config.interval_ms > 60000 {
+    return Err(OutOfRange("interval_ms", config.interval_ms))
+  }
+  
+  if config.retries < 0 || config.retries > 10 {
+    return Err(OutOfRange("retries", config.retries))
+  }
+  
+  return Ok(())
+}
+
+fn main() -> Unit {
+  let config = PumpConfig {
+    name: "pump1",
+    interval_ms: 5000,
+    retries: 3
+  };
+  
+  match validate(config) {
+    case Ok(_) => write(config.name)
+    case Err(error) => write(ConfigError.describe(error))
+  }
+}

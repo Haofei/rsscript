@@ -1,0 +1,47 @@
+fn sum_quantities(text: read String) -> Result<Int, JsonError> {
+    let parsed = match Json.parse(text: text) {
+        Ok(value) => { value }
+        Err(error) => { return Err(value: error) }
+    };
+    
+    let items = match Json.field(value: parsed, name: "items") {
+        Ok(value) => { value }
+        Err(error) => { return Err(value: error) }
+    };
+    
+    let array = match Json.asArray(value: items) {
+        Ok(value) => { value }
+        Err(error) => { return Err(value: error) }
+    };
+    
+    let mut total: Int = 0;
+    for item in array {
+        let quantity = match Json.field(value: item, name: "quantity") {
+            Ok(value) => { value }
+            Err(error) => { return Err(value: error) }
+        };
+        
+        let qty = match Json.asInt(value: quantity) {
+            Ok(value) => { value }
+            Err(error) => { return Err(value: error) }
+        };
+        
+        total = total + qty;
+    }
+    
+    return Ok(value: total);
+}
+
+fn main() -> Unit {
+    local doc = "{\"items\": [{\"quantity\": 5}, {\"quantity\": 3}]}";
+    let result = sum_quantities(text: doc);
+    
+    match result {
+        Ok(total) => {
+            Print.line(value: Int.toString(value: total));
+        }
+        Err(error) => {
+            Print.line(value: JsonError.message(value: error));
+        }
+    }
+}

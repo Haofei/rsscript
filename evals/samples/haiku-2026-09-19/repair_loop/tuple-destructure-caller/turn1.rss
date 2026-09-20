@@ -1,0 +1,25 @@
+fn split_levels(lines: read List<String>) -> (Int, Int, Int) {
+    let mut errors: Int = 0
+    let mut warns: Int = 0
+    let mut others: Int = 0
+    
+    for line in lines {
+        if String.starts_with(value: line, prefix: "error") {
+            errors = errors + 1
+        } else if String.starts_with(value: line, prefix: "warn") {
+            warns = warns + 1
+        } else {
+            others = others + 1
+        }
+    }
+    
+    return (errors, warns, others)
+}
+
+fn main() -> Unit {
+    let lines = ["error: failed", "warn: deprecated", "info: complete"]
+    let (errors, warns, others) = split_levels(lines: lines)
+    write(value: errors)
+    write(value: warns)
+    write(value: others)
+}

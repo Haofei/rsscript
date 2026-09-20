@@ -1,0 +1,41 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 8792,
+    "check_ok": false,
+    "codes": [
+      "RS0208"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `main` has type `Int`, expected `Unit`.",
+        "line": 11,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `Unit` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 2,
+    "duration_ms": 10019,
+    "check_ok": true,
+    "codes": [],
+    "source": "turn2.rss",
+    "diagnostics": []
+  }
+]

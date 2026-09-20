@@ -1,0 +1,69 @@
+struct Tally {
+    total: Int,
+    count: Int,
+}
+
+fn add_amount(tally: Tally, raw: String) -> Result<Tally, String> {
+    let parsed = String.parse_int(value: raw)
+    
+    match parsed {
+        Some(amount) => {
+            if amount < 0 {
+                return Err("Amount cannot be negative")
+            }
+            return Ok(Tally {
+                total: tally.total + amount,
+                count: tally.count + 1,
+            })
+        }
+        None => {
+            return Err("Not an integer: " + raw)
+        }
+    }
+}
+
+fn tally_helper(raws: read List<String>, index: Int, acc: Tally) -> Result<Tally, String> {
+    let len = List.length(list: raws)
+    
+    if index >= len {
+        return Ok(acc)
+    }
+    
+    let item = List.get(list: raws, index: index)
+    
+    match item {
+        Some(raw) => {
+            match add_amount(tally: acc, raw: raw) {
+                Ok(new_acc) => {
+                    return tally_helper(raws: raws, index: index + 1, acc: new_acc)
+                }
+                Err(message) => {
+                    return Err(message)
+                }
+            }
+        }
+        None => {
+            return Err("Index out of bounds")
+        }
+    }
+}
+
+fn tally_all(raws: read List<String>) -> Result<Tally, String> {
+    let init = Tally { total: 0, count: 0 }
+    return tally_helper(raws: raws, index: 0, acc: init)
+}
+
+fn main() -> Unit {
+    let amounts = ["10", "20", "30"]
+    let result = tally_all(raws: amounts)
+    
+    match result {
+        Ok(tally) => {
+            let total_str = Int.to_string(value: tally.total)
+            Output.write(message: total_str)
+        }
+        Err(err) => {
+            Output.write(message: err)
+        }
+    }
+}

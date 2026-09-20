@@ -1,0 +1,542 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 70966,
+    "check_ok": false,
+    "codes": [
+      "RS0021",
+      "RS0034",
+      "RS0202",
+      "RS0203",
+      "RS0204",
+      "RS0206",
+      "RS0209",
+      "RS0313",
+      "RS0501"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0313",
+        "severity": "error",
+        "summary": "cannot assign `Unit` to `counts` of type `Map<String, Int>`.",
+        "line": 7,
+        "label": "assignment type mismatch",
+        "causes": [
+          "The assigned value's type must match the place's type before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Assign a `Map<String, Int>` value to `counts`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0021",
+        "severity": "error",
+        "summary": "match expression is not exhaustive.",
+        "line": 15,
+        "label": "non-exhaustive match",
+        "causes": [
+          "Supported match statements must cover `Some`/`None`, `Ok`/`Err`, all sum type variants, or include `_`."
+        ],
+        "fixes": [
+          {
+            "title": "Add the missing variant arm or a final `_` fallback.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `map` for `Map.insert` must use `mut`.",
+        "line": 7,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Write `map: mut ...` at the call site.",
+            "applicability": "machine-applicable",
+            "replacement": "mut ",
+            "replace_line": 7,
+            "replace_column": 34,
+            "replace_length": 0
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Map.entries` does not resolve.",
+        "line": 29,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `String.concat` has no argument named `a`.",
+        "line": 35,
+        "label": "unknown argument",
+        "causes": [
+          "`String.concat` does not declare a parameter named `a`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `left`? Declared: left, right.",
+            "applicability": "machine-applicable",
+            "replacement": "left",
+            "replace_line": 35,
+            "replace_column": 36,
+            "replace_length": 1
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `String.concat` has no argument named `b`.",
+        "line": 35,
+        "label": "unknown argument",
+        "causes": [
+          "`String.concat` does not declare a parameter named `b`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `right`? Declared: left, right.",
+            "applicability": "machine-applicable",
+            "replacement": "right",
+            "replace_line": 35,
+            "replace_column": 47,
+            "replace_length": 1
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `String.concat` is missing required argument `left`.",
+        "line": 35,
+        "label": "missing argument",
+        "causes": [
+          "`String.concat` requires a named argument `left`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `left: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `String.concat` is missing required argument `right`.",
+        "line": 35,
+        "label": "missing argument",
+        "causes": [
+          "`String.concat` requires a named argument `right`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `right: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `String.concat` has no argument named `a`.",
+        "line": 39,
+        "label": "unknown argument",
+        "causes": [
+          "`String.concat` does not declare a parameter named `a`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `left`? Declared: left, right.",
+            "applicability": "machine-applicable",
+            "replacement": "left",
+            "replace_line": 39,
+            "replace_column": 32,
+            "replace_length": 1
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `String.concat` has no argument named `b`.",
+        "line": 39,
+        "label": "unknown argument",
+        "causes": [
+          "`String.concat` does not declare a parameter named `b`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `right`? Declared: left, right.",
+            "applicability": "machine-applicable",
+            "replacement": "right",
+            "replace_line": 39,
+            "replace_column": 43,
+            "replace_length": 1
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `String.concat` is missing required argument `left`.",
+        "line": 39,
+        "label": "missing argument",
+        "causes": [
+          "`String.concat` requires a named argument `left`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `left: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `String.concat` is missing required argument `right`.",
+        "line": 39,
+        "label": "missing argument",
+        "causes": [
+          "`String.concat` requires a named argument `right`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `right: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `String.concat` has no argument named `a`.",
+        "line": 40,
+        "label": "unknown argument",
+        "causes": [
+          "`String.concat` does not declare a parameter named `a`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `left`? Declared: left, right.",
+            "applicability": "machine-applicable",
+            "replacement": "left",
+            "replace_line": 40,
+            "replace_column": 32,
+            "replace_length": 1
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `String.concat` has no argument named `b`.",
+        "line": 40,
+        "label": "unknown argument",
+        "causes": [
+          "`String.concat` does not declare a parameter named `b`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `right`? Declared: left, right.",
+            "applicability": "machine-applicable",
+            "replacement": "right",
+            "replace_line": 40,
+            "replace_column": 43,
+            "replace_length": 1
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `String.concat` is missing required argument `left`.",
+        "line": 40,
+        "label": "missing argument",
+        "causes": [
+          "`String.concat` requires a named argument `left`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `left: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `String.concat` is missing required argument `right`.",
+        "line": 40,
+        "label": "missing argument",
+        "causes": [
+          "`String.concat` requires a named argument `right`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `right: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `String.concat` has no argument named `a`.",
+        "line": 41,
+        "label": "unknown argument",
+        "causes": [
+          "`String.concat` does not declare a parameter named `a`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `left`? Declared: left, right.",
+            "applicability": "machine-applicable",
+            "replacement": "left",
+            "replace_line": 41,
+            "replace_column": 32,
+            "replace_length": 1
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `String.concat` has no argument named `b`.",
+        "line": 41,
+        "label": "unknown argument",
+        "causes": [
+          "`String.concat` does not declare a parameter named `b`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `right`? Declared: left, right.",
+            "applicability": "machine-applicable",
+            "replacement": "right",
+            "replace_line": 41,
+            "replace_column": 43,
+            "replace_length": 1
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `String.concat` is missing required argument `left`.",
+        "line": 41,
+        "label": "missing argument",
+        "causes": [
+          "`String.concat` requires a named argument `left`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `left: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `String.concat` is missing required argument `right`.",
+        "line": 41,
+        "label": "missing argument",
+        "causes": [
+          "`String.concat` requires a named argument `right`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `right: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `List` does not resolve.",
+        "line": 48,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0501",
+        "severity": "error",
+        "summary": "retaining API `Map.insert` cannot retain local value `level`.",
+        "line": 7,
+        "label": "local value retained",
+        "causes": [
+          "`Map.insert` declares `retains(key)`."
+        ],
+        "fixes": [
+          {
+            "title": "Pass `key` through `manage level` before retaining it.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0034",
+        "severity": "error",
+        "summary": "the type arguments of `Map` cannot be inferred.",
+        "line": 2,
+        "label": "uninferable construction type",
+        "causes": [
+          "A generic construction takes its type arguments from its arguments' types, and at least one argument here has no known type: an unannotated closure, a bare `None`, an empty `[]`, or a value whose own binding was never given a type."
+        ],
+        "fixes": [
+          {
+            "title": "Annotate the binding or parameter the untyped argument comes from (e.g. `let n: Int = ...`), so every type argument is proved at the construction.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0209",
+        "severity": "error",
+        "summary": "match pattern `Cons` cannot match scrutinee type `List<String>`.",
+        "line": 16,
+        "label": "match pattern type mismatch",
+        "causes": [
+          "RSScript match patterns must belong to the scrutinee's type."
+        ],
+        "fixes": []
+      },
+      {
+        "code": "RS0209",
+        "severity": "error",
+        "summary": "match pattern `Nil` cannot match scrutinee type `List<String>`.",
+        "line": 17,
+        "label": "match pattern type mismatch",
+        "causes": [
+          "RSScript match patterns must belong to the scrutinee's type."
+        ],
+        "fixes": []
+      }
+    ]
+  },
+  {
+    "turn": 2,
+    "duration_ms": 113517,
+    "check_ok": false,
+    "codes": [
+      "RS0307"
+    ],
+    "source": "turn2.rss",
+    "diagnostics": [
+      {
+        "code": "RS0307",
+        "severity": "error",
+        "summary": "`manage` requires a local binding.",
+        "line": 7,
+        "label": "not a local binding",
+        "causes": [
+          "`level` is not a local binding and cannot be moved with `manage`."
+        ],
+        "fixes": [
+          {
+            "title": "Remove `manage`, or create the value as `local` at its origin.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 3,
+    "duration_ms": 15729,
+    "check_ok": true,
+    "codes": [],
+    "source": "turn3.rss",
+    "diagnostics": []
+  }
+]

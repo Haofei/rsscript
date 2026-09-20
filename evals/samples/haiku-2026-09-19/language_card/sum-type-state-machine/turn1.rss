@@ -1,0 +1,47 @@
+sum JobState {
+    Queued,
+    Running(worker: String),
+    Done(code: Int),
+    Failed(reason: String),
+}
+
+fn advance(state: read JobState, worker: read String) -> fresh JobState {
+    match state {
+        JobState.Queued => {
+            return JobState.Running(worker: worker)
+        }
+        JobState.Running(_) => {
+            return JobState.Done(code: 0)
+        }
+        JobState.Done(code) => {
+            return JobState.Done(code: code)
+        }
+        JobState.Failed(reason) => {
+            return JobState.Failed(reason: reason)
+        }
+    }
+}
+
+fn describe(state: read JobState) -> fresh String {
+    match state {
+        JobState.Queued => {
+            return "Queued"
+        }
+        JobState.Running(worker) => {
+            return "Running on " ++ worker
+        }
+        JobState.Done(code) => {
+            return "Done with code " ++ Int.to_string(value: code)
+        }
+        JobState.Failed(reason) => {
+            return "Failed: " ++ reason
+        }
+    }
+}
+
+fn main() -> Unit {
+    local state1 = JobState.Queued
+    local state2 = advance(state: state1, worker: "worker1")
+    local state3 = advance(state: state2, worker: "worker1")
+    IO.println(value: describe(state: state3))
+}

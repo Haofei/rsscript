@@ -1,0 +1,33 @@
+fn ship(sku: read String, count: Int) -> Result<Int, String> {
+    let reserved = Inventory.reserve(sku: sku, count: count)
+    match reserved {
+        Err(message) => {
+            return Err(message)
+        }
+        Ok(amount) => {
+            let pushed = Sync.push(id: sku, amount: amount)
+            match pushed {
+                Err(error) => {
+                    Inventory.release(sku: sku, count: amount)
+                    return Err(SyncError.message(error: error))
+                }
+                Ok(accepted) => {
+                    Metrics.record(name: "inventory.accepted", value: accepted)
+                    return Ok(accepted)
+                }
+            }
+        }
+    }
+}
+
+fn main() -> Unit {
+    let outcome = ship(sku: "widget", count: 3)
+    match outcome {
+        Ok(accepted) => {
+            Metrics.record(name: "ship.ok", value: accepted)
+        }
+        Err(_) => {
+            Metrics.record(name: "ship.failed", value: 0)
+        }
+    }
+}

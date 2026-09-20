@@ -1,0 +1,28 @@
+fn apply_settings(device: read String, settings: read List<String>, value: Int) -> Result<Int, String> {
+    with session = DeviceSession.open(device)? {
+        for setting in settings {
+            match DeviceSession.apply(session, setting, value) {
+                Ok(_) => {},
+                Err(e) => {
+                    Audit.note("Aborted setting: " + setting)
+                    return Err(e)
+                }
+            }
+        }
+        
+        match DeviceSession.commit(session) {
+            Ok(version) => {
+                Audit.note("Commit successful")
+                Ok(version)
+            }
+            Err(e) => Err(e)
+        }
+    }
+}
+
+fn main() -> Unit {
+    match apply_settings("device1", ["setting1", "setting2"], 42) {
+        Ok(version) => print("Success"),
+        Err(e) => print("Error: " + e)
+    }
+}

@@ -1,0 +1,50 @@
+fn reading_value(element: read JsonValue) -> Result<Int, JsonError> {
+    return match Json.field(value: element, name: "value") {
+        Ok(field) => { Json.as_int(value: field) }
+        Err(error) => { Err(error) }
+    }
+}
+
+fn sum_from(readings: read JsonValue, index: Int, count: Int, total: Int) -> Result<Int, JsonError> {
+    if index >= count {
+        return Ok(total)
+    }
+    return match Json.array_get(value: readings, index: index) {
+        Ok(element) => {
+            match reading_value(element: element) {
+                Ok(number) => { sum_from(readings: readings, index: index + 1, count: count, total: total + number) }
+                Err(error) => { Err(error) }
+            }
+        }
+        Err(error) => { Err(error) }
+    }
+}
+
+fn sum_readings(readings: read JsonValue) -> Result<Int, JsonError> {
+    return match Json.array_len(value: readings) {
+        Ok(count) => { sum_from(readings: readings, index: 0, count: count, total: 0) }
+        Err(error) => { Err(error) }
+    }
+}
+
+fn sum_document(document: read JsonValue) -> Result<Int, JsonError> {
+    return match Json.field(value: document, name: "readings") {
+        Ok(readings) => { sum_readings(readings: readings) }
+        Err(error) => { Err(error) }
+    }
+}
+
+fn total_readings(text: read String) -> Result<Int, JsonError> {
+    return match Json.parse(text: text) {
+        Ok(document) => { sum_document(document: document) }
+        Err(error) => { Err(error) }
+    }
+}
+
+fn main() -> Unit {
+    let text = "{\"readings\": [{\"value\": 10}, {\"value\": 32}]}"
+    match total_readings(text: text) {
+        Ok(total) => { Output.write(value: Int.to_string(value: total)) }
+        Err(error) => { Output.write(value: JsonError.message(error: error)) }
+    }
+}

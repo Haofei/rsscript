@@ -1,0 +1,35 @@
+struct Route(host: String, port: Int)
+
+fn parse_route(raw: read String) -> Option<Route> {
+    let parts = String.split(value: raw, delimiter: ":")
+    let len = Array.length(array: parts)
+
+    if len != 2 {
+        return None
+    }
+
+    let host = String.trim(value: Array.get(array: parts, index: 0))
+    let port_str = String.trim(value: Array.get(array: parts, index: 1))
+
+    if host == "" {
+        return None
+    }
+
+    let Some(port) else { return None } = Int.parse(value: port_str)
+
+    return Some(Route(host: host, port: port))
+}
+
+fn describe_route(raw: read String) -> fresh String {
+    let Some(route) else { return "unroutable" } = parse_route(raw: raw)
+    let port_str = Int.to_string(value: route.port)
+    let with_slash = String.concat(value: route.host, other: "/")
+    return String.concat(value: with_slash, other: port_str)
+}
+
+fn main() -> Unit {
+    let routable = describe_route(raw: "localhost:8080")
+    let unroutable = describe_route(raw: "invalid")
+    print(value: routable)
+    print(value: unroutable)
+}

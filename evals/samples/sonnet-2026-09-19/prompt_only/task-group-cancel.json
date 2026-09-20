@@ -1,0 +1,12 @@
+{
+  "schema": "rsscript.eval.candidate.v1",
+  "task_id": "task-group-cancel",
+  "source": "task-group-cancel/candidate.rss",
+  "mode": "prompt_only",
+  "model": "sonnet",
+  "model_version": "unknown",
+  "temperature": null,
+  "attempt": 1,
+  "generation_duration_ms": 16423,
+  "repair_turns": 0
+}

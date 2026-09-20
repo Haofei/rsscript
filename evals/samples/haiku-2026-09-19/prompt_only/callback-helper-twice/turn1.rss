@@ -1,0 +1,21 @@
+fn count_matching(values: read List<Int>, predicate: noescape Fn(Int) -> Bool) -> Int {
+    var count = 0
+    for value in values {
+        if predicate(value) {
+            count = count + 1
+        }
+    }
+    return count
+}
+
+fn summarise(values: read List<Int>, limit: Int) -> fresh String {
+    let high = count_matching(values, |value| value > limit)
+    let low = count_matching(values, |value| value <= limit)
+    return "\(high)/\(low)"
+}
+
+fn main() -> Unit {
+    let values = [1, 5, 3, 8, 2, 9, 4]
+    let summary = summarise(values, 5)
+    print(summary)
+}

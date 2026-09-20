@@ -1,0 +1,23 @@
+struct Alert {
+    level: String,
+    message: String
+}
+
+fn select_alerts(alerts: read List<Alert>, keep: noescape Fn(Alert) -> Bool) -> fresh List<Alert> {
+    alerts.filter(keep)
+}
+
+fn urgent_only(alerts: read List<Alert>) -> fresh List<Alert> {
+    select_alerts(alerts, fn(alert: Alert) -> Bool {
+        alert.level == "critical"
+    })
+}
+
+fn main() -> Unit {
+    let alerts: fresh List<Alert> = [
+        Alert { level: "warning", message: "Low disk space" },
+        Alert { level: "critical", message: "System failure" }
+    ];
+    let urgent = urgent_only(alerts);
+    write urgent.len();
+}

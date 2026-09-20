@@ -1,0 +1,42 @@
+protocol Formatter {
+    fn format(self: read Self) -> fresh String
+}
+
+struct PlainFormatter {
+    prefix: String
+}
+
+struct JsonFormatter {
+    field: String
+}
+
+fn plain_format(self: read PlainFormatter) -> fresh String {
+    return String.concat(left: self.prefix, right: ": plain")
+}
+
+fn json_format(self: read JsonFormatter) -> fresh String {
+    let quoted: String = Json.string(value: self.field)
+    let head: String = String.concat(left: "{\"field\": ", right: quoted)
+    return String.concat(left: head, right: "}")
+}
+
+impl Formatter for PlainFormatter {
+    fn format = plain_format
+}
+
+impl Formatter for JsonFormatter {
+    fn format = json_format
+}
+
+fn render(formatter: read Dyn<Formatter>) -> fresh String {
+    return formatter.format()
+}
+
+fn main() -> Unit {
+    local plain = PlainFormatter(prefix: "hello")
+    local json = JsonFormatter(field: "name")
+    let plain_dyn: Dyn<Formatter> = Dyn<Formatter>(take plain)
+    let json_dyn: Dyn<Formatter> = Dyn<Formatter>(take json)
+    Output.write(message: render(formatter: plain_dyn))
+    Output.write(message: render(formatter: json_dyn))
+}

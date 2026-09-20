@@ -1,0 +1,48 @@
+protocol Sink {
+    fn deliver(self: read Self, line: read String) -> fresh String
+}
+
+struct ConsoleSink {
+    prefix: String
+}
+
+struct JsonSink {
+    channel: String
+}
+
+fn console_deliver(self: read ConsoleSink, line: read String) -> fresh String {
+    return self.prefix + ": " + line
+}
+
+fn json_deliver(self: read JsonSink, line: read String) -> fresh String {
+    return Json.field(self.channel, line)
+}
+
+impl Sink for ConsoleSink {
+    fn deliver(self: read ConsoleSink, line: read String) -> fresh String {
+        return console_deliver(self, line)
+    }
+}
+
+impl Sink for JsonSink {
+    fn deliver(self: read JsonSink, line: read String) -> fresh String {
+        return json_deliver(self, line)
+    }
+}
+
+fn sink_for(kind: read String) -> fresh Dyn<Sink> {
+    if kind == "json" {
+        return Dyn<Sink>(JsonSink { channel: "events" })
+    }
+    return Dyn<Sink>(ConsoleSink { prefix: "log" })
+}
+
+fn deliver_line(kind: read String, line: read String) -> fresh String {
+    let sink: Dyn<Sink> = sink_for(kind)
+    return sink.deliver(line)
+}
+
+fn main() -> Unit {
+    print(deliver_line("console", "hello"))
+    print(deliver_line("json", "hello"))
+}

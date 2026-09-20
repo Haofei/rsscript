@@ -1,0 +1,27 @@
+fn count_matching(values: read List<Int>, predicate: noescape Fn(Int) -> Bool) -> Int {
+    let mut count = 0
+    let length = List.len(list: values)
+    let mut i = 0
+    while i < length {
+        let value = List.get(list: values, index: i)
+        if predicate(value) {
+            count = count + 1
+        }
+        i = i + 1
+    }
+    return count
+}
+
+fn summarise(values: read List<Int>, limit: Int) -> fresh String {
+    local above = count_matching(values: values, predicate: fn(x: Int) -> Bool { return x > limit })
+    local below = count_matching(values: values, predicate: fn(x: Int) -> Bool { return x <= limit })
+    local above_str = Int.to_string(value: above)
+    local below_str = Int.to_string(value: below)
+    return String.concat(left: above_str, right: String.concat(left: "/", right: below_str))
+}
+
+fn main() -> Unit {
+    local values = [1, 2, 3, 4, 5]
+    local summary = summarise(values: values, limit: 3)
+    Output.write(message: summary)
+}

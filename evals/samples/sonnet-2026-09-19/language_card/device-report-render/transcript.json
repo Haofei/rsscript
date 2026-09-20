@@ -1,0 +1,358 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 14218,
+    "check_ok": false,
+    "codes": [
+      "RS0202",
+      "RS0203",
+      "RS0204",
+      "RS0301",
+      "RS0501",
+      "RS1001"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `value` for `List.push` uses `take` but the parameter is `read`.",
+        "line": 13,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Remove `take` from `value`: a `read` parameter takes the bare value.",
+            "applicability": "machine-applicable",
+            "replacement": "",
+            "replace_line": 13,
+            "replace_column": 39,
+            "replace_length": 5
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `value` for `List.push` uses `take` but the parameter is `read`.",
+        "line": 16,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Remove `take` from `value`: a `read` parameter takes the bare value.",
+            "applicability": "machine-applicable",
+            "replacement": "",
+            "replace_line": 16,
+            "replace_column": 43,
+            "replace_length": 5
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `value` for `List.push` uses `take` but the parameter is `read`.",
+        "line": 19,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Remove `take` from `value`: a `read` parameter takes the bare value.",
+            "applicability": "machine-applicable",
+            "replacement": "",
+            "replace_line": 19,
+            "replace_column": 39,
+            "replace_length": 5
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `List.join` has no argument named `values`.",
+        "line": 20,
+        "label": "unknown argument",
+        "causes": [
+          "`List.join` does not declare a parameter named `values`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `list`? Declared: list, separator.",
+            "applicability": "machine-applicable",
+            "replacement": "list",
+            "replace_line": 20,
+            "replace_column": 22,
+            "replace_length": 6
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `List.join` is missing required argument `list`.",
+        "line": 20,
+        "label": "missing argument",
+        "causes": [
+          "`List.join` requires a named argument `list`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `list: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `value` for `List.push` uses `take` but the parameter is `read`.",
+        "line": 27,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Remove `take` from `value`: a `read` parameter takes the bare value.",
+            "applicability": "machine-applicable",
+            "replacement": "",
+            "replace_line": 27,
+            "replace_column": 42,
+            "replace_length": 5
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `value` for `List.push` uses `take` but the parameter is `read`.",
+        "line": 30,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Remove `take` from `value`: a `read` parameter takes the bare value.",
+            "applicability": "machine-applicable",
+            "replacement": "",
+            "replace_line": 30,
+            "replace_column": 42,
+            "replace_length": 5
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Output.write` has no argument named `value`.",
+        "line": 32,
+        "label": "unknown argument",
+        "causes": [
+          "`Output.write` does not declare a parameter named `value`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `message`? Declared: message.",
+            "applicability": "machine-applicable",
+            "replacement": "message",
+            "replace_line": 32,
+            "replace_column": 18,
+            "replace_length": 5
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Output.write` is missing required argument `message`.",
+        "line": 32,
+        "label": "missing argument",
+        "causes": [
+          "`Output.write` requires a named argument `message`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `message: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0301",
+        "severity": "error",
+        "summary": "managed value cannot be converted to local binding `title_line`.",
+        "line": 12,
+        "label": "managed value used as local",
+        "causes": [
+          "`title` is already managed; RSScript has no managed -> local conversion."
+        ],
+        "fixes": [
+          {
+            "title": "Create the value as `local` at its creation point.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0501",
+        "severity": "error",
+        "summary": "retaining API `List.push` cannot retain local value `title_line`.",
+        "line": 13,
+        "label": "local value retained",
+        "causes": [
+          "`List.push` declares `retains(value)`."
+        ],
+        "fixes": [
+          {
+            "title": "Pass `value` through `manage title_line` before retaining it.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0501",
+        "severity": "error",
+        "summary": "retaining API `List.push` cannot retain local value `line`.",
+        "line": 16,
+        "label": "local value retained",
+        "causes": [
+          "`List.push` declares `retains(value)`."
+        ],
+        "fixes": [
+          {
+            "title": "Pass `value` through `manage line` before retaining it.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0501",
+        "severity": "error",
+        "summary": "retaining API `List.push` cannot retain local value `count_line`.",
+        "line": 19,
+        "label": "local value retained",
+        "causes": [
+          "`List.push` declares `retains(value)`."
+        ],
+        "fixes": [
+          {
+            "title": "Pass `value` through `manage count_line` before retaining it.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0501",
+        "severity": "error",
+        "summary": "retaining API `List.push` cannot retain local value `first`.",
+        "line": 27,
+        "label": "local value retained",
+        "causes": [
+          "`List.push` declares `retains(value)`."
+        ],
+        "fixes": [
+          {
+            "title": "Pass `value` through `manage first` before retaining it.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0501",
+        "severity": "error",
+        "summary": "retaining API `List.push` cannot retain local value `second`.",
+        "line": 30,
+        "label": "local value retained",
+        "causes": [
+          "`List.push` declares `retains(value)`."
+        ],
+        "fixes": [
+          {
+            "title": "Pass `value` through `manage second` before retaining it.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1001",
+        "severity": "error",
+        "summary": "arithmetic operators are only built in for numeric values.",
+        "line": 18,
+        "label": "operator on non-numeric value",
+        "causes": [
+          "RSScript does not support user-defined operator overloads."
+        ],
+        "fixes": [
+          {
+            "title": "Use a named function such as `Type.add(left: read a, right: read b)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS1001",
+        "severity": "error",
+        "summary": "arithmetic operators are only built in for numeric values.",
+        "line": 7,
+        "label": "operator on non-numeric value",
+        "causes": [
+          "RSScript does not support user-defined operator overloads."
+        ],
+        "fixes": [
+          {
+            "title": "Use a named function such as `Type.add(left: read a, right: read b)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

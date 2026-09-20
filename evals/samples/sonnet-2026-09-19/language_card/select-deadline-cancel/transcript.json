@@ -1,0 +1,392 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 24159,
+    "check_ok": false,
+    "codes": [
+      "RS0030",
+      "RS0202",
+      "RS0206",
+      "RS0207"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Channel.send` does not resolve.",
+        "line": 2,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Channel.sender`, `Sender.send`?",
+            "applicability": "machine-applicable",
+            "replacement": "Channel.sender",
+            "replace_line": 2,
+            "replace_column": 11,
+            "replace_length": 12
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Channel.send` does not resolve.",
+        "line": 6,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Channel.sender`, `Sender.send`?",
+            "applicability": "machine-applicable",
+            "replacement": "Channel.sender",
+            "replace_line": 6,
+            "replace_column": 11,
+            "replace_length": 12
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0207",
+        "severity": "error",
+        "summary": "binding `work_rx` has initializer type `Result<fresh Receiver<Int>, ChannelError>`, expected `Receiver<Int>`.",
+        "line": 13,
+        "label": "binding type mismatch",
+        "causes": [
+          "Explicit `let` and `local` type annotations are source-level contracts and must match the initializer before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Initialize `work_rx` with a `Receiver<Int>` value, or change the binding annotation.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `channel` for `Channel.receiver` must use `mut`.",
+        "line": 13,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Write `channel: mut ...` at the call site.",
+            "applicability": "machine-applicable",
+            "replacement": "mut ",
+            "replace_line": 13,
+            "replace_column": 60,
+            "replace_length": 0
+          }
+        ]
+      },
+      {
+        "code": "RS0207",
+        "severity": "error",
+        "summary": "binding `deadline_rx` has initializer type `Result<fresh Receiver<Int>, ChannelError>`, expected `Receiver<Int>`.",
+        "line": 15,
+        "label": "binding type mismatch",
+        "causes": [
+          "Explicit `let` and `local` type annotations are source-level contracts and must match the initializer before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Initialize `deadline_rx` with a `Receiver<Int>` value, or change the binding annotation.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `channel` for `Channel.receiver` must use `mut`.",
+        "line": 15,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Write `channel: mut ...` at the call site.",
+            "applicability": "machine-applicable",
+            "replacement": "mut ",
+            "replace_line": 15,
+            "replace_column": 64,
+            "replace_length": 0
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Channel.recv` does not resolve.",
+        "line": 23,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Receiver.recv`?",
+            "applicability": "machine-applicable",
+            "replacement": "Receiver.recv",
+            "replace_line": 23,
+            "replace_column": 32,
+            "replace_length": 12
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `print` does not resolve.",
+        "line": 24,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 24,
+            "replace_column": 17,
+            "replace_length": 5
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Channel.recv` does not resolve.",
+        "line": 26,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Receiver.recv`?",
+            "applicability": "machine-applicable",
+            "replacement": "Receiver.recv",
+            "replace_line": 26,
+            "replace_column": 36,
+            "replace_length": 12
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `print` does not resolve.",
+        "line": 27,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 27,
+            "replace_column": 17,
+            "replace_length": 5
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `source` for `CancellationSource.cancel` must use `mut`.",
+        "line": 28,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Write `source: mut ...` at the call site.",
+            "applicability": "machine-applicable",
+            "replacement": "mut ",
+            "replace_line": 28,
+            "replace_column": 51,
+            "replace_length": 0
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `print` does not resolve.",
+        "line": 36,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 36,
+            "replace_column": 5,
+            "replace_length": 5
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0030",
+        "severity": "error",
+        "summary": "`await` must consume an async call.",
+        "line": 2,
+        "label": "await non-async expression",
+        "causes": [
+          "RSScript does not expose Future or Task values in source; the executable async MVP only awaits direct async calls."
+        ],
+        "fixes": [
+          {
+            "title": "Await an `async fn` call directly.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0030",
+        "severity": "error",
+        "summary": "`await` must consume an async call.",
+        "line": 6,
+        "label": "await non-async expression",
+        "causes": [
+          "RSScript does not expose Future or Task values in source; the executable async MVP only awaits direct async calls."
+        ],
+        "fixes": [
+          {
+            "title": "Await an `async fn` call directly.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0030",
+        "severity": "error",
+        "summary": "`await` must consume an async call.",
+        "line": 23,
+        "label": "await non-async expression",
+        "causes": [
+          "RSScript does not expose Future or Task values in source; the executable async MVP only awaits direct async calls."
+        ],
+        "fixes": [
+          {
+            "title": "Await an `async fn` call directly.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0030",
+        "severity": "error",
+        "summary": "`await` must consume an async call.",
+        "line": 26,
+        "label": "await non-async expression",
+        "causes": [
+          "RSScript does not expose Future or Task values in source; the executable async MVP only awaits direct async calls."
+        ],
+        "fixes": [
+          {
+            "title": "Await an `async fn` call directly.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

@@ -1,0 +1,56 @@
+struct ServiceConfig(name: String, port: Int, enabled: Bool)
+
+fn load_config(text: String) -> Result<fresh ServiceConfig, String> {
+    let parse_result = Json.parse(input: text);
+    
+    match parse_result {
+        Ok(json_obj) => {
+            let name_result = Json.get_string(obj: json_obj, key: "name");
+            match name_result {
+                Ok(name) => {
+                    let port_result = Json.get_int(obj: json_obj, key: "port");
+                    match port_result {
+                        Ok(port) => {
+                            if port < 1 || port > 65535 {
+                                return Err(error: "port must be between 1 and 65535")
+                            }
+                            let enabled_result = Json.get_bool(obj: json_obj, key: "enabled");
+                            match enabled_result {
+                                Ok(enabled) => {
+                                    let config = ServiceConfig(name: name, port: port, enabled: enabled);
+                                    return Ok(value: config)
+                                }
+                                Err(_) => {
+                                    return Err(error: "failed to read enabled field")
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            return Err(error: "failed to read port field")
+                        }
+                    }
+                }
+                Err(_) => {
+                    return Err(error: "failed to read name field")
+                }
+            }
+        }
+        Err(_) => {
+            return Err(error: "failed to parse JSON")
+        }
+    }
+}
+
+fn main() -> Unit {
+    let config_json = "{\"name\": \"api-server\", \"port\": 8080, \"enabled\": true}";
+    let result = load_config(text: config_json);
+    
+    match result {
+        Ok(config) => {
+            Output.write(line: config.name)
+        }
+        Err(error_msg) => {
+            Output.write(line: error_msg)
+        }
+    }
+}

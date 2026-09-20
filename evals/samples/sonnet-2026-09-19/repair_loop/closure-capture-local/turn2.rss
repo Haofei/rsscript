@@ -1,0 +1,13 @@
+fn scaled_total(values: read List<Int>, factor: Int, offset: Int) -> Int {
+    local scale = |value: Int| value * factor + offset
+    let mut total: Int = 0
+    for value in values {
+        total = total + scale(value)
+    }
+    return total
+}
+
+fn main() -> Unit {
+    let total: Int = scaled_total(values: [1, 2, 3, 4], factor: 3, offset: 1)
+    Output.write(total)
+}

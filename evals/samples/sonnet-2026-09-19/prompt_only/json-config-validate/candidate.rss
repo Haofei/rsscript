@@ -1,0 +1,45 @@
+struct ServiceConfig {
+    name: String,
+    port: Int,
+    enabled: Bool,
+}
+
+fn describe_json_error(err: JsonError) -> String {
+    match err {
+        JsonError::Syntax(msg) => "invalid JSON: " + msg,
+        JsonError::MissingField(field) => "missing field: " + field,
+        JsonError::TypeMismatch(field) => "wrong type for field: " + field,
+        JsonError::OutOfRange(field) => "value out of range for field: " + field,
+    }
+}
+
+fn load_config(text: String) -> Result<fresh ServiceConfig, String> {
+    let doc = match Json.parse(text) {
+        Ok(value) => value,
+        Err(err) => return Err(describe_json_error(err)),
+    };
+
+    let name = match Json.get_string(doc, "name") {
+        Ok(value) => value,
+        Err(err) => return Err(describe_json_error(err)),
+    };
+
+    let port = match Json.get_int(doc, "port") {
+        Ok(value) => value,
+        Err(err) => return Err(describe_json_error(err)),
+    };
+
+    if port < 1 || port > 65535 {
+        return Err("port must be between 1 and 65535, got " + port.to_string());
+    }
+
+    return Ok(fresh ServiceConfig { name: name, port: port, enabled: true });
+}
+
+fn main() -> Unit {
+    let text = "{\"name\": \"api-gateway\", \"port\": 8080}";
+    match load_config(text) {
+        Ok(config) => Output.write(config.name),
+        Err(message) => Output.write(message),
+    }
+}

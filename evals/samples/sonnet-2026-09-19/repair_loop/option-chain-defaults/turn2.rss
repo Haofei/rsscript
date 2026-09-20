@@ -1,0 +1,48 @@
+struct Window {
+    start: Int
+    width: Int
+}
+
+fn field_of(line: read String, delimiter: read String) -> Option<String> {
+    let parts: List<String> = String.split(value: line, delimiter: delimiter)
+    if List.len(list: parts) > 1 {
+        return Some(List.get(list: parts, index: 1))
+    }
+    return None
+}
+
+fn parse_int(text: read String) -> Option<Int> {
+    return String.parse_int(value: text)
+}
+
+fn parsed_field(line: read String, delimiter: read String) -> Option<Int> {
+    return Option.and_then(value: field_of(line: line, delimiter: delimiter), mapper: parse_int)
+}
+
+fn window_from(line: read String) -> fresh Window {
+    let mut start: Int = 0
+    let mut width: Int = 60
+    match parsed_field(line: line, delimiter: "start=") {
+        Some(value) => {
+            start = value
+        }
+        None => {
+        }
+    }
+    match parsed_field(line: line, delimiter: "width=") {
+        Some(value) => {
+            if value > 0 {
+                width = value
+            }
+        }
+        None => {
+        }
+    }
+    return Window(start: start, width: width)
+}
+
+fn main() -> Unit {
+    let window: Window = window_from(line: "width=45")
+    Output.write(text: Int.to_string(value: window.start))
+    Output.write(text: Int.to_string(value: window.width))
+}

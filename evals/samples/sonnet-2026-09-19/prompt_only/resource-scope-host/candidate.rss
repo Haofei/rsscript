@@ -1,0 +1,14 @@
+fn copy_setting(path: read String, key: read String, target: read String) -> Result<Unit, String> {
+    with store = ConfigStore.open(path)? {
+        let value = ConfigStore.read_key(store, key)?;
+        ConfigStore.write_key(store, target, value)?;
+    }
+    return Ok(());
+}
+
+fn main() -> Unit {
+    match copy_setting("settings.db", "source_key", "target_key") {
+        Ok(_) => println("copied setting successfully"),
+        Err(e) => println("error: " + e),
+    }
+}

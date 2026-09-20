@@ -1,0 +1,74 @@
+struct Settings {
+  region: String,
+  retries: Int
+}
+
+fn lookup(keys: read List<String>, values: read List<String>, key: read String) -> Option<String> {
+  var i = 0
+  loop {
+    match i < keys.length() {
+      true => {
+        match keys.get(i) {
+          Some(k) => {
+            match k == key {
+              true => {
+                return values.get(i)
+              },
+              false => {
+                i = i + 1
+              }
+            }
+          },
+          None => {
+            return None
+          }
+        }
+      },
+      false => {
+        return None
+      }
+    }
+  }
+}
+
+fn settings_from(keys: read List<String>, values: read List<String>) -> fresh Settings {
+  var region_str = "us-east"
+  match lookup(keys, values, "region") {
+    Some(v) => {
+      region_str = v
+    },
+    None => {}
+  }
+  
+  var retries_int = 3
+  match lookup(keys, values, "retries") {
+    Some(v) => {
+      match v.parse_int() {
+        Some(n) => {
+          retries_int = n
+        },
+        None => {}
+      }
+    },
+    None => {}
+  }
+  
+  fresh Settings {
+    region: region_str,
+    retries: retries_int
+  }
+}
+
+fn main() -> Unit {
+  var keys = fresh List<String>()
+  keys.push("region")
+  keys.push("retries")
+  
+  var values = fresh List<String>()
+  values.push("us-west")
+  values.push("5")
+  
+  var settings = settings_from(keys, values)
+  write(settings.region)
+  write(settings.retries)
+}

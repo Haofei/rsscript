@@ -1,0 +1,37 @@
+async fn producer(sender: mut Sender<Int>, token: read CancellationToken) -> Unit {
+    local i = 0
+    while i < 4 {
+        if Task.is_cancelled(token: token) {
+            return
+        }
+        local value = i
+        await Sender.send(sender: mut sender, value: take value)
+        local i = i + 1
+    }
+}
+
+async fn consumer(receiver: mut Receiver<Int>) -> Unit {
+    local count = 0
+    while count < 4 {
+        let maybe_value = await Receiver.receive(receiver: mut receiver)
+        match maybe_value {
+            Some(v) => {
+                local count = count + 1
+            }
+            None => {
+                return
+            }
+        }
+    }
+}
+
+fn main() -> Unit {
+    let (sender, receiver) = Channel.bounded<Int>(capacity: 2)
+    task_group {
+        let token = Task.cancellation_token()
+        let producer_handle = spawn producer(sender: mut sender, token: token)
+        let consumer_handle = spawn consumer(receiver: mut receiver)
+        await producer_handle
+        await consumer_handle
+    }
+}

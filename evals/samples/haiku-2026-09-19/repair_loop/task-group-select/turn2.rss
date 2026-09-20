@@ -1,0 +1,30 @@
+fn main() -> Unit {
+    let channel1 = Channel.bounded(capacity: 1)
+    let channel2 = Channel.bounded(capacity: 1)
+    
+    let sender1 = Channel.sender(channel: channel1)
+    let receiver1 = Channel.receiver(channel: mut channel1)
+    
+    let sender2 = Channel.sender(channel: channel2)
+    let receiver2 = Channel.receiver(channel: mut channel2)
+    
+    let cancellation = CancellationSource.new()
+    
+    task_group {
+        async let task1 = Sender.send(sender: sender1, value: 1)
+        async let task2 = Sender.send(sender: sender2, value: 2)
+        
+        select {
+            Ok(value) => {
+                CancellationSource.cancel(source: cancellation)
+            } await Receiver.recv(receiver: mut receiver1)
+            
+            Ok(value) => {
+                CancellationSource.cancel(source: cancellation)
+            } await Receiver.recv(receiver: mut receiver2)
+        }
+        
+        await task1
+        await task2
+    }
+}

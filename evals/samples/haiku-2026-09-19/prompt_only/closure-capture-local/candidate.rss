@@ -1,0 +1,17 @@
+fn scaled_total(values: read List<Int>, factor: Int, offset: Int) -> Int {
+    local scale = fn(x: Int) -> Int {
+        x * factor + offset
+    };
+    
+    var total = 0;
+    for value in values {
+        total = total + scale(value);
+    }
+    total
+}
+
+fn main() -> Unit {
+    var numbers = [1, 2, 3];
+    var result = scaled_total(numbers, 2, 10);
+    write(result);
+}

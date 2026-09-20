@@ -1,0 +1,37 @@
+async fn feed_left(sender: take Sender<Int>) -> Unit {
+    await Sender.send(sender: read sender, value: 1)
+}
+
+async fn feed_right(sender: take Sender<Int>) -> Unit {
+    await Sender.send(sender: read sender, value: 2)
+}
+
+async fn main() -> Unit {
+    local left_channel: Channel<Int> = Channel.bounded(capacity: 1)
+    local right_channel: Channel<Int> = Channel.bounded(capacity: 1)
+    local left_tx: Sender<Int> = Channel.sender(channel: read left_channel)
+    local left_rx: Receiver<Int> = Channel.receiver(channel: read left_channel)
+    local right_tx: Sender<Int> = Channel.sender(channel: read right_channel)
+    local right_rx: Receiver<Int> = Channel.receiver(channel: read right_channel)
+    let source: CancellationSource = CancellationSource.new()
+    let mut winner: Int = 0
+
+    task_group {
+        async let left_feed = feed_left(sender: take left_tx)
+        async let right_feed = feed_right(sender: take right_tx)
+
+        select {
+            case left_value = await Receiver.recv(receiver: read left_rx) => {
+                winner = 1
+                CancellationSource.cancel(source: read source)
+            }
+            case right_value = await Receiver.recv(receiver: read right_rx) => {
+                winner = 2
+                CancellationSource.cancel(source: read source)
+            }
+        }
+
+        await left_feed
+        await right_feed
+    }
+}

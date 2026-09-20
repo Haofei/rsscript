@@ -1,0 +1,68 @@
+struct Settings {
+    region: String,
+    retries: Int,
+}
+
+fn lookup(keys: read List<String>, values: read List<String>, key: read String) -> Option<String> {
+    let mut index: Int = 0
+    while index < List.len(list: keys) {
+        match List.get(list: keys, index: index) {
+            Some(candidate) => {
+                if candidate == key {
+                    return List.get(list: values, index: index)
+                }
+            }
+            None => {}
+        }
+        index = index + 1
+    }
+    return None
+}
+
+fn region_from(keys: read List<String>, values: read List<String>) -> String {
+    match lookup(keys: keys, values: values, key: "region") {
+        Some(value) => {
+            return value
+        }
+        None => {
+            return "us-east"
+        }
+    }
+}
+
+fn retries_from(keys: read List<String>, values: read List<String>) -> Int {
+    match lookup(keys: keys, values: values, key: "retries") {
+        Some(text) => {
+            match String.parse_int(value: text) {
+                Some(count) => {
+                    return count
+                }
+                None => {
+                    return 3
+                }
+            }
+        }
+        None => {
+            return 3
+        }
+    }
+}
+
+fn settings_from(keys: read List<String>, values: read List<String>) -> fresh Settings {
+    local region = region_from(keys: keys, values: values)
+    let retries = retries_from(keys: keys, values: values)
+    return Settings(region: take region, retries: retries)
+}
+
+fn main() -> Unit {
+    let mut keys: List<String> = List.new()
+    let mut values: List<String> = List.new()
+    List.push(list: mut keys, item: "region")
+    List.push(list: mut values, item: "eu-west")
+    List.push(list: mut keys, item: "retries")
+    List.push(list: mut values, item: "5")
+
+    let settings = settings_from(keys: keys, values: values)
+    Console.write_line(value: settings.region)
+    Console.write_line(value: Int.to_string(value: settings.retries))
+}

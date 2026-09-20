@@ -1,0 +1,111 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 10152,
+    "check_ok": false,
+    "codes": [
+      "RS0202",
+      "RS0206",
+      "RS0601"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `read samples.copy` does not resolve.",
+        "line": 2,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `String.copy`, `List.pop`, `Math.cos`?",
+            "applicability": "maybe-incorrect",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "receiver `parts` for `push` uses `read` but the method requires `mut`.",
+        "line": 18,
+        "label": "receiver effect mismatch",
+        "causes": [
+          "Receiver-call shorthand is only valid when the visible receiver effect exactly matches the resolved method's `self` effect."
+        ],
+        "fixes": [
+          {
+            "title": "Write `mut parts.push(...)`.",
+            "applicability": "machine-applicable",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `println` does not resolve.",
+        "line": 21,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 21,
+            "replace_column": 5,
+            "replace_length": 7
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0601",
+        "severity": "error",
+        "summary": "fresh function `clamp_samples` returns non-fresh value `out`.",
+        "line": 10,
+        "label": "non-fresh value returned",
+        "causes": [
+          "A `fresh` return must be newly created or a clean local binding created inside the function."
+        ],
+        "fixes": [
+          {
+            "title": "Return a struct constructor, fresh call, or clean local binding created inside the function.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

@@ -1,0 +1,54 @@
+async fn publish(sender: Sender<Int>, samples: read List<Int>, token: CancellationToken) -> Result<Int, ChannelError> {
+    let mut count = 0
+    for sample in samples {
+        if CancellationToken.is_cancelled(token: token) {
+            return Ok(count)
+        }
+        await sender.send(value: sample)
+        count = count + 1
+    }
+    return Ok(count)
+}
+
+async fn collect(receiver: Receiver<Int>, limit: Int, token: CancellationToken) -> Result<Int, ChannelError> {
+    let mut sum = 0
+    let mut count = 0
+    
+    while count < limit {
+        if CancellationToken.is_cancelled(token: token) {
+            return Ok(sum)
+        }
+        let recv_result = await receiver.recv()
+        match recv_result {
+            Ok(v) => {
+                sum = sum + v
+                count = count + 1
+            }
+            Err(error) => {
+                return Err(error)
+            }
+        }
+    }
+    
+    return Ok(sum)
+}
+
+fn main() -> Unit {
+    let channel = Channel.bounded<Int>(capacity: 2)
+    let mut sender = Channel.sender(channel: channel)
+    let mut receiver = Channel.receiver(channel: mut channel)
+    
+    let mut cancellation_source = CancellationSource.new()
+    let token = CancellationSource.token(source: read cancellation_source)
+    
+    let samples = [1, 2, 3, 4, 5]
+    
+    task_group {
+        async let collect_result = collect(receiver: receiver, limit: 3, token: token)
+        async let publish_result = publish(sender: sender, samples: samples, token: token)
+        
+        await collect_result
+        CancellationSource.cancel(source: mut cancellation_source)
+        await publish_result
+    }
+}

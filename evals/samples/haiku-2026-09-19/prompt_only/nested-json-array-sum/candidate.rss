@@ -1,0 +1,27 @@
+fn sum_quantities(text: read String) -> Result<Int, JsonError> {
+  let json = Json::parse(text)?;
+  let obj = json.as_object()?;
+  let items = obj.get("items")?.as_array()?;
+  
+  let mut total = 0;
+  for item in items {
+    let quantity = item.as_object()?.get("quantity")?.as_integer()?;
+    total = total + quantity;
+  }
+  
+  Ok(total)
+}
+
+fn main() -> Unit {
+  let document = r#"{
+    "items": [
+      {"quantity": 5},
+      {"quantity": 10}
+    ]
+  }"#;
+  
+  match sum_quantities(document) {
+    Ok(total) => print("Total: " + total.to_string())
+    Err(error) => print("Error: " + error.to_string())
+  }
+}

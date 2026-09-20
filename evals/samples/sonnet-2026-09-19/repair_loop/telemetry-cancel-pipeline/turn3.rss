@@ -1,0 +1,62 @@
+async fn publish(sender: Sender<Int>, samples: read List<Int>, token: CancellationToken) -> Result<Int, ChannelError> {
+    let mut sent: Int = 0
+    for sample in samples {
+        if CancellationToken.is_cancelled(token: token) {
+            return Ok(sent)
+        }
+        local value = sample
+        let result = await Sender.send_cancellable(sender: sender, value: take value, token: token)
+        match result {
+            Ok(_) => { sent = sent + 1 }
+            Err(error) => { return Err(error) }
+        }
+    }
+    return Ok(sent)
+}
+
+async fn collect(receiver: Receiver<Int>, limit: Int, token: CancellationToken) -> Result<Int, ChannelError> {
+    let mut total: Int = 0
+    let mut seen: Int = 0
+    while seen < limit {
+        if CancellationToken.is_cancelled(token: token) {
+            return Ok(total)
+        }
+        let result = await Receiver.recv(receiver: receiver)
+        match result {
+            Ok(Some(value)) => {
+                total = total + value
+                seen = seen + 1
+            }
+            Ok(None) => { return Ok(total) }
+            Err(error) => { return Err(error) }
+        }
+    }
+    return Ok(total)
+}
+
+async fn main() -> Unit {
+    local channel = Channel.bounded(capacity: 2)
+    local sender = Channel.sender(channel: channel)
+    local receiver = Channel.receiver(channel: channel)
+    let mut source = CancellationSource.new()
+    let token = CancellationSource.token(source: source)
+    let samples: List<Int> = [10, 20, 30, 40, 50]
+
+    task_group {
+        async let producer = publish(sender: sender, samples: samples, token: token)
+        async let consumer = collect(receiver: receiver, limit: 5, token: token)
+
+        let collected = await consumer
+        CancellationSource.cancel(source: mut source)
+        let published = await producer
+
+        match published {
+            Ok(_) => { }
+            Err(_) => { }
+        }
+        match collected {
+            Ok(_) => { }
+            Err(_) => { }
+        }
+    }
+}

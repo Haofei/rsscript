@@ -1,0 +1,35 @@
+fn total_readings(text: read String) -> Result<Int, JsonError> {
+    local parsed = Json.parse(text: text)?;
+    local readings = Json.field(json: parsed, name: "readings")?;
+    
+    let mut total: Int = 0;
+    let mut index: Int = 0;
+    
+    loop {
+        match Json.get(json: readings, index: index) {
+            Ok(element) => {
+                local value_json = Json.field(json: element, name: "value")?;
+                local value = Json.int(json: value_json)?;
+                total = total + value;
+                index = index + 1;
+            }
+            Err(_) => {
+                break;
+            }
+        }
+    }
+    
+    return Ok(total);
+}
+
+fn main() -> Unit {
+    local json_text = "{\"readings\": [{\"value\": 10}, {\"value\": 20}]}";
+    match total_readings(text: json_text) {
+        Ok(total) => {
+            IO.print(text: String.from_int(value: total));
+        }
+        Err(error) => {
+            IO.print(text: JsonError.description(error: error));
+        }
+    }
+}

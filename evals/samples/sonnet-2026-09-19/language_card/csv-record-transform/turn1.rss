@@ -1,0 +1,73 @@
+struct Record {
+    id: String
+    amount: Int
+}
+
+fn parse_record(line: read String) -> Result<fresh Record, String> {
+    let parts: List<String> = String.split(value: line, delimiter: ",")
+    let mut id_text: String = ""
+    let mut amount_text: String = ""
+    let mut count: Int = 0
+    for part in parts {
+        let trimmed: String = String.trim(value: part)
+        if count == 0 {
+            id_text = trimmed
+        } else {
+            amount_text = trimmed
+        }
+        count = count + 1
+    }
+    if count != 2 {
+        return Err("expected exactly two fields")
+    }
+    match Int.parse(value: amount_text) {
+        Ok(amount) => {
+            local id = id_text
+            return Ok(Record(id: take id, amount: amount))
+        }
+        Err(message) => {
+            return Err("invalid amount")
+        }
+    }
+}
+
+fn parse_all(text: read String) -> Result<fresh List<Record>, String> {
+    let lines: List<String> = String.split(value: text, delimiter: "\n")
+    local records: List<Record> = List.new()
+    for line in lines {
+        let trimmed: String = String.trim(value: line)
+        if String.len(value: trimmed) == 0 {
+            continue
+        }
+        match parse_record(line: trimmed) {
+            Ok(record) => {
+                List.push(list: mut records, item: take record)
+            }
+            Err(message) => {
+                return Err(message)
+            }
+        }
+    }
+    return Ok(records)
+}
+
+fn total_amount(records: read List<Record>) -> Int {
+    let mut total: Int = 0
+    for record in records {
+        total = total + record.amount
+    }
+    return total
+}
+
+fn main() -> Unit {
+    let text: String = "alpha, 10\nbeta, 32\n"
+    match parse_all(text: text) {
+        Ok(records) => {
+            let total: Int = total_amount(records: records)
+            Console.write_line(value: "total: " + Int.to_string(value: total))
+        }
+        Err(message) => {
+            Console.write_line(value: "error: " + message)
+        }
+    }
+}

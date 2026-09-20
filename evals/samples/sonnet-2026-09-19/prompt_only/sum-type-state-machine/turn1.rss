@@ -1,0 +1,32 @@
+// NOTE: no RSScript compiler or reference was available here; syntax is unverified.
+sum JobState {
+    Queued,
+    Running(worker: String),
+    Done(code: Int),
+    Failed(reason: String),
+}
+
+fn advance(state: read JobState, worker: read String) -> fresh JobState {
+    match state {
+        Queued => Running(worker),
+        Running(w) => Done(0),
+        Done(c) => Done(c),
+        Failed(r) => Failed(r),
+    }
+}
+
+fn describe(state: read JobState) -> fresh String {
+    match state {
+        Queued => "queued",
+        Running(w) => "running on " + w,
+        Done(c) => "done with code " + toString(c),
+        Failed(r) => "failed: " + r,
+    }
+}
+
+fn main() -> Unit {
+    let start = Queued
+    let first = advance(start, "worker-1")
+    let second = advance(first, "worker-1")
+    print(describe(second))
+}

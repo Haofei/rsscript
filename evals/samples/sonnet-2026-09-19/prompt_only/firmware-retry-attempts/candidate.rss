@@ -1,0 +1,37 @@
+fn push_until_accepted(id: read String, amount: Int, budget: Int) -> Result<Int, String> {
+    let mut attempt = 0;
+    let mut last_message = "no attempts made";
+
+    while attempt < budget {
+        attempt = attempt + 1;
+
+        match Sync.push(id, amount) {
+            Ok(value) => {
+                Metrics.record("sync.push.attempt", attempt);
+                return Ok(value);
+            }
+            Err(error) => {
+                let message = SyncError.message(error);
+                if !Sync.is_retryable(error) {
+                    return Err(message);
+                }
+                last_message = message;
+            }
+        }
+    }
+
+    return Err(last_message);
+}
+
+fn main() -> Unit {
+    let outcome = push_until_accepted("order-1", 10, 3);
+
+    match outcome {
+        Ok(_) => {
+            Metrics.record("sync.outcome", 1);
+        }
+        Err(_) => {
+            Metrics.record("sync.outcome", 0);
+        }
+    }
+}

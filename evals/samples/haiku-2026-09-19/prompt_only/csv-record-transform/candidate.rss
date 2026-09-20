@@ -1,0 +1,59 @@
+struct Record {
+  id: String,
+  amount: Int
+}
+
+fn parse_record(line: read String) -> Result<fresh Record, String> {
+  let parts = line.split(",")
+  
+  if parts.len() != 2 {
+    return Err("Expected exactly 2 fields")
+  }
+  
+  let id = parts[0].trim()
+  let amount_str = parts[1].trim()
+  
+  match amount_str.parse_int() {
+    Ok(amount) => Ok(Record { id: id, amount: amount })
+    Err(_) => Err("Amount is not an integer")
+  }
+}
+
+fn parse_all(text: read String) -> Result<fresh List<Record>, String> {
+  let lines = text.split("\n")
+  let mut records = List::new()
+  
+  for line in lines {
+    let trimmed = line.trim()
+    if trimmed.len() > 0 {
+      match parse_record(trimmed) {
+        Ok(record) => records.push(record)
+        Err(e) => return Err(e)
+      }
+    }
+  }
+  
+  Ok(records)
+}
+
+fn total_amount(records: read List<Record>) -> Int {
+  let mut total = 0
+  for record in records {
+    total = total + record.amount
+  }
+  total
+}
+
+fn main() -> Unit {
+  let text = "A,100\nB,200"
+  
+  match parse_all(text) {
+    Ok(records) => {
+      let total = total_amount(records)
+      println("Total: {}", total)
+    }
+    Err(e) => {
+      println("Error: {}", e)
+    }
+  }
+}

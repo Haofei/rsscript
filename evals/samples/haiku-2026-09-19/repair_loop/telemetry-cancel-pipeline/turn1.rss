@@ -1,0 +1,60 @@
+async fn publish(sender: Sender<Int>, samples: read List<Int>, token: CancellationToken) -> Result<Int, ChannelError> {
+    local count = 0
+    for sample in samples {
+        select {
+            case sender.send(value: take sample) => {
+                count = count + 1
+            }
+            case token.cancelled() => {
+                return Ok(count: count)
+            }
+        }
+    }
+    return Ok(count: count)
+}
+
+async fn collect(receiver: Receiver<Int>, limit: Int, token: CancellationToken) -> Result<Int, ChannelError> {
+    local sum = 0
+    local count = 0
+    
+    while count < limit {
+        select {
+            case let result = receiver.recv() => {
+                match result {
+                    Ok(value) => {
+                        sum = sum + value
+                        count = count + 1
+                    }
+                    Err(error) => {
+                        return Err(error: error)
+                    }
+                }
+            }
+            case token.cancelled() => {
+                return Ok(count: sum)
+            }
+        }
+    }
+    
+    return Ok(count: sum)
+}
+
+fn main() -> Unit {
+    let channel = Channel.bounded<Int>(capacity: 2)
+    local sender = Channel.sender(channel: channel)
+    local receiver = Channel.receiver(channel: channel)
+    
+    local cancellation_source = CancellationSource.new()
+    local token = CancellationSource.token(source: cancellation_source)
+    
+    local samples = [1, 2, 3, 4, 5]
+    
+    task_group {
+        async let collect_result = collect(receiver: take receiver, limit: 3, token: token)
+        async let publish_result = publish(sender: take sender, samples: read samples, token: token)
+        
+        await collect_result
+        CancellationSource.cancel(source: mut cancellation_source)
+        await publish_result
+    }
+}

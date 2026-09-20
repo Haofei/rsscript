@@ -1,0 +1,32 @@
+pub fn ship(sku: read String, count: Int) -> Result<Int, String> {
+  let reserve_result = Inventory.reserve(sku, count);
+  
+  match reserve_result {
+    Ok(reserved_count) => {
+      let push_result = Sync.push(sku, reserved_count);
+      
+      match push_result {
+        Ok(accepted_count) => {
+          Metrics.record(sku, accepted_count);
+          Ok(accepted_count)
+        },
+        Err(sync_error) => {
+          Inventory.release(sku, reserved_count);
+          let error_msg = SyncError.message(sync_error);
+          Err(error_msg)
+        }
+      }
+    },
+    Err(error) => {
+      Err(error)
+    }
+  }
+}
+
+pub fn main() -> Unit {
+  let result = ship("test-sku", 10);
+  match result {
+    Ok(_count) => {},
+    Err(_error) => {}
+  }
+}

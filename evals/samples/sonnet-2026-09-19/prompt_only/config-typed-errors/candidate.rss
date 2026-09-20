@@ -1,0 +1,40 @@
+// Note: no RSScript compiler or spec was available here, so this is unverified.
+
+struct PumpConfig {
+    name: String,
+    interval_ms: Int,
+    retries: Int,
+}
+
+sum ConfigError {
+    MissingField(field: String),
+    OutOfRange(field: String, value: Int),
+}
+
+fn ConfigError.describe(error: read ConfigError) -> fresh String {
+    match error {
+        ConfigError.MissingField(field) => "missing field: " + field,
+        ConfigError.OutOfRange(field, value) => "field " + field + " out of range: " + value.to_string(),
+    }
+}
+
+fn validate(config: read PumpConfig) -> Result<Unit, ConfigError> {
+    if config.name == "" {
+        return Err(ConfigError.MissingField("name"))
+    }
+    if config.interval_ms < 100 || config.interval_ms > 60000 {
+        return Err(ConfigError.OutOfRange("interval_ms", config.interval_ms))
+    }
+    if config.retries < 0 || config.retries > 10 {
+        return Err(ConfigError.OutOfRange("retries", config.retries))
+    }
+    Ok(())
+}
+
+fn main() -> Unit {
+    let config = PumpConfig { name: "boiler-feed", interval_ms: 500, retries: 3 }
+    match validate(config) {
+        Ok(_) => print(config.name),
+        Err(error) => print(error.describe()),
+    }
+}

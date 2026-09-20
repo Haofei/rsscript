@@ -1,0 +1,32 @@
+fn clamp_samples(samples: read List<Int>, ceiling: Int) -> fresh List<Int> {
+  let mut result = [];
+  
+  let mut i = 0;
+  while i < samples.length() {
+    result.push(samples[i]);
+    i = i + 1;
+  }
+  
+  let mut j = 0;
+  while j < result.length() {
+    if result[j] > ceiling {
+      result[j] = ceiling;
+    }
+    j = j + 1;
+  }
+  
+  result
+}
+
+fn main() -> Unit {
+  let clamped = clamp_samples([5, 15, 3, 12, 8], 10);
+  let mut strings = [];
+  let mut k = 0;
+  
+  while k < clamped.length() {
+    strings.push(clamped[k].to_string());
+    k = k + 1;
+  }
+  
+  println(strings.join(","));
+}

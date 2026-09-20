@@ -1,0 +1,115 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 60391,
+    "check_ok": false,
+    "codes": [
+      "RS0015",
+      "RS0208",
+      "RS0702"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0015",
+        "severity": "error",
+        "summary": "unsupported RSScript syntax.",
+        "line": 4,
+        "label": "malformed with statement",
+        "causes": [
+          "`with` statements must use `with resource as name { ... }`."
+        ],
+        "fixes": [
+          {
+            "title": "Rewrite this construct using the currently supported RSScript syntax.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `copy_setting` has type `Unit`, expected `Result<Unit, String>`.",
+        "line": 1,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `Result<Unit, String>` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0702",
+        "severity": "error",
+        "summary": "resource-producing expression of type `Result<ConfigStore, String>` must be consumed by `with`.",
+        "line": 2,
+        "label": "resource producer escapes",
+        "causes": [
+          "Resource-producing calls create transient linear values that cannot be stored, returned, retained, managed, or passed as ordinary values.",
+          "A resource slot is host-owned: it is acquired at the external boundary and released by the runtime on every exit from its `with` scope. A `.rss` body therefore cannot mint one \u2014 a resource constructor in a body, including `return Handle(fd: id)`, is a producer with no owning scope. Declare the producer bodyless in an `.rssi` interface."
+        ],
+        "fixes": [
+          {
+            "title": "Use `with producer(...)? as resource { ... }`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 2,
+    "duration_ms": 23076,
+    "check_ok": false,
+    "codes": [
+      "RS0208"
+    ],
+    "source": "turn2.rss",
+    "diagnostics": [
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `copy_setting` has type `Unit`, expected `Result<Unit, String>`.",
+        "line": 1,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `Result<Unit, String>` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 3,
+    "duration_ms": 59957,
+    "check_ok": true,
+    "codes": [],
+    "source": "turn3.rss",
+    "diagnostics": []
+  }
+]

@@ -1,0 +1,56 @@
+async fn send_work(sender: read Sender<Int>) -> Unit {
+    await Sender.send(sender: sender, value: 1)
+}
+
+async fn send_deadline(sender: read Sender<Int>) -> Unit {
+    await Sender.send(sender: sender, value: 2)
+}
+
+async fn race() -> Int {
+    let mut work_channel: Channel<Int> = Channel.bounded(capacity: 1)
+    let mut deadline_channel: Channel<Int> = Channel.bounded(capacity: 1)
+    let work_tx: Sender<Int> = Channel.sender(channel: work_channel)
+    let work_rx: Receiver<Int> = match Channel.receiver(channel: mut work_channel) {
+        Ok(receiver) => { receiver }
+        Err(error) => { return 0 }
+    }
+    let deadline_tx: Sender<Int> = Channel.sender(channel: deadline_channel)
+    let deadline_rx: Receiver<Int> = match Channel.receiver(channel: mut deadline_channel) {
+        Ok(receiver) => { receiver }
+        Err(error) => { return 0 }
+    }
+    let source: CancellationSource = CancellationSource.new()
+    let mut outcome: Int = 0
+
+    task_group {
+        async let work_handle = send_work(sender: work_tx)
+        async let deadline_handle = send_deadline(sender: deadline_tx)
+
+        select {
+            work_rx => {
+                let value: Int = await Channel.receive(receiver: work_rx)
+                outcome = value
+            }
+            deadline_rx => {
+                let marker: Int = await Channel.receive(receiver: deadline_rx)
+                Output.write(text: "deadline fired")
+                CancellationSource.cancel(source: source)
+                outcome = 0 - marker
+            }
+        }
+
+        await work_handle
+        await deadline_handle
+    }
+
+    return outcome
+}
+
+fn main() -> Unit {
+    let outcome: Int = await race()
+    if outcome > 0 {
+        Output.write(text: "work finished first")
+    } else {
+        Output.write(text: "deadline won the race")
+    }
+}

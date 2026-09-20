@@ -1,0 +1,41 @@
+fn total_by_sku(skus: read List<String>, amounts: read List<Int>) -> fresh Map<String, Int> {
+    let mut totals: Map<String, Int> = Map()
+    let mut i: Int = 0
+    while i < List.len(list: skus) {
+        let sku = List.get(list: skus, index: i)
+        let amount = List.get(list: amounts, index: i)
+        let current = Map.get_or_default(map: totals, key: sku, default: 0)
+        let new_total = current + amount
+        Map.insert(map: mut totals, key: sku, value: new_total)
+        i = i + 1
+    }
+    return totals
+}
+
+fn total_for(totals: read Map<String, Int>, sku: read String) -> Int {
+    let value = Map.get(map: totals, key: sku)
+    match value {
+        Some(v) => { return v }
+        None => { return 0 }
+    }
+}
+
+fn main() -> Unit {
+    let mut skus: List<String> = List()
+    List.push(list: mut skus, value: "A")
+    List.push(list: mut skus, value: "B")
+    List.push(list: mut skus, value: "A")
+    
+    let mut amounts: List<Int> = List()
+    List.push(list: mut amounts, value: 100)
+    List.push(list: mut amounts, value: 200)
+    List.push(list: mut amounts, value: 150)
+    
+    let totals = total_by_sku(skus: skus, amounts: amounts)
+    
+    let total_a = total_for(totals: totals, sku: "A")
+    let total_c = total_for(totals: totals, sku: "C")
+    
+    write(total_a)
+    write(total_c)
+}

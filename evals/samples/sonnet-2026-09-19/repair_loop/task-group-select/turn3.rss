@@ -1,0 +1,33 @@
+async fn main() -> Result<Unit, ChannelError> {
+    local left_channel: Channel<Int> = Channel.bounded(capacity: 1)
+    local right_channel: Channel<Int> = Channel.bounded(capacity: 1)
+    let left_tx: Sender<Int> = Channel.sender(channel: read left_channel)
+    let left_rx: Receiver<Int> = Channel.receiver(channel: mut left_channel)?
+    let right_tx: Sender<Int> = Channel.sender(channel: read right_channel)
+    let right_rx: Receiver<Int> = Channel.receiver(channel: mut right_channel)?
+    let mut source: CancellationSource = CancellationSource.new()
+    let mut winner: Int = 0
+    local left_payload: Int = 1
+    local right_payload: Int = 2
+
+    task_group {
+        async let left_feed = Sender.send(sender: read left_tx, value: take left_payload)
+        async let right_feed = Sender.send(sender: read right_tx, value: take right_payload)
+
+        select {
+            case left_value = await Receiver.recv(receiver: read left_rx) => {
+                winner = 1
+                CancellationSource.cancel(source: mut source)
+            }
+            case right_value = await Receiver.recv(receiver: read right_rx) => {
+                winner = 2
+                CancellationSource.cancel(source: mut source)
+            }
+        }
+
+        await left_feed
+        await right_feed
+    }
+
+    Ok(Unit)
+}

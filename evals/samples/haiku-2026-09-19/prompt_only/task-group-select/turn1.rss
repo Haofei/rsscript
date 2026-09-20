@@ -1,0 +1,56 @@
+use tokio::sync::mpsc;
+use tokio::sync::CancellationToken;
+use tokio::select;
+use tokio::task::JoinSet;
+
+#[tokio::main]
+async fn main() {
+    // Create two bounded Int channels of capacity 1
+    let (tx1, mut rx1) = mpsc::channel::<i32>(1);
+    let (tx2, mut rx2) = mpsc::channel::<i32>(1);
+    
+    // Create an explicit CancellationToken
+    let cancel_token = CancellationToken::new();
+    
+    // Inside one task_group
+    let mut task_group = JoinSet::new();
+    
+    // Start an async task for the first feeding task
+    task_group.spawn({
+        let tx = tx1;
+        async move {
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            let _ = tx.send(1).await;
+        }
+    });
+    
+    // Start an async task for the second feeding task
+    task_group.spawn({
+        let tx = tx2;
+        async move {
+            tokio::time::sleep(tokio::time::Duration::from_millis(25)).await;
+            let _ = tx.send(2).await;
+        }
+    });
+    
+    // Use a select block with one arm per receiver
+    select! {
+        val = rx1.recv() => {
+            if let Some(v) = val {
+                println!("Channel 1 won with value: {}", v);
+            }
+            cancel_token.cancel();
+        }
+        val = rx2.recv() => {
+            if let Some(v) = val {
+                println!("Channel 2 won with value: {}", v);
+            }
+            cancel_token.cancel();
+        }
+    }
+    
+    // Await both async task handles inside the same task_group
+    while let Some(result) = task_group.join_next().await {
+        let _ = result;
+    }
+}

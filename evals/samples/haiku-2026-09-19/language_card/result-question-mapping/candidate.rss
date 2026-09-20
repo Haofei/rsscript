@@ -1,0 +1,67 @@
+sum IngestError {
+    Malformed(detail: String),
+    Rejected(detail: String)
+}
+
+fn IngestError.detail(error: read IngestError) -> fresh String {
+    match error {
+        IngestError.Malformed(detail) => { return detail },
+        IngestError.Rejected(detail) => { return detail }
+    }
+}
+
+fn parse_amount(raw: read String) -> Result<Int, IngestError> {
+    let trimmed = String.trim(value: raw)
+    match Int.parse(value: trimmed) {
+        Ok(amount) => { return Ok(value: amount) },
+        Err(_) => { return Err(error: IngestError.Malformed(detail: "not an integer")) }
+    }
+}
+
+fn check_amount(amount: Int) -> Result<Int, IngestError> {
+    if amount <= 0 {
+        return Err(error: IngestError.Rejected(detail: "non-positive amount"))
+    }
+    return Ok(value: amount)
+}
+
+fn ingest(raw: read String) -> Result<Int, IngestError> {
+    let amount = parse_amount(raw: raw)?
+    let checked = check_amount(amount: amount)?
+    return Ok(value: checked * 2)
+}
+
+fn ingest_all(raws: read List<String>) -> Result<Int, String> {
+    let mut total: Int = 0
+    for raw in raws {
+        match ingest(raw: raw) {
+            Ok(value) => {
+                total = total + value
+            },
+            Err(error) => {
+                return Err(error: IngestError.detail(error: error))
+            }
+        }
+    }
+    return Ok(value: total)
+}
+
+fn build_test_data() -> List<String> {
+    let l0: List<String> = List.empty()
+    let l1 = List.append(list: l0, value: "10")
+    let l2 = List.append(list: l1, value: "20")
+    let l3 = List.append(list: l2, value: "-5")
+    return l3
+}
+
+fn main() -> Unit {
+    let raws = build_test_data()
+    match ingest_all(raws: raws) {
+        Ok(total) => {
+            write(value: total)
+        },
+        Err(msg) => {
+            write(value: msg)
+        }
+    }
+}

@@ -1,0 +1,36 @@
+struct Tally {
+    total: Int,
+    count: Int,
+}
+
+fn add_amount(tally: Tally, raw: String) -> Result<fresh Tally, String> {
+    match String.parse_int(value: raw) {
+        Ok(amount) => {
+            if amount < 0 {
+                return Err("negative amount")
+            }
+            return Ok(Tally(total: tally.total + amount, count: tally.count + 1))
+        }
+        Err(_) => {
+            return Err("not an integer")
+        }
+    }
+}
+
+fn tally_all(raws: read List<String>) -> Result<fresh Tally, String> {
+    return List.try_fold(list: raws, initial: Tally(total: 0, count: 0), folder: add_amount)
+}
+
+fn main() -> Unit {
+    let raws: List<String> = ["10", "25", "7"]
+    match tally_all(raws: raws) {
+        Ok(tally) => {
+            Output.write(text: "total:")
+            Output.write(text: Int.to_string(value: tally.total))
+        }
+        Err(message) => {
+            Output.write(text: "error:")
+            Output.write(text: message)
+        }
+    }
+}

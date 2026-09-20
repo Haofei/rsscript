@@ -1,0 +1,143 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 19426,
+    "check_ok": false,
+    "codes": [
+      "RS0202",
+      "RS0206",
+      "RS0208"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0208",
+        "severity": "error",
+        "summary": "return in `batch_size` has type `Unit`, expected `Int`.",
+        "line": 18,
+        "label": "return type mismatch",
+        "causes": [
+          "RSScript return types are part of the review contract and must be checked before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Return a value of type `Int` here.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `label` for `make_batch` must use `take`.",
+        "line": 28,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Write `label: take ...` at the call site.",
+            "applicability": "machine-applicable",
+            "replacement": "take ",
+            "replace_line": 28,
+            "replace_column": 26,
+            "replace_length": 0
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `items` for `make_batch` must use `take`.",
+        "line": 28,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Write `items: take ...` at the call site.",
+            "applicability": "machine-applicable",
+            "replacement": "take ",
+            "replace_line": 28,
+            "replace_column": 37,
+            "replace_length": 0
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `write` does not resolve.",
+        "line": 30,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 30,
+            "replace_column": 3,
+            "replace_length": 5
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "field `label` for `Batch` must be initialized with `take`.",
+        "line": 13,
+        "label": "missing constructor field effect",
+        "causes": [
+          "Inline fields take ownership of non-Copy local values stored inside the constructed struct."
+        ],
+        "fixes": [
+          {
+            "title": "Write `label: take ...` in the constructor.",
+            "applicability": "machine-applicable",
+            "replacement": "take ",
+            "replace_line": 13,
+            "replace_column": 12,
+            "replace_length": 0
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "field `items` for `Batch` must be initialized with `take`.",
+        "line": 14,
+        "label": "missing constructor field effect",
+        "causes": [
+          "Inline fields take ownership of non-Copy local values stored inside the constructed struct."
+        ],
+        "fixes": [
+          {
+            "title": "Write `items: take ...` in the constructor.",
+            "applicability": "machine-applicable",
+            "replacement": "take ",
+            "replace_line": 14,
+            "replace_column": 12,
+            "replace_length": 0
+          }
+        ]
+      }
+    ]
+  }
+]

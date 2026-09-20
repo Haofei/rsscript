@@ -1,0 +1,34 @@
+fn total_readings(text: read String) -> Result<Int, JsonError> {
+    local parsed = Json.parse(text: text)?;
+    local readings = Json.get(json: parsed, key: "readings")?;
+    local array = Json.as_array(json: readings)?;
+    
+    mut total: Int = 0;
+    mut i: Int = 0;
+    local len = JsonArray.length(array: array);
+    
+    while i < len {
+        local item = JsonArray.get(array: array, index: i)?;
+        local value_field = Json.get(json: item, key: "value")?;
+        local value = Json.as_int(json: value_field)?;
+        total = total + value;
+        i = i + 1;
+    }
+    
+    return Ok(value: total)
+}
+
+fn main() -> Unit {
+    local json_doc = """{"readings": [{"value": 10}, {"value": 20}]}""";
+    
+    local result = total_readings(text: json_doc);
+    
+    match result {
+        Ok(sum) => {
+            Output.write(message: String.from_int(value: sum))
+        }
+        Err(err) => {
+            Output.write(message: err.message())
+        }
+    }
+}

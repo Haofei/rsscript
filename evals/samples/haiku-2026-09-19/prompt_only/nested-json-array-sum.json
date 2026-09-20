@@ -1,0 +1,12 @@
+{
+  "schema": "rsscript.eval.candidate.v1",
+  "task_id": "nested-json-array-sum",
+  "source": "nested-json-array-sum/candidate.rss",
+  "mode": "prompt_only",
+  "model": "haiku",
+  "model_version": "unknown",
+  "temperature": null,
+  "attempt": 1,
+  "generation_duration_ms": 42780,
+  "repair_turns": 0
+}

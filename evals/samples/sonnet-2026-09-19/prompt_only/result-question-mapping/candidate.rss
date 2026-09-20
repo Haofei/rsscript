@@ -1,0 +1,55 @@
+sum IngestError {
+    Malformed(detail: String),
+    Rejected(detail: String),
+}
+
+fn IngestError.detail(error: read IngestError) -> fresh String {
+    match error {
+        Malformed(detail) => "malformed amount: " + detail,
+        Rejected(detail) => "rejected amount: " + detail,
+    }
+}
+
+fn parse_amount(raw: read String) -> Result<Int, IngestError> {
+    let text = raw.trim()
+    match Int.parse(text) {
+        Some(value) => Ok(value),
+        None => Err(IngestError.Malformed("not an integer: " + text)),
+    }
+}
+
+fn check_amount(amount: Int) -> Result<Int, IngestError> {
+    if amount <= 0 {
+        return Err(IngestError.Rejected("amount must be positive: " + amount.to_string()))
+    }
+    Ok(amount)
+}
+
+fn ingest(raw: read String) -> Result<Int, IngestError> {
+    let parsed = parse_amount(raw)?
+    let accepted = check_amount(parsed)?
+    Ok(accepted * 2)
+}
+
+fn ingest_all(raws: read List<String>) -> Result<Int, String> {
+    let mut total = 0
+    for raw in raws {
+        match ingest(raw) {
+            Ok(value) => {
+                total = total + value
+            }
+            Err(error) => {
+                return Err(error.detail())
+            }
+        }
+    }
+    Ok(total)
+}
+
+fn main() -> Unit {
+    let raws = ["10", " 25 ", "7"]
+    match ingest_all(raws) {
+        Ok(total) => print("total: " + total.to_string()),
+        Err(message) => print("error: " + message),
+    }
+}

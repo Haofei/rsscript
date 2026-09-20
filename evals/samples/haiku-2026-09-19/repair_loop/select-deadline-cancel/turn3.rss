@@ -1,0 +1,45 @@
+async fn sendWork(sender: Sender<Int>) -> Unit {
+    await Sender.send(sender: sender, value: 42)
+}
+
+async fn sendDeadline(sender: Sender<Int>) -> Unit {
+    await Sender.send(sender: sender, value: 1)
+}
+
+fn main() -> Unit {
+    let workPair = createChannel(1)
+    let deadlinePair = createChannel(1)
+    
+    local workSender = workPair.0
+    local workReceiver = workPair.1
+    local deadlineSender = deadlinePair.0
+    local deadlineReceiver = deadlinePair.1
+    
+    local cancellation = createCancellation()
+    
+    task_group {
+        async let workHandle = sendWork(sender: workSender)
+        async let deadlineHandle = sendDeadline(sender: deadlineSender)
+        
+        select {
+            Ok(_) on workReceiver.receive() => {
+            }
+            Ok(_) on deadlineReceiver.receive() => {
+                cancellation.cancel()
+            }
+        }
+        
+        await workHandle
+        await deadlineHandle
+    }
+}
+
+fn createChannel(capacity: Int) -> (Sender<Int>, Receiver<Int>) {
+    let sender: Sender<Int> = Sender.create(capacity: capacity)
+    let receiver: Receiver<Int> = Receiver.create(capacity: capacity)
+    (sender, receiver)
+}
+
+fn createCancellation() -> Cancellation {
+    Cancellation.create()
+}

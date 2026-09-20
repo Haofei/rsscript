@@ -1,0 +1,20 @@
+// NOTE: RSScript has no spec or compiler in this environment, so this was not compiled.
+// The Json method names (parse, field, as_array, as_int, message) are assumed.
+fn sum_quantities(text: read String) -> Result<Int, JsonError> {
+    let doc = Json.parse(text)?;
+    let items = doc.field("items")?.as_array()?;
+    let mut total: Int = 0;
+    for item in items {
+        let quantity = item.field("quantity")?.as_int()?;
+        total = total + quantity;
+    }
+    return Ok(total);
+}
+
+fn main() -> Unit {
+    let text = "{\"items\": [{\"quantity\": 3}, {\"quantity\": 4}]}";
+    match sum_quantities(text) {
+        Ok(total) => write("total: " + total.to_string()),
+        Err(e) => write("error: " + e.message()),
+    }
+}

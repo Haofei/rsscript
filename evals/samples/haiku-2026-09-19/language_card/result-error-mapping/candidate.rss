@@ -1,0 +1,53 @@
+sum PipelineError {
+    BadInput(detail: String),
+    Upstream(detail: String),
+}
+
+fn PipelineError.detail(error: read PipelineError) -> fresh String {
+    match error {
+        BadInput(detail: d) => { return d }
+        Upstream(detail: d) => { return d }
+    }
+}
+
+fn parse_amount(raw: read String) -> Result<Int, PipelineError> {
+    match Int.parse(value: raw) {
+        Ok(value: amount) => { return Ok(value: amount) }
+        Err(_) => { return Err(error: BadInput(detail: raw)) }
+    }
+}
+
+fn push_amount(id: read String, raw: read String) -> Result<Int, PipelineError> {
+    local amount_result = parse_amount(raw: raw)
+    
+    match amount_result {
+        Ok(value: amount) => {
+            local push_result = Sync.push(id: id, amount: amount)
+            match push_result {
+                Ok(value: count) => { return Ok(value: count) }
+                Err(error: sync_error) => {
+                    local message = SyncError.message(error: sync_error)
+                    return Err(error: Upstream(detail: message))
+                }
+            }
+        }
+        Err(error: parse_error) => {
+            return Err(error: parse_error)
+        }
+    }
+}
+
+fn main() -> Unit {
+    local result = push_amount(id: "test-id", raw: "123")
+    
+    match result {
+        Ok(count: count) => {
+            local count_string = Int.to_string(value: count)
+            Print.line(text: count_string)
+        }
+        Err(error: error) => {
+            local detail = PipelineError.detail(error: error)
+            Print.line(text: detail)
+        }
+    }
+}

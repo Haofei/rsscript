@@ -1,0 +1,12 @@
+{
+  "schema": "rsscript.eval.candidate.v1",
+  "task_id": "map-aggregate-counts",
+  "source": "map-aggregate-counts/candidate.rss",
+  "mode": "language_card",
+  "model": "haiku",
+  "model_version": "unknown",
+  "temperature": null,
+  "attempt": 1,
+  "generation_duration_ms": 34433,
+  "repair_turns": 0
+}

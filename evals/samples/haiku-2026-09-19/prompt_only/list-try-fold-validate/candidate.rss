@@ -1,0 +1,31 @@
+struct Tally {
+    total: Int,
+    count: Int,
+}
+
+fn add_amount(tally: Tally, raw: String) -> Result<fresh Tally, String> {
+    match Int::parse(raw) {
+        Ok(amount) => {
+            if amount < 0 {
+                Err("Negative amount not allowed")
+            } else {
+                Ok(fresh Tally {
+                    total: tally.total + amount,
+                    count: tally.count + 1,
+                })
+            }
+        }
+        Err(_) => Err("Invalid integer: " + raw),
+    }
+}
+
+fn tally_all(raws: read List<String>) -> Result<fresh Tally, String> {
+    fold_result(raws, fresh Tally { total: 0, count: 0 }, add_amount)
+}
+
+fn main() -> Unit {
+    match tally_all(["100", "200", "300"]) {
+        Ok(t) => println("Total: " + Int::to_string(t.total)),
+        Err(e) => println("Error: " + e),
+    }
+}

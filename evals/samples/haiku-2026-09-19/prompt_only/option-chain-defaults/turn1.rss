@@ -1,0 +1,25 @@
+struct Window {
+    start: i32,
+    width: i32,
+}
+
+fn field_of(line: &str, delimiter: &str) -> Option<String> {
+    line.split(delimiter).nth(1).map(|s| s.to_string())
+}
+
+fn parsed_field(line: &str, delimiter: &str) -> Option<i32> {
+    field_of(line, delimiter).and_then(|s| s.parse().ok())
+}
+
+fn window_from(line: &str) -> Window {
+    let start = parsed_field(line, ":").unwrap_or(0);
+    let width = parsed_field(line, ",").filter(|&w| w > 0).unwrap_or(60);
+    Window { start, width }
+}
+
+fn main() {
+    let line = "0:80";
+    let window = window_from(line);
+    println!("start: {}", window.start);
+    println!("width: {}", window.width);
+}

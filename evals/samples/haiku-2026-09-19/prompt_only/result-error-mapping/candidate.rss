@@ -1,0 +1,43 @@
+sum PipelineError {
+  BadInput(detail: String)
+  Upstream(detail: String)
+}
+
+pub fn PipelineError.detail(error: read PipelineError) -> fresh String {
+  match error {
+    BadInput(d) -> d
+    Upstream(d) -> d
+  }
+}
+
+pub fn parse_amount(raw: read String) -> Result<Int, PipelineError> {
+  match Int.parse(raw) {
+    Ok(amount) -> Ok(amount)
+    Err(_) -> Err(BadInput("invalid integer format"))
+  }
+}
+
+pub fn push_amount(id: read String, raw: read String) -> Result<Int, PipelineError> {
+  match parse_amount(raw) {
+    Ok(amount) -> {
+      match Sync.push(id, amount) {
+        Ok(count) -> Ok(count)
+        Err(sync_error) -> {
+          let message = SyncError.message(sync_error)
+          Err(Upstream(message))
+        }
+      }
+    }
+    Err(e) -> Err(e)
+  }
+}
+
+pub fn main() -> Unit {
+  let id = "example"
+  let raw = "100"
+  
+  match push_amount(id, raw) {
+    Ok(count) -> println(Int.to_string(count))
+    Err(error) -> println(PipelineError.detail(error))
+  }
+}

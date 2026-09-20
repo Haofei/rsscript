@@ -1,0 +1,47 @@
+struct Settings {
+    region: String,
+    retries: Int,
+}
+
+fn lookup(keys: read List<String>, values: read List<String>, key: read String) -> Option<String> {
+    let mut i: Int = 0;
+    while i < keys.len() {
+        match keys.get(i) {
+            Some(k) => {
+                if k == key {
+                    return values.get(i);
+                }
+            }
+            None => {
+                return None;
+            }
+        }
+        i = i + 1;
+    }
+    return None;
+}
+
+fn settings_from(keys: read List<String>, values: read List<String>) -> fresh Settings {
+    let region: String = match lookup(keys, values, "region") {
+        Some(r) => r,
+        None => "us-east",
+    };
+
+    let retries: Int = match lookup(keys, values, "retries") {
+        Some(raw) => match parse_int(raw) {
+            Some(n) => n,
+            None => 3,
+        },
+        None => 3,
+    };
+
+    return Settings { region: region, retries: retries };
+}
+
+fn main() -> Unit {
+    let keys: List<String> = ["region", "retries"];
+    let values: List<String> = ["eu-west", "5"];
+    let settings: Settings = settings_from(keys, values);
+    print(settings.region);
+    print(to_string(settings.retries));
+}

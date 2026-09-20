@@ -1,0 +1,51 @@
+struct Window {
+    start: Int,
+    width: Int
+}
+
+fn field_of(line: read String, delimiter: read String) -> Option<String> {
+    local idx_opt = String.index_of(value: line, needle: delimiter)
+    return match idx_opt {
+        Some(idx) => {
+            local delim_len = String.len(value: delimiter)
+            local start_pos = idx + delim_len
+            local remaining_len = String.len(value: line) - start_pos
+            Some(String.substring(value: line, start: start_pos, length: remaining_len))
+        }
+        None => None
+    }
+}
+
+fn parsed_field(line: read String, delimiter: read String) -> Option<Int> {
+    local field_opt = field_of(line: line, delimiter: delimiter)
+    return match field_opt {
+        Some(field) => String.parse_int(value: field),
+        None => None
+    }
+}
+
+fn window_from(line: read String) -> fresh Window {
+    local start_opt = parsed_field(line: line, delimiter: "start:")
+    local start = match start_opt {
+        Some(s) => s,
+        None => 0
+    }
+    
+    local width_opt = parsed_field(line: line, delimiter: "width:")
+    local width = match width_opt {
+        Some(w) => {
+            if w > 0 { w } else { 60 }
+        }
+        None => { 60 }
+    }
+    return Window { start: take start, width: take width }
+}
+
+fn main() -> Unit {
+    local line = "start:10 width:80"
+    local window = window_from(line: line)
+    local start_str = String.concat(left: "start: ", right: String.from_int(value: window.start))
+    local width_str = String.concat(left: "width: ", right: String.from_int(value: window.width))
+    Output.write(message: start_str)
+    Output.write(message: width_str)
+}

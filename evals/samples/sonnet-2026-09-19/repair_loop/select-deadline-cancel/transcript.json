@@ -1,0 +1,576 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 17239,
+    "check_ok": false,
+    "codes": [
+      "RS0022",
+      "RS0030",
+      "RS0202",
+      "RS0206",
+      "RS0207"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Channel.send` does not resolve.",
+        "line": 2,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Channel.sender`, `Sender.send`?",
+            "applicability": "machine-applicable",
+            "replacement": "Channel.sender",
+            "replace_line": 2,
+            "replace_column": 11,
+            "replace_length": 12
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Channel.send` does not resolve.",
+        "line": 6,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Channel.sender`, `Sender.send`?",
+            "applicability": "machine-applicable",
+            "replacement": "Channel.sender",
+            "replace_line": 6,
+            "replace_column": 11,
+            "replace_length": 12
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0207",
+        "severity": "error",
+        "summary": "binding `work_rx` has initializer type `Result<fresh Receiver<Int>, ChannelError>`, expected `Receiver<Int>`.",
+        "line": 13,
+        "label": "binding type mismatch",
+        "causes": [
+          "Explicit `let` and `local` type annotations are source-level contracts and must match the initializer before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Initialize `work_rx` with a `Receiver<Int>` value, or change the binding annotation.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `channel` for `Channel.receiver` must use `mut`.",
+        "line": 13,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Write `channel: mut ...` at the call site.",
+            "applicability": "machine-applicable",
+            "replacement": "mut ",
+            "replace_line": 13,
+            "replace_column": 60,
+            "replace_length": 0
+          }
+        ]
+      },
+      {
+        "code": "RS0207",
+        "severity": "error",
+        "summary": "binding `deadline_rx` has initializer type `Result<fresh Receiver<Int>, ChannelError>`, expected `Receiver<Int>`.",
+        "line": 15,
+        "label": "binding type mismatch",
+        "causes": [
+          "Explicit `let` and `local` type annotations are source-level contracts and must match the initializer before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Initialize `deadline_rx` with a `Receiver<Int>` value, or change the binding annotation.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `channel` for `Channel.receiver` must use `mut`.",
+        "line": 15,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Write `channel: mut ...` at the call site.",
+            "applicability": "machine-applicable",
+            "replacement": "mut ",
+            "replace_line": 15,
+            "replace_column": 64,
+            "replace_length": 0
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Runtime.block_on` does not resolve.",
+        "line": 44,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Console.write_line` does not resolve.",
+        "line": 46,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 46,
+            "replace_column": 9,
+            "replace_length": 18
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0206",
+        "severity": "error",
+        "summary": "call to `Console.write_line` does not resolve.",
+        "line": 48,
+        "label": "unknown callee",
+        "causes": [
+          "The callee is not a user function, known type constructor, enum variant, or builtin signature."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `Output.write`?",
+            "applicability": "machine-applicable",
+            "replacement": "Output.write",
+            "replace_line": 48,
+            "replace_column": 9,
+            "replace_length": 18
+          },
+          {
+            "title": "Declare the function or add a builtin signature for this API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0030",
+        "severity": "error",
+        "summary": "`await` must consume an async call.",
+        "line": 2,
+        "label": "await non-async expression",
+        "causes": [
+          "RSScript does not expose Future or Task values in source; the executable async MVP only awaits direct async calls."
+        ],
+        "fixes": [
+          {
+            "title": "Await an `async fn` call directly.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0030",
+        "severity": "error",
+        "summary": "`await` must consume an async call.",
+        "line": 6,
+        "label": "await non-async expression",
+        "causes": [
+          "RSScript does not expose Future or Task values in source; the executable async MVP only awaits direct async calls."
+        ],
+        "fixes": [
+          {
+            "title": "Await an `async fn` call directly.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0022",
+        "severity": "error",
+        "summary": "async call `race` must be awaited.",
+        "line": 44,
+        "label": "async call must be awaited",
+        "causes": [
+          "Async calls introduce suspension boundaries that must be visible in source; `spawn` is reserved but not executable in v0.7."
+        ],
+        "fixes": [
+          {
+            "title": "Write `await race(...)`.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 2,
+    "duration_ms": 52261,
+    "check_ok": false,
+    "codes": [
+      "RS0029",
+      "RS0202",
+      "RS0203",
+      "RS0204",
+      "RS0207",
+      "RS0209"
+    ],
+    "source": "turn2.rss",
+    "diagnostics": [
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `value` for `Sender.send` must use `take`.",
+        "line": 2,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Write `value: take ...` at the call site.",
+            "applicability": "machine-applicable",
+            "replacement": "take ",
+            "replace_line": 2,
+            "replace_column": 46,
+            "replace_length": 0
+          }
+        ]
+      },
+      {
+        "code": "RS0202",
+        "severity": "error",
+        "summary": "argument `value` for `Sender.send` must use `take`.",
+        "line": 6,
+        "label": "data effect mismatch",
+        "causes": [
+          "A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter."
+        ],
+        "fixes": [
+          {
+            "title": "Write `value: take ...` at the call site.",
+            "applicability": "machine-applicable",
+            "replacement": "take ",
+            "replace_line": 6,
+            "replace_column": 46,
+            "replace_length": 0
+          }
+        ]
+      },
+      {
+        "code": "RS0207",
+        "severity": "error",
+        "summary": "binding `work_rx` has initializer type `Int`, expected `Receiver<Int>`.",
+        "line": 13,
+        "label": "binding type mismatch",
+        "causes": [
+          "Explicit `let` and `local` type annotations are source-level contracts and must match the initializer before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Initialize `work_rx` with a `Receiver<Int>` value, or change the binding annotation.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0207",
+        "severity": "error",
+        "summary": "binding `deadline_rx` has initializer type `Int`, expected `Receiver<Int>`.",
+        "line": 18,
+        "label": "binding type mismatch",
+        "causes": [
+          "Explicit `let` and `local` type annotations are source-level contracts and must match the initializer before Rust lowering."
+        ],
+        "fixes": [
+          {
+            "title": "Initialize `deadline_rx` with a `Receiver<Int>` value, or change the binding annotation.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Output.write` has no argument named `text`.",
+        "line": 52,
+        "label": "unknown argument",
+        "causes": [
+          "`Output.write` does not declare a parameter named `text`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `message`? Declared: message.",
+            "applicability": "machine-applicable",
+            "replacement": "message",
+            "replace_line": 52,
+            "replace_column": 22,
+            "replace_length": 4
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Output.write` is missing required argument `message`.",
+        "line": 52,
+        "label": "missing argument",
+        "causes": [
+          "`Output.write` requires a named argument `message`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `message: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0203",
+        "severity": "error",
+        "summary": "call to `Output.write` has no argument named `text`.",
+        "line": 54,
+        "label": "unknown argument",
+        "causes": [
+          "`Output.write` does not declare a parameter named `text`."
+        ],
+        "fixes": [
+          {
+            "title": "Did you mean `message`? Declared: message.",
+            "applicability": "machine-applicable",
+            "replacement": "message",
+            "replace_line": 54,
+            "replace_column": 22,
+            "replace_length": 4
+          }
+        ]
+      },
+      {
+        "code": "RS0204",
+        "severity": "error",
+        "summary": "call to `Output.write` is missing required argument `message`.",
+        "line": 54,
+        "label": "missing argument",
+        "causes": [
+          "`Output.write` requires a named argument `message`."
+        ],
+        "fixes": [
+          {
+            "title": "Add `message: ...` to the call.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0209",
+        "severity": "error",
+        "summary": "match arm has type `Int`, expected `fresh Receiver<Int>` from the first produced arm.",
+        "line": 15,
+        "label": "match arm type mismatch",
+        "causes": [
+          "A match expression must produce one compatible value type across every arm."
+        ],
+        "fixes": [
+          {
+            "title": "Return the same value type from every match expression arm.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0209",
+        "severity": "error",
+        "summary": "match arm has type `Int`, expected `fresh Receiver<Int>` from the first produced arm.",
+        "line": 20,
+        "label": "match arm type mismatch",
+        "causes": [
+          "A match expression must produce one compatible value type across every arm."
+        ],
+        "fixes": [
+          {
+            "title": "Return the same value type from every match expression arm.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0029",
+        "severity": "error",
+        "summary": "`await` is only valid inside an async function.",
+        "line": 50,
+        "label": "await outside async fn",
+        "causes": [
+          "Suspension points are part of the async function frame and cannot appear in ordinary synchronous functions."
+        ],
+        "fixes": [
+          {
+            "title": "Move this await into an `async fn`, or call a synchronous API.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "turn": 3,
+    "duration_ms": 22641,
+    "check_ok": false,
+    "codes": [
+      "RS0308"
+    ],
+    "source": "turn3.rss",
+    "diagnostics": [
+      {
+        "code": "RS0308",
+        "severity": "error",
+        "summary": "`take` requires a local value.",
+        "line": 2,
+        "label": "not a local value",
+        "causes": [
+          "`take` can only consume a named local binding or a local field path."
+        ],
+        "fixes": [
+          {
+            "title": "Pass a local value with `take`, or use `read`/`mut` for managed values.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0308",
+        "severity": "error",
+        "summary": "`take` requires a local value.",
+        "line": 6,
+        "label": "not a local value",
+        "causes": [
+          "`take` can only consume a named local binding or a local field path."
+        ],
+        "fixes": [
+          {
+            "title": "Pass a local value with `take`, or use `read`/`mut` for managed values.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

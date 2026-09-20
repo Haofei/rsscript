@@ -1,0 +1,47 @@
+sum JobState {
+    Queued,
+    Running(worker: String),
+    Done(code: Int),
+    Failed(reason: String)
+}
+
+fn advance(state: read JobState, worker: read String) -> fresh JobState {
+    match state {
+        Queued => {
+            return Running(worker: worker)
+        }
+        Running(_) => {
+            return Done(code: 0)
+        }
+        Done(code) => {
+            return Done(code: code)
+        }
+        Failed(reason) => {
+            return Failed(reason: reason)
+        }
+    }
+}
+
+fn describe(state: read JobState) -> fresh String {
+    match state {
+        Queued => {
+            return "Queued"
+        }
+        Running(worker) => {
+            return "Running"
+        }
+        Done(code) => {
+            return "Done"
+        }
+        Failed(reason) => {
+            return "Failed"
+        }
+    }
+}
+
+fn main() -> Unit {
+    let mut state = Queued
+    state = advance(state: state, worker: "worker1")
+    state = advance(state: state, worker: "worker1")
+    Output.write(message: describe(state: state))
+}
