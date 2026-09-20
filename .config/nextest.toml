@@ -20,5 +20,5 @@ failure-output = "immediate-final"
 generated-rust = { max-threads = 2 }
 
 [[profile.default.overrides]]
-filter = 'package(rss-testgen) | test(/^(vm_eval|vm_eval_parity|backend_differential|file_upload_benchmark_e2e)::/)'
+filter = 'test(/^(vm_eval|vm_eval_parity|backend_differential|file_upload_benchmark_e2e)::/)'
 test-group = 'generated-rust'

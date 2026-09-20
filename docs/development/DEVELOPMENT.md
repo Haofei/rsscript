@@ -77,6 +77,9 @@ mirrors Core CI:
 
 ```sh
 cargo fmt --all -- --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo clippy --locked -p rsscript-sdk --all-targets --features execution -- -D warnings
+cargo clippy --locked -p rsscript-cli --all-targets --features execution -- -D warnings
 cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo test --locked
 cargo test --locked -p rsscript-sdk --features execution

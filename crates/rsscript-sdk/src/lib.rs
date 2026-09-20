@@ -260,7 +260,9 @@ pub mod analysis {
         ResourceTransferFactV1, SEMANTIC_DIFF_SCHEMA, SemanticDiffV2, TaskGroupFactV1,
     };
 }
-use rsscript_core_types::{CancellationToken, MonotonicDeadline, OperationAbort, OperationContext};
+#[cfg(feature = "execution")]
+use rsscript_core_types::{CancellationToken, MonotonicDeadline};
+use rsscript_core_types::{OperationAbort, OperationContext};
 #[cfg(feature = "execution")]
 use rsscript_provider_api as provider;
 
