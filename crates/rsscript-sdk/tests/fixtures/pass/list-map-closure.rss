@@ -1,0 +1,13 @@
+// The closure-taking list combinators, end to end. Each one checked clean and
+// then died in the checked-HIR-to-MIR lowerer, which had no case for them.
+
+fn main() -> Int {
+    let values: fresh List<Int> = [3, 1, 2]
+    let doubled = List.map(list: values, mapper: |x| { return x * 2 })
+    let kept = List.filter(list: doubled, predicate: |x| { return x > 2 })
+    let total = List.fold(list: kept, initial: 0, folder: |acc, x| { return acc + x })
+    let sorted = List.sort_by(list: values, key: |x| { return x }, compare: |a, b| { return a - b })
+    let mut scratch: fresh List<Int> = [3, 1, 2]
+    List.sort_with(list: mut scratch, compare: |a, b| { return a - b })
+    return total + List.get(list: sorted, index: 0) + List.get(list: scratch, index: 0)
+}

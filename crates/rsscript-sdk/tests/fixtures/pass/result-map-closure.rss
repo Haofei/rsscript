@@ -1,0 +1,9 @@
+// `Result.map` and `Result.and_then` prove `U` from the callback's result the
+// same way the `Option` pair does.
+
+fn main() -> Int {
+    let value: Result<Int, String> = Ok(3)
+    let doubled = Result.map(result: value, mapper: |x| { return x * 2 })
+    let chained = Result.and_then(result: doubled, mapper: |x| { return Ok(x + 1) })
+    return Result.unwrap_or(value: chained, default: 0)
+}

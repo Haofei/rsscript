@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use rsscript_abi_model::WireType;
 
-use crate::{ResolvedType, TypeQualifiers, builtin_generic_type_params};
+use crate::{ResolvedType, ResolvedTypeKind, TypeQualifiers, builtin_generic_type_params};
 
 use super::*;
 
@@ -382,19 +382,112 @@ fn collect_arg_type_substitutions(
         else {
             continue;
         };
-        let (actual_type, structural_pattern) = if param.ty.qualifiers.noescape
+        // An inline closure passed to a callback contract proves exactly one
+        // thing: what its body returns, matched against the contract's return
+        // position. A body whose result cannot be inferred proves nothing at
+        // all, so this case never falls through to the structural path below:
+        // doing so would unify the callee's result parameter against the
+        // closure's own unresolved marker and publish *that* as the answer.
+        if param.ty.qualifiers.noescape
             && let Some(expected_return_type) = param.ty.function_return()
-            && let Expr::Closure { body, .. } = &arg.value
-            && let Some(actual_return_type) = infer_closure_return_type(hir, body, value_types)
+            && let Expr::Closure {
+                params: closure_params,
+                body,
+                ..
+            } = &arg.value
         {
-            (actual_return_type, expected_return_type.clone())
-        } else {
-            let Some(actual_type) = infer_arg_expr_type(hir, &arg.value, value_types) else {
-                continue;
-            };
-            (actual_type, param.ty.clone())
+            let scoped = closure_body_value_types(
+                &param.ty,
+                closure_params,
+                value_types,
+                generic_params,
+                substitutions,
+            );
+            if let Some(actual_return_type) = infer_closure_return_type(hir, body, &scoped) {
+                expected_return_type.clone().collect_substitutions(
+                    &actual_return_type,
+                    generic_params,
+                    substitutions,
+                );
+            }
+            continue;
+        }
+        let Some(actual_type) = infer_arg_expr_type(hir, &arg.value, value_types) else {
+            continue;
         };
-        structural_pattern.collect_substitutions(&actual_type, generic_params, substitutions);
+        param
+            .ty
+            .clone()
+            .collect_substitutions(&actual_type, generic_params, substitutions);
+    }
+}
+
+/// The names an inline closure's body can see while its result type is being
+/// inferred.
+///
+/// A combinator's callback contract already names what each closure parameter
+/// is — `List.map(list: List<Int>, mapper: noescape Fn(T) -> U)` proves `T =
+/// Int` from the receiver argument, which is collected before this one. Without
+/// binding `x` to that type, `|x| { return x * 2 }` has no inferable body and
+/// `U` is left unproved, so the call's own result type (`fresh List<U>`) is
+/// unusable at the binding. Substituting what is already proved into the
+/// contract and binding each parameter by name is what makes the closure's
+/// result a *derived* fact rather than a guess.
+///
+/// A parameter position the contract cannot resolve is deliberately left
+/// unbound: an absent name proves nothing, which is the honest answer, while a
+/// bound placeholder would be a false one.
+fn closure_body_value_types(
+    contract: &ResolvedType,
+    closure_params: &[String],
+    value_types: &HirValueTypes,
+    generic_params: &HashSet<&str>,
+    substitutions: &BTreeMap<String, ResolvedType>,
+) -> HirValueTypes {
+    let ResolvedTypeKind::Function { parameters, .. } = &contract.kind else {
+        return value_types.clone();
+    };
+    if parameters.len() != closure_params.len() {
+        return value_types.clone();
+    }
+    let mut scoped = value_types.clone();
+    for (name, declared) in closure_params.iter().zip(parameters.iter()) {
+        let bound = declared.substitute(substitutions);
+        if names_unproved_type(&bound, generic_params) {
+            // Nothing proved this position; leave the name unbound so the body
+            // reports "not inferable" instead of inheriting a stale outer
+            // binding of the same name.
+            scoped.remove(name);
+            continue;
+        }
+        scoped.insert(name.clone(), bound);
+    }
+    scoped
+}
+
+/// Whether a type still names something the call site has not proved: one of
+/// the callee's own type parameters, or the reserved unresolved spelling.
+fn names_unproved_type(ty: &ResolvedType, generic_params: &HashSet<&str>) -> bool {
+    match &ty.kind {
+        ResolvedTypeKind::Named { name, arguments } => {
+            (arguments.is_empty()
+                && (name == WireType::UNRESOLVED || generic_params.contains(name.as_str())))
+                || arguments
+                    .iter()
+                    .any(|argument| names_unproved_type(argument, generic_params))
+        }
+        ResolvedTypeKind::Function {
+            parameters,
+            return_type,
+            ..
+        } => {
+            parameters
+                .iter()
+                .any(|parameter| names_unproved_type(parameter, generic_params))
+                || return_type
+                    .as_deref()
+                    .is_some_and(|return_type| names_unproved_type(return_type, generic_params))
+        }
     }
 }
 
@@ -405,12 +498,16 @@ pub(super) fn infer_closure_return_type(
 ) -> Option<ResolvedType> {
     if let Some(statement) = body.statements.iter().next_back() {
         match statement {
+            // `return` with no value is `Unit`; `return <expr>` is exactly as
+            // typed as `<expr>` is. Defaulting an un-inferable returned
+            // expression to `Unit` published a type nothing had proved, and a
+            // caller unified its own result parameter against it: `List.map`
+            // over a list of `Int` produced `List<Unit>`.
             Stmt::Return(stmt) => {
-                return stmt
-                    .value
-                    .as_ref()
-                    .and_then(|value| infer_hir_expr_type(hir, value, value_types))
-                    .or_else(|| Some(ResolvedType::named("Unit", [])));
+                return match stmt.value.as_ref() {
+                    Some(value) => infer_hir_expr_type(hir, value, value_types),
+                    None => Some(ResolvedType::named("Unit", [])),
+                };
             }
             Stmt::Expr(value) => return infer_hir_expr_type(hir, value, value_types),
             Stmt::Let(_) | Stmt::LetElse(_) | Stmt::Assign(_) => {
@@ -481,24 +578,33 @@ pub(super) fn infer_arg_expr_type(
             .cloned()
             .or_else(|| builtin_value_ident_type(name)),
         Expr::Call { .. } => infer_hir_expr_type(hir, expr, value_types),
-        Expr::Closure { params, body, .. } => infer_closure_return_type(hir, body, value_types)
-            .map(|return_type| {
-                ResolvedType::function(
-                    // An unannotated closure parameter has no proved type:
-                    // nothing in the surface syntax, the binding, or the call
-                    // contract names one. The reserved unresolved spelling
-                    // records that absence explicitly, so MIR lowering and the
-                    // typed executable facts report `Unknown` for the position
-                    // instead of inventing a nominal type.
-                    (0..params.len()).map(|_| ResolvedType::named(WireType::UNRESOLVED, [])),
-                    (0..params.len()).map(|_| None),
-                    Some(return_type),
-                    TypeQualifiers {
-                        noescape: true,
-                        ..TypeQualifiers::default()
-                    },
-                )
-            }),
+        // The contract is published even when the body's result type is not
+        // proved: arity, parameter modes, and the `noescape` qualifier *are*
+        // facts, and MIR lowering needs them to build the closure's ABI. Only
+        // the result position records the absence, through the same reserved
+        // unresolved spelling the parameters already use, which every
+        // downstream consumer already projects to "no evidence".
+        Expr::Closure { params, body, .. } => Some(
+            infer_closure_return_type(hir, body, value_types)
+                .unwrap_or_else(|| ResolvedType::named(WireType::UNRESOLVED, [])),
+        )
+        .map(|return_type| {
+            ResolvedType::function(
+                // An unannotated closure parameter has no proved type:
+                // nothing in the surface syntax, the binding, or the call
+                // contract names one. The reserved unresolved spelling
+                // records that absence explicitly, so MIR lowering and the
+                // typed executable facts report `Unknown` for the position
+                // instead of inventing a nominal type.
+                (0..params.len()).map(|_| ResolvedType::named(WireType::UNRESOLVED, [])),
+                (0..params.len()).map(|_| None),
+                Some(return_type),
+                TypeQualifiers {
+                    noescape: true,
+                    ..TypeQualifiers::default()
+                },
+            )
+        }),
         Expr::Match { .. } => infer_hir_expr_type(hir, expr, value_types),
         Expr::ObjectLiteral { .. } | Expr::MapLiteral { .. } | Expr::ArrayLiteral { .. } => {
             infer_hir_expr_type(hir, expr, value_types)

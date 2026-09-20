@@ -137,6 +137,29 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
         Ok(destination)
     }
 
+    /// Lower a fixed-arity builtin's operands in evaluation order.
+    ///
+    /// Every closure-taking combinator has the same shape: a receiver value and
+    /// one or more callback values, each an ordinary expression. Sharing the
+    /// arity check and the evaluation-order sort keeps each combinator's case
+    /// to the instruction it emits, and keeps the arity contract in one place.
+    pub(super) fn lower_builtin_operands<const N: usize>(
+        &mut self,
+        args: &[checked::HirCallArg],
+        construct: &'static str,
+    ) -> Result<[ValueId; N], MirLoweringError> {
+        if args.len() != N {
+            return self.unsupported(construct);
+        }
+        let mut ordered = args.iter().collect::<Vec<_>>();
+        ordered.sort_by_key(|argument| argument.evaluation_index);
+        let mut operands = [ValueId::new(0); N];
+        for (slot, argument) in operands.iter_mut().zip(ordered) {
+            *slot = self.lower_expression(&argument.value)?;
+        }
+        Ok(operands)
+    }
+
     /// A mutating builtin must carry the checked mutable place directly. This
     /// is intentionally narrower than general mutable argument lowering: each
     /// new in-place MIR operation decides its own runtime contract instead of

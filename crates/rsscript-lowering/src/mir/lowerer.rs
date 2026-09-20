@@ -1067,6 +1067,83 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                     self.emit(MirInstruction::Retain { place });
                 }
             }
+            // The closure-taking list and set combinators. Each one's callback
+            // is an ordinary value argument — an inline `|x| { ... }` is
+            // already a `MakeClosure`, and a named function reaches lowering
+            // desugared into one — so the callback needs no special treatment
+            // beyond being lowered like any other operand. Only the receiver
+            // differs: `sort_with` mutates in place and takes a place.
+            "map" if signature.namespace.as_deref() == Some("List") => {
+                let [list, mapper] = self.lower_builtin_operands::<2>(
+                    args,
+                    "List.map with invalid checked call shape",
+                )?;
+                self.emit(MirInstruction::ListMap {
+                    destination,
+                    list,
+                    mapper,
+                });
+            }
+            "filter" if signature.namespace.as_deref() == Some("List") => {
+                let [list, predicate] = self.lower_builtin_operands::<2>(
+                    args,
+                    "List.filter with invalid checked call shape",
+                )?;
+                self.emit(MirInstruction::ListFilter {
+                    destination,
+                    list,
+                    predicate,
+                });
+            }
+            "fold" if signature.namespace.as_deref() == Some("List") => {
+                let [list, state, folder] = self.lower_builtin_operands::<3>(
+                    args,
+                    "List.fold with invalid checked call shape",
+                )?;
+                self.emit(MirInstruction::ListFold {
+                    destination,
+                    list,
+                    state,
+                    folder,
+                });
+            }
+            "sort_by" if signature.namespace.as_deref() == Some("List") => {
+                let [list, key, compare] = self.lower_builtin_operands::<3>(
+                    args,
+                    "List.sort_by with invalid checked call shape",
+                )?;
+                self.emit(MirInstruction::ListSortBy {
+                    destination,
+                    list,
+                    key,
+                    compare,
+                });
+            }
+            "sort_with" if signature.namespace.as_deref() == Some("List") => {
+                if args.len() != 2 {
+                    return self.unsupported("List.sort_with with invalid checked call shape");
+                }
+                let mut ordered = args.iter().collect::<Vec<_>>();
+                ordered.sort_by_key(|argument| argument.evaluation_index);
+                let list = self.lower_mutable_builtin_place(&ordered[0].value)?;
+                let compare = self.lower_expression(&ordered[1].value)?;
+                self.emit(MirInstruction::ListSortWith {
+                    destination,
+                    list,
+                    compare,
+                });
+            }
+            "for_each" if signature.namespace.as_deref() == Some("Set") => {
+                let [set, callback] = self.lower_builtin_operands::<2>(
+                    args,
+                    "Set.for_each with invalid checked call shape",
+                )?;
+                self.emit(MirInstruction::SetForEach {
+                    destination,
+                    set,
+                    callback,
+                });
+            }
             "remove_at" if signature.namespace.as_deref() == Some("List") => {
                 if args.len() != 2 {
                     return self.unsupported("List.remove_at with invalid checked call shape");

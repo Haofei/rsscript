@@ -1922,6 +1922,116 @@ fn main() -> Int {
     }
 }
 
+/// Core combinators called with an inline closure build, verify, and run.
+///
+/// Two distinct failures met here, and both let a program check clean and then
+/// die later.
+///
+/// The first was inference. A combinator's callback contract is
+/// `noescape Fn(T) -> U`, and nothing bound the closure's parameter to the `T`
+/// the receiver had already proved — so `|x| { return x * 2 }` had no inferable
+/// body, and the `return` arm fell back to `Unit`. `U` was therefore unified
+/// against a type the checker had not proved at all: `List.map` over
+/// `List<Int>` produced `List<Unit>`, and `Option.and_then` left `U`
+/// unresolved, so the *caller's* next line was rejected for a mismatch it did
+/// not cause.
+///
+/// The second was lowering. `List.map`, `List.filter`, `List.fold`,
+/// `List.sort_by`, `List.sort_with` and `Set.for_each` are declared `special`
+/// in the intrinsic catalog, which means the MIR lowerer owns them — and it had
+/// no case for any of them, so every one of these programs reached
+/// "unsupported checked HIR builtin call" after `rss check` reported nothing.
+///
+/// Both classes are covered end to end here rather than at the checker alone.
+#[test]
+fn closure_taking_combinator_programs_verify_and_run() {
+    // `Fn(T) -> U` with a bare type variable in the result position: the shape
+    // that produced `List<Unit>`, plus the list combinators that did not lower.
+    const LIST_COMBINATORS: &str = r#"
+fn main() -> Int {
+    let values: fresh List<Int> = [3, 1, 2]
+    let doubled = List.map(list: values, mapper: |x| { return x * 2 })
+    let kept = List.filter(list: doubled, predicate: |x| { return x > 2 })
+    let total = List.fold(list: kept, initial: 0, folder: |acc, x| { return acc + x })
+    return total
+}
+"#;
+
+    // A mutable receiver: the comparator is an ordinary value operand while the
+    // list stays a mutable place, so `mut` survives lowering.
+    const SORTS: &str = r#"
+fn main() -> Int {
+    let values: fresh List<Int> = [3, 1, 2]
+    let sorted = List.sort_by(list: values, key: |x| { return x }, compare: |a, b| { return a - b })
+    let mut scratch: fresh List<Int> = [3, 1, 2]
+    List.sort_with(list: mut scratch, compare: |a, b| { return b - a })
+    return List.get(list: sorted, index: 0) + List.get(list: scratch, index: 0)
+}
+"#;
+
+    // `Fn(T) -> Option<U>` nested inside another `Option` combinator: `U` is
+    // proved through the container, one level down, for both.
+    const NESTED_OPTION: &str = r#"
+fn main() -> Int {
+    let value: Option<Int> = Some(3)
+    let mapped = Option.and_then(value: value, mapper: |x| {
+        return Option.map(value: Some(x * 2), mapper: |y| { return y + 1 })
+    })
+    return Option.unwrap_or(value: mapped, default: 0)
+}
+"#;
+
+    // The `Result` pair, whose result parameter sits beside a fixed error type.
+    const RESULTS: &str = r#"
+fn main() -> Int {
+    let value: Result<Int, String> = Ok(3)
+    let doubled = Result.map(result: value, mapper: |x| { return x * 2 })
+    let chained = Result.and_then(result: doubled, mapper: |x| { return Ok(x + 1) })
+    return Result.unwrap_or(value: chained, default: 0)
+}
+"#;
+
+    // A callback returning `Unit`, over a set receiver.
+    const SET_FOR_EACH: &str = r#"
+fn main() -> Int {
+    let members = Set.new<Int>()
+    Set.insert(set: mut members, value: 1)
+    Set.insert(set: mut members, value: 2)
+    Set.for_each(set: members, callback: |value| {
+        Output.write(message: String.from_int(value: value))
+    })
+    return Set.len(set: members)
+}
+"#;
+
+    for (file, source, expected) in [
+        ("list-combinators-with-closures.rss", LIST_COMBINATORS, "10"),
+        ("list-sorts-with-closures.rss", SORTS, "4"),
+        ("nested-option-combinators.rss", NESTED_OPTION, "7"),
+        ("result-combinators-with-closures.rss", RESULTS, "7"),
+        ("set-for-each-with-a-closure.rss", SET_FOR_EACH, "2"),
+    ] {
+        let built = Compiler
+            .compile(file, source)
+            .unwrap_or_else(|error| panic!("{file} compiles: {error}"));
+        let admitted = ArtifactVerifier
+            .verify(built)
+            .unwrap_or_else(|error| panic!("{file} verifies: {error}"))
+            .admit_trusted_input();
+        let report = Runtime::default()
+            .link(&admitted)
+            .unwrap_or_else(|error| panic!("{file} links: {error}"))
+            .execute(ExecutionRequest::default());
+
+        assert_eq!(
+            report.termination_reason(),
+            TerminationReason::Completed,
+            "{file} runs to completion"
+        );
+        assert_eq!(report.value(), Some(expected), "{file} result");
+    }
+}
+
 /// Protocol programs build, verify, and run.
 ///
 /// A `protocol` declaration is a contract, not code, but its bodyless methods

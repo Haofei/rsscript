@@ -444,6 +444,82 @@ fn lower_instruction(
                 ("index", json!(value_reg(function, *index))),
             ],
         )),
+        MirInstruction::ListMap {
+            destination,
+            list,
+            mapper,
+        } => code.push(instr(
+            "ListMap",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("list", json!(value_reg(function, *list))),
+                ("mapper", json!(value_reg(function, *mapper))),
+            ],
+        )),
+        MirInstruction::ListFilter {
+            destination,
+            list,
+            predicate,
+        } => code.push(instr(
+            "ListFilter",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("list", json!(value_reg(function, *list))),
+                ("predicate", json!(value_reg(function, *predicate))),
+            ],
+        )),
+        MirInstruction::ListFold {
+            destination,
+            list,
+            state,
+            folder,
+        } => code.push(instr(
+            "ListFold",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("list", json!(value_reg(function, *list))),
+                ("state", json!(value_reg(function, *state))),
+                ("folder", json!(value_reg(function, *folder))),
+            ],
+        )),
+        MirInstruction::ListSortBy {
+            destination,
+            list,
+            key,
+            compare,
+        } => code.push(instr(
+            "ListSortBy",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("list", json!(value_reg(function, *list))),
+                ("key", json!(value_reg(function, *key))),
+                ("compare", json!(value_reg(function, *compare))),
+            ],
+        )),
+        MirInstruction::ListSortWith {
+            destination,
+            list,
+            compare,
+        } => code.push(instr(
+            "ListSortWith",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("list", json!(place_reg(*list))),
+                ("compare", json!(value_reg(function, *compare))),
+            ],
+        )),
+        MirInstruction::SetForEach {
+            destination,
+            set,
+            callback,
+        } => code.push(instr(
+            "SetForEach",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("set", json!(value_reg(function, *set))),
+                ("callback", json!(value_reg(function, *callback))),
+            ],
+        )),
         MirInstruction::ListAppend {
             destination,
             list,

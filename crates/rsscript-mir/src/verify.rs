@@ -504,6 +504,12 @@ pub(super) fn instruction_definitions(instruction: &MirInstruction) -> Vec<Value
         | MirInstruction::ListClear { destination, .. }
         | MirInstruction::ListPop { destination, .. }
         | MirInstruction::ListPush { destination, .. }
+        | MirInstruction::ListMap { destination, .. }
+        | MirInstruction::ListFilter { destination, .. }
+        | MirInstruction::ListFold { destination, .. }
+        | MirInstruction::ListSortBy { destination, .. }
+        | MirInstruction::ListSortWith { destination, .. }
+        | MirInstruction::SetForEach { destination, .. }
         | MirInstruction::ListRemoveAt { destination, .. }
         | MirInstruction::ListSet { destination, .. }
         | MirInstruction::SetClear { destination, .. }
@@ -579,6 +585,24 @@ pub(super) fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
         MirInstruction::MakeOption { value, .. } => value.iter().copied().collect(),
         MirInstruction::UnwrapOption { source, .. } => vec![*source],
         MirInstruction::ListGet { list, index, .. } => vec![*list, *index],
+        // Every combinator operand is an ordinary value register: the receiver
+        // and the callback closure(s). `ListSortWith` holds its receiver as a
+        // mutable place, so only the comparator appears here.
+        MirInstruction::ListMap { list, mapper, .. } => vec![*list, *mapper],
+        MirInstruction::ListFilter {
+            list, predicate, ..
+        } => vec![*list, *predicate],
+        MirInstruction::ListFold {
+            list,
+            state,
+            folder,
+            ..
+        } => vec![*list, *state, *folder],
+        MirInstruction::ListSortBy {
+            list, key, compare, ..
+        } => vec![*list, *key, *compare],
+        MirInstruction::ListSortWith { compare, .. } => vec![*compare],
+        MirInstruction::SetForEach { set, callback, .. } => vec![*set, *callback],
         MirInstruction::ListAppend { values, .. }
         | MirInstruction::ListPush { value: values, .. } => {
             vec![*values]
@@ -805,7 +829,13 @@ pub(super) fn transfer_move_state(
         | MirInstruction::ListPop { list, .. }
         | MirInstruction::ListPush { list, .. }
         | MirInstruction::ListRemoveAt { list, .. }
-        | MirInstruction::ListSet { list, .. } => check_live(*list, moved_places),
+        | MirInstruction::ListSet { list, .. }
+        | MirInstruction::ListSortWith { list, .. } => check_live(*list, moved_places),
+        MirInstruction::ListMap { .. }
+        | MirInstruction::ListFilter { .. }
+        | MirInstruction::ListFold { .. }
+        | MirInstruction::ListSortBy { .. }
+        | MirInstruction::SetForEach { .. } => Ok(()),
         MirInstruction::SetClear { set, .. }
         | MirInstruction::SetInsert { set, .. }
         | MirInstruction::SetRemove { set, .. } => check_live(*set, moved_places),
@@ -1000,6 +1030,60 @@ pub(super) fn verify_instruction(
             check_live_place(*list, moved_places)?;
             define(*destination, defined)?;
             used.push(*value);
+            Ok(())
+        }
+        MirInstruction::ListSortWith {
+            destination,
+            list,
+            compare,
+        } => {
+            check_live_place(*list, moved_places)?;
+            define(*destination, defined)?;
+            used.push(*compare);
+            Ok(())
+        }
+        MirInstruction::ListMap {
+            destination,
+            list: receiver,
+            mapper: callback,
+        }
+        | MirInstruction::ListFilter {
+            destination,
+            list: receiver,
+            predicate: callback,
+        }
+        | MirInstruction::SetForEach {
+            destination,
+            set: receiver,
+            callback,
+        } => {
+            define(*destination, defined)?;
+            used.push(*receiver);
+            used.push(*callback);
+            Ok(())
+        }
+        MirInstruction::ListFold {
+            destination,
+            list,
+            state,
+            folder,
+        } => {
+            define(*destination, defined)?;
+            used.push(*list);
+            used.push(*state);
+            used.push(*folder);
+            Ok(())
+        }
+        MirInstruction::ListSortBy {
+            destination,
+            list,
+            key,
+            compare,
+        } => {
+            define(*destination, defined)?;
+            used.push(*list);
+            used.push(*key);
+            used.push(*compare);
             Ok(())
         }
         MirInstruction::ListRemoveAt {

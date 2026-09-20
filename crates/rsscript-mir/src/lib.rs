@@ -211,6 +211,48 @@ pub enum MirInstruction {
         list: ValueId,
         index: ValueId,
     },
+    /// Apply a callback to every element of a resolved list value, producing a
+    /// fresh list. The closure operand is an ordinary value register, so the
+    /// callback's own ABI is the `MakeClosure` contract the verifier already
+    /// checks; this instruction adds only the iteration.
+    ListMap {
+        destination: ValueId,
+        list: ValueId,
+        mapper: ValueId,
+    },
+    /// Keep the elements of a resolved list value for which the predicate
+    /// closure answers true, producing a fresh list.
+    ListFilter {
+        destination: ValueId,
+        list: ValueId,
+        predicate: ValueId,
+    },
+    /// Thread an accumulator through every element of a resolved list value.
+    ListFold {
+        destination: ValueId,
+        list: ValueId,
+        state: ValueId,
+        folder: ValueId,
+    },
+    /// Sort a resolved list value by a derived key, producing a fresh list.
+    ListSortBy {
+        destination: ValueId,
+        list: ValueId,
+        key: ValueId,
+        compare: ValueId,
+    },
+    /// Sort a resolved mutable list place in place with a comparator closure.
+    ListSortWith {
+        destination: ValueId,
+        list: PlaceId,
+        compare: ValueId,
+    },
+    /// Apply a callback to every member of a resolved set value.
+    SetForEach {
+        destination: ValueId,
+        set: ValueId,
+        callback: ValueId,
+    },
     /// Append an owned list of values to a resolved mutable list place.
     ListAppend {
         destination: ValueId,

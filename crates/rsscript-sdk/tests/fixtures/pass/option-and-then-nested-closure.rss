@@ -1,0 +1,15 @@
+// `Option.map` and `Option.and_then` with inline closures. The callback's
+// result type is what proves the combinator's own `U`: without it the call
+// produced `Option<Unit>` and the binding annotation was rejected.
+
+fn double_if_small(value: Int) -> Option<Int> {
+    return Option.and_then(value: Some(value), mapper: |x| {
+        return Option.map(value: Some(x * 2), mapper: |y| { return y + 1 })
+    })
+}
+
+fn main() -> Int {
+    let nested = double_if_small(value: 3)
+    let filtered = Option.filter(value: nested, predicate: |x| { return x > 1 })
+    return Option.unwrap_or(value: filtered, default: 0)
+}

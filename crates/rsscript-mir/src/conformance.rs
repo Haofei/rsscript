@@ -1061,7 +1061,17 @@ impl<'a> Interpreter<'a> {
                         }
                         values[destination.index()] = Some(outcome.value);
                     }
-                    MirInstruction::MakeClosure { .. } | MirInstruction::CallClosure { .. } => {
+                    // Every closure-taking combinator enters a callback body,
+                    // which this oracle does not execute for the same reason it
+                    // declines `CallClosure`.
+                    MirInstruction::MakeClosure { .. }
+                    | MirInstruction::CallClosure { .. }
+                    | MirInstruction::ListMap { .. }
+                    | MirInstruction::ListFilter { .. }
+                    | MirInstruction::ListFold { .. }
+                    | MirInstruction::ListSortBy { .. }
+                    | MirInstruction::ListSortWith { .. }
+                    | MirInstruction::SetForEach { .. } => {
                         return Err(MirExecutionError::UnsupportedClosure);
                     }
                     MirInstruction::Discard { value } => {

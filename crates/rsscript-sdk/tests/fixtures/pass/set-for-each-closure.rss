@@ -1,0 +1,11 @@
+// `Set.for_each` with an inline callback.
+
+fn main() -> Int {
+    let members = Set.new<Int>()
+    Set.insert(set: mut members, value: 1)
+    Set.insert(set: mut members, value: 2)
+    Set.for_each(set: members, callback: |value| {
+        Output.write(message: String.from_int(value: value))
+    })
+    return Set.len(set: members)
+}
