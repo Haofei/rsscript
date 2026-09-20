@@ -1818,37 +1818,37 @@ pub(super) fn is_noescape_fn_type(type_name: &str) -> bool {
     type_name.trim().starts_with("noescape ") && is_fn_type(type_name)
 }
 
-pub(super) fn is_fn_type(type_name: &str) -> bool {
+/// The text after `Fn(` in a function type, with any leading qualifier removed.
+fn fn_type_body(type_name: &str) -> Option<&str> {
     let type_name = type_name.trim();
     type_name
         .strip_prefix("noescape ")
         .or_else(|| type_name.strip_prefix("owned "))
         .unwrap_or(type_name)
         .strip_prefix("Fn(")
-        .and_then(|rest| rest.split_once(')'))
+}
+
+pub(super) fn is_fn_type(type_name: &str) -> bool {
+    fn_type_body(type_name)
+        .and_then(crate::type_compatibility::split_function_type_body)
         .is_some()
 }
 
 pub(super) fn fn_return_type(type_name: &str) -> Option<&str> {
-    let type_name = type_name.trim();
-    type_name
-        .strip_prefix("noescape ")
-        .or_else(|| type_name.strip_prefix("owned "))
-        .unwrap_or(type_name)
-        .strip_prefix("Fn(")
-        .and_then(|rest| rest.split_once(')'))
+    fn_type_body(type_name)
+        .and_then(crate::type_compatibility::split_function_type_body)
         .and_then(|(_, rest)| rest.trim_start().strip_prefix("->"))
         .map(str::trim)
 }
 
 pub(super) fn fn_param_types(type_name: &str) -> Vec<&str> {
-    let type_name = type_name.trim();
-    let Some(params) = type_name
-        .strip_prefix("noescape ")
-        .or_else(|| type_name.strip_prefix("owned "))
-        .unwrap_or(type_name)
-        .strip_prefix("Fn(")
-        .and_then(|rest| rest.split_once(')').map(|(params, _)| params.trim()))
+    // The parameter list ends at the parenthesis that *closes* it, not at the
+    // first one in the string: a callback whose own parameter is a function
+    // type used to report an expected type of `Fn(read Int` and an arity one
+    // short, because the list was cut at the inner `)`.
+    let Some(params) = fn_type_body(type_name)
+        .and_then(crate::type_compatibility::split_function_type_body)
+        .map(|(params, _)| params.trim())
     else {
         return Vec::new();
     };

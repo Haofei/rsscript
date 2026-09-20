@@ -148,16 +148,45 @@ fn function_body(type_name: &str) -> Option<&str> {
         .strip_prefix("Fn(")
 }
 
+/// Split the text after `Fn(` at the parenthesis that actually closes the
+/// parameter list, into `(parameters, everything after the `)`)`.
+///
+/// `str::split_once(')')` stops at the *first* `)`, which is the wrong one as
+/// soon as a parameter is itself a function type: for
+/// `Fn(read Fn(read Int) -> Int, read Int) -> Int` it cuts the list at
+/// `read Fn(read Int`. Every consumer then counted, compared and — worst —
+/// *rendered* that fragment, so `RS0207` reported an expected type of
+/// `Fn(read Int` and a parameter count of one for a two-parameter callback.
+///
+/// The `>` of an arrow closes nothing, so it is skipped rather than treated as
+/// the end of a generic argument list.
+pub(crate) fn split_function_type_body(body: &str) -> Option<(&str, &str)> {
+    let bytes = body.as_bytes();
+    let mut depth = 0usize;
+    for (index, character) in body.char_indices() {
+        match character {
+            '(' | '<' => depth += 1,
+            '>' if index > 0 && bytes[index - 1] == b'-' => {}
+            '>' => depth = depth.saturating_sub(1),
+            ')' if depth == 0 => return Some((&body[..index], &body[index + 1..])),
+            ')' => depth -= 1,
+            _ => {}
+        }
+    }
+    None
+}
+
 fn function_return_type(type_name: &str) -> Option<&str> {
     function_body(type_name)
-        .and_then(|body| body.split_once(')'))
+        .and_then(split_function_type_body)
         .and_then(|(_, rest)| rest.trim_start().strip_prefix("->"))
         .map(str::trim)
 }
 
 fn function_parameter_types(type_name: &str) -> Vec<&str> {
     let Some(params) = function_body(type_name)
-        .and_then(|body| body.split_once(')').map(|(params, _)| params.trim()))
+        .and_then(split_function_type_body)
+        .map(|(params, _)| params.trim())
     else {
         return Vec::new();
     };
@@ -276,6 +305,39 @@ pub fn argument_payload_type_mismatch_diagnostic(
     )
 }
 
+/// A mechanical, safe repair for one `RS0207` argument.
+///
+/// Measured on 2026-09-19: `RS0207` is the one class haiku's repair loop
+/// *introduces* more often than it clears — five against one — and the reason
+/// is the shape this report named for every other class: a diagnostic that
+/// names the expected type and no replacement is the shape that persists.
+/// Every variant here is a case where the replacement is derivable from facts
+/// the checker already has; anything else keeps the advisory fix it always had.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArgumentTypeRepair {
+    /// The argument is a `Result<T, E>` or `Option<T>` where `T` is wanted, and
+    /// the enclosing function can propagate the failure case under the `RS0013`
+    /// rules. Appending `?` is the whole edit.
+    PropagateWithTry {
+        /// The argument expression, whose end is where `?` goes.
+        operand: Span,
+        /// `Result` or `Option`, for the help line.
+        container: &'static str,
+    },
+    /// An `Int` literal where a `Float` is wanted. `7` becomes `7.0`.
+    IntLiteralToFloat {
+        /// The literal's own span, replaced wholesale.
+        literal: Span,
+        /// The literal exactly as written.
+        text: String,
+    },
+    /// A `String` literal where an `Int` is wanted. There is deliberately no
+    /// edit: `"12"` and `"twelve"` are the same shape here and only one of them
+    /// has a value, so the repair is a parse whose failure case the caller has
+    /// to handle. Naming the function is as far as this can safely go.
+    ParseStringLiteral,
+}
+
 pub fn argument_type_mismatch_diagnostic(
     call_name: &str,
     arg_name: &str,
@@ -283,14 +345,57 @@ pub fn argument_type_mismatch_diagnostic(
     expected: &str,
     span: Span,
 ) -> Diagnostic {
-    Diagnostic::error(
+    argument_type_mismatch_diagnostic_with_repair(call_name, arg_name, actual, expected, span, None)
+}
+
+/// `RS0207` with the replacement attached where one is mechanical and safe.
+///
+/// The advisory `match_argument_type` fix is always present and unchanged, so a
+/// consumer that reads only it sees exactly what it saw before. A repair adds a
+/// second, more specific fix in front of it, and only the first two variants of
+/// [`ArgumentTypeRepair`] carry an edit.
+pub fn argument_type_mismatch_diagnostic_with_repair(
+    call_name: &str,
+    arg_name: &str,
+    actual: &str,
+    expected: &str,
+    span: Span,
+    repair: Option<ArgumentTypeRepair>,
+) -> Diagnostic {
+    let diagnostic = Diagnostic::error(
         code::ARGUMENT_TYPE_MISMATCH,
         format!("argument `{arg_name}` for `{call_name}` has type `{actual}`, expected `{expected}`."),
         span,
         "argument type mismatch",
     )
-    .with_cause("RSScript call argument types must match the resolved callee signature before Rust lowering.")
-    .with_fix(
+    .with_cause("RSScript call argument types must match the resolved callee signature before backend lowering.");
+
+    let diagnostic = match repair {
+        Some(ArgumentTypeRepair::PropagateWithTry { operand, container }) => diagnostic
+            .with_cause(format!(
+                "`{arg_name}` is a `{container}` that has not been unwrapped; `?` propagates its failure case out of this function."
+            ))
+            .with_fix_edit(
+                "propagate_with_try",
+                format!("Append `?` to hand the failure case back to the caller and pass the `{expected}`."),
+                FixEdit::insert_after(&operand, "?"),
+            ),
+        Some(ArgumentTypeRepair::IntLiteralToFloat { literal, text }) => diagnostic.with_fix_edit(
+            "widen_int_literal_to_float",
+            format!("Write `{text}.0`: a `Float` parameter takes a float literal."),
+            FixEdit::replace(&literal, format!("{text}.0")),
+        ),
+        Some(ArgumentTypeRepair::ParseStringLiteral) => diagnostic.with_fix(
+            "parse_string_literal",
+            format!(
+                "`String.parse_int(value: ...)` returns `Option<Int>`, not `{expected}`; bind it with `let Some(...) = ... else` or `Option.unwrap_or` before passing `{arg_name}`."
+            ),
+            "manual",
+        ),
+        None => diagnostic,
+    };
+
+    diagnostic.with_fix(
         "match_argument_type",
         format!("Pass a value of type `{expected}` for `{arg_name}`."),
         "manual",
@@ -596,6 +701,120 @@ mod tests {
                 .any(|fix| fix.title == "Did you mean `Report`?"),
             "{:#?}",
             diagnostic.fixes
+        );
+    }
+
+    /// `RS0207` carries the replacement where one is mechanical, and never
+    /// where one is not.
+    ///
+    /// Measured on 2026-09-19: haiku's repair loop introduces `RS0207` five
+    /// times for every one it clears, and `RS0207` was the only large class
+    /// whose fix was `manual` and named no replacement.
+    #[test]
+    fn argument_type_mismatch_carries_a_repair_where_one_is_mechanical() {
+        let advisory = argument_type_mismatch_diagnostic("call", "value", "String", "Int", span());
+        assert_eq!(advisory.fixes.len(), 1);
+        assert_eq!(advisory.fixes[0].kind, "match_argument_type");
+        assert_eq!(advisory.fixes[0].applicability, "manual");
+
+        let propagate = argument_type_mismatch_diagnostic_with_repair(
+            "use_json",
+            "value",
+            "Result<JsonValue, JsonError>",
+            "JsonValue",
+            span(),
+            Some(ArgumentTypeRepair::PropagateWithTry {
+                operand: Span {
+                    file: "types.rss".to_owned(),
+                    line: 3,
+                    column: 20,
+                    length: 7,
+                },
+                container: "Result",
+            }),
+        );
+        let fix = &propagate.fixes[0];
+        assert_eq!(fix.kind, "propagate_with_try");
+        assert_eq!(fix.applicability, "machine-applicable");
+        let edit = fix.edit.as_ref().expect("a machine-applicable edit");
+        assert_eq!(edit.replacement, "?");
+        // A pure insertion immediately after the operand: nothing is removed,
+        // so the argument text itself is untouched.
+        assert_eq!(edit.span.length, 0);
+        assert_eq!(edit.span.column, 27);
+        assert_eq!(edit.span.line, 3);
+        // The advisory fix is still there, unchanged, behind the specific one.
+        assert_eq!(propagate.fixes[1].kind, "match_argument_type");
+
+        let widen = argument_type_mismatch_diagnostic_with_repair(
+            "scale",
+            "ratio",
+            "Int",
+            "Float",
+            span(),
+            Some(ArgumentTypeRepair::IntLiteralToFloat {
+                literal: Span {
+                    file: "types.rss".to_owned(),
+                    line: 1,
+                    column: 9,
+                    length: 1,
+                },
+                text: "7".to_owned(),
+            }),
+        );
+        assert_eq!(widen.fixes[0].kind, "widen_int_literal_to_float");
+        let edit = widen.fixes[0].edit.as_ref().expect("an edit");
+        assert_eq!(edit.replacement, "7.0");
+        assert_eq!(edit.span.length, 1);
+
+        // A `String` literal where an `Int` is wanted is advice on purpose:
+        // `"twelve"` has the same shape as `"12"` and no value, so there is no
+        // edit that is safe to apply unseen.
+        let parse = argument_type_mismatch_diagnostic_with_repair(
+            "count",
+            "value",
+            "String",
+            "Int",
+            span(),
+            Some(ArgumentTypeRepair::ParseStringLiteral),
+        );
+        assert_eq!(parse.fixes[0].kind, "parse_string_literal");
+        assert_eq!(parse.fixes[0].applicability, "manual");
+        assert!(parse.fixes[0].edit.is_none());
+        assert!(parse.fixes[0].title.contains("String.parse_int"));
+    }
+
+    /// A `Fn(...)` parameter list ends at the parenthesis that closes it.
+    ///
+    /// `split_once(')')` cut the list at the first `)`, so a callback whose own
+    /// parameter is a function type was rendered — in the `RS0207` message the
+    /// caller reads — as `Fn(read Int`, and counted as one parameter short.
+    #[test]
+    fn a_function_types_parameter_list_is_split_at_its_own_closing_paren() {
+        assert_eq!(
+            split_function_type_body("read Fn(read Int) -> Int, read Int) -> Int"),
+            Some(("read Fn(read Int) -> Int, read Int", " -> Int"))
+        );
+        // The `>` of an arrow closes nothing, even inside a generic argument.
+        assert_eq!(
+            split_function_type_body("read List<Fn(read Int) -> Int>) -> Bool"),
+            Some(("read List<Fn(read Int) -> Int>", " -> Bool"))
+        );
+        assert_eq!(
+            split_function_type_body("read Map<String, Int>) -> Int"),
+            Some(("read Map<String, Int>", " -> Int"))
+        );
+        assert_eq!(split_function_type_body(") -> Int"), Some(("", " -> Int")));
+        assert_eq!(split_function_type_body("read Int -> Int"), None);
+
+        // The whole point: the rendered types stay whole.
+        assert_eq!(
+            function_parameter_types("noescape Fn(read Fn(read Int) -> Int, read Int) -> Int"),
+            vec!["Fn(read Int) -> Int", "Int"]
+        );
+        assert_eq!(
+            function_return_type("noescape Fn(read Fn(read Int) -> Int, read Int) -> Int"),
+            Some("Int")
         );
     }
 

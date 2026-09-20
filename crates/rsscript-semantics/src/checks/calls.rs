@@ -1302,6 +1302,7 @@ fn check_call_args(
 
     check_argument_types(
         analyzer,
+        function,
         args,
         &call_name,
         signature,
@@ -1319,10 +1320,140 @@ fn check_call_args(
     );
 }
 
+/// The repair for one `RS0207` argument, when the replacement follows from
+/// facts the checker already has.
+///
+/// Three cases, and nothing else. `RS0207` is the class haiku's repair loop
+/// introduces more often than it clears (five against one), and the measured
+/// reason is that it names an expected type and no replacement — the same shape
+/// every other persisting class had before it was given an edit. The rule for
+/// including a case here is that the edit must be derivable and safe; where it
+/// is not, the argument keeps the advisory fix it always had.
+fn argument_type_repair(
+    analyzer: &Analyzer<'_>,
+    function: &FunctionDecl,
+    expected: &str,
+    actual: &str,
+    value: &HirExpr,
+) -> Option<rsscript_semantics::ArgumentTypeRepair> {
+    // Every argument is lowered inside an effect node. Only the `read` wrapper
+    // is transparent for these repairs: `read` is written by omission, so the
+    // inner expression's span is exactly the source the caller wrote, while
+    // `mut x` and `take x` put a keyword in front of it and neither of them is
+    // a position any of these edits belongs in.
+    let value = match value {
+        HirExpr::Effect {
+            effect: crate::hir::ParamEffect::Read,
+            value,
+            ..
+        } => value.as_ref(),
+        other => other,
+    };
+
+    // An `Int` literal where a `Float` is wanted. `7` becomes `7.0`, and the
+    // literal's own span is replaced, so nothing around it moves.
+    if let HirExpr::Number { value: text, span } = value
+        && actual == "Int"
+        && expected == "Float"
+        && !text.contains('.')
+    {
+        return Some(rsscript_semantics::ArgumentTypeRepair::IntLiteralToFloat {
+            literal: span.clone(),
+            text: text.clone(),
+        });
+    }
+
+    // A `String` literal where an `Int` is wanted. `"12"` and `"twelve"` are
+    // the same shape to the checker, so there is no edit — only the name of
+    // the parse and the fact that it is fallible.
+    if matches!(value, HirExpr::String { .. }) && actual == "String" && expected == "Int" {
+        return Some(rsscript_semantics::ArgumentTypeRepair::ParseStringLiteral);
+    }
+
+    // An identifier holding an unhandled `Result`/`Option` where its payload is
+    // wanted. Restricted to an identifier because that is the one expression
+    // whose span is exactly the text `?` must follow; a call's span need not
+    // reach its closing parenthesis, and a `?` placed inside one is worse than
+    // no fix at all.
+    let HirExpr::Ident { span, .. } = value else {
+        return None;
+    };
+    let (container, payload) = try_payload_type(actual)?;
+    if !argument_type_matches(
+        &analyzer.expand_type_alias(strip_fresh_type(expected)),
+        &analyzer.expand_type_alias(strip_fresh_type(payload)),
+    ) {
+        return None;
+    }
+    // The `RS0013` rules, applied in the direction that only ever adds a `?`
+    // the try checker would accept: a `Result` needs a function returning
+    // `Result` with the *same* error type, and an `Option` needs a function
+    // returning `Option`.
+    let return_type = enclosing_return_type(analyzer, function);
+    let context = rsscript_semantics::TryContext::from_return_type(return_type.as_deref());
+    let propagates = match (container, context) {
+        ("Result", rsscript_semantics::TryContext::ResultError(function_error)) => {
+            result_error_type(actual).is_some_and(|error| error == function_error)
+        }
+        ("Option", rsscript_semantics::TryContext::Option) => true,
+        _ => false,
+    };
+    propagates.then(
+        || rsscript_semantics::ArgumentTypeRepair::PropagateWithTry {
+            operand: span.clone(),
+            container,
+        },
+    )
+}
+
+/// The enclosing function's return type with aliases expanded, or `None` when
+/// it names one of the function's own type parameters — the same rule the try
+/// checker uses, so the two cannot disagree about what `?` may propagate.
+fn enclosing_return_type(analyzer: &Analyzer<'_>, function: &FunctionDecl) -> Option<String> {
+    let return_ty = function.return_ty.as_ref()?;
+    let rendered = type_ref_name(return_ty);
+    if function
+        .type_params
+        .iter()
+        .any(|param| param.name == rendered)
+    {
+        return None;
+    }
+    Some(analyzer.expand_type_alias(&rendered))
+}
+
+/// `("Result", "T")` for `Result<T, E>` and `("Option", "T")` for `Option<T>`.
+fn try_payload_type(type_name: &str) -> Option<(&'static str, &str)> {
+    let type_name = strip_fresh_type(type_name.trim());
+    for container in ["Result", "Option"] {
+        if let Some(arguments) = type_name
+            .strip_prefix(container)
+            .and_then(|rest| rest.strip_prefix('<'))
+            .and_then(|rest| rest.strip_suffix('>'))
+        {
+            return split_top_level_type_args(arguments)
+                .first()
+                .map(|payload| (container, payload.trim()));
+        }
+    }
+    None
+}
+
+/// The `E` of a `Result<T, E>`.
+fn result_error_type(type_name: &str) -> Option<&str> {
+    let arguments = strip_fresh_type(type_name.trim())
+        .strip_prefix("Result<")
+        .and_then(|rest| rest.strip_suffix('>'))?;
+    split_top_level_type_args(arguments)
+        .get(1)
+        .map(|error| error.trim())
+}
+
 /// Phase 4: check each argument's type against the resolved signature parameter
 /// (after type-parameter substitution).
 fn check_argument_types(
     analyzer: &mut Analyzer<'_>,
+    function: &FunctionDecl,
     args: &[HirCallArg],
     call_name: &str,
     signature: &FunctionSig,
@@ -1386,15 +1517,18 @@ fn check_argument_types(
             &analyzer.expand_type_alias(&expected_type),
             &analyzer.expand_type_alias(actual_type),
         ) {
-            analyzer
-                .diagnostics
-                .push(rsscript_semantics::argument_type_mismatch_diagnostic(
+            let repair =
+                argument_type_repair(analyzer, function, &expected_type, actual_type, &arg.value);
+            analyzer.diagnostics.push(
+                rsscript_semantics::argument_type_mismatch_diagnostic_with_repair(
                     call_name,
                     name,
                     actual_type,
                     &expected_type,
                     hir_expr_span(&arg.value).clone(),
-                ));
+                    repair,
+                ),
+            );
         }
     }
 }

@@ -164,6 +164,21 @@ impl FixEdit {
         }
     }
 
+    /// Insert `text` immediately after the end of `span` (no characters
+    /// removed). Used for a postfix repair such as appending `?` to an
+    /// unhandled `Result` argument.
+    pub fn insert_after(span: &Span, text: impl Into<String>) -> Self {
+        Self {
+            span: Span {
+                file: span.file.clone(),
+                line: span.line,
+                column: span.column + span.length,
+                length: 0,
+            },
+            replacement: text.into(),
+        }
+    }
+
     /// Replace the exact characters covered by `span` with `text`.
     pub fn replace(span: &Span, text: impl Into<String>) -> Self {
         Self {
@@ -570,7 +585,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::ARGUMENT_TYPE_MISMATCH,
         title: "argument type mismatch",
-        explanation: "When both sides are known, a call argument's expression type must match the resolved parameter type, and a binding initializer must match its explicit binding type. For `noescape Fn(...) -> T` parameters, the callback arity, callback call arguments, callback body call arguments, and known return expression must match the function type. The check belongs to the semantic frontend and runs before any backend lowering, so the mismatch is reported against the RSScript source rather than surfacing from a generated program.",
+        explanation: "When both sides are known, a call argument's expression type must match the resolved parameter type, and a binding initializer must match its explicit binding type. For `noescape Fn(...) -> T` parameters, the callback arity, callback call arguments, callback body call arguments, and known return expression must match the function type. The check belongs to the semantic frontend and runs before any backend lowering, so the mismatch is reported against the RSScript source rather than surfacing from a generated program. Three argument shapes carry a more specific repair on the instance: an identifier holding an unhandled `Result<T, E>` or `Option<T>` where `T` is wanted gets a machine-applicable `?` when the enclosing function can propagate the failure under the `RS0013` rules; an `Int` literal where a `Float` is wanted gets a machine-applicable `.0`; and a `String` literal where an `Int` is wanted gets advice naming `String.parse_int`, with no edit, because the literal's text may not be a number at all.",
     },
     DiagnosticExplanation {
         code: code::RETURN_TYPE_MISMATCH,

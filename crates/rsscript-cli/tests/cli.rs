@@ -269,6 +269,97 @@ fn fix_write_resolves_missing_data_effects_to_a_clean_check() {
     );
 }
 
+/// `RS0207` now carries an edit for the two argument shapes whose repair is
+/// mechanical, and withholds one for the shape whose repair is a guess.
+///
+/// Measured on 2026-09-19: haiku's repair loop introduces `RS0207` five times
+/// for every one it clears, and `RS0207` was the only large class whose fix was
+/// `manual` and named no replacement — by this report's own rule, the shape
+/// that persists.
+#[test]
+fn fix_json_carries_argument_type_repairs_and_withholds_the_unsafe_one() {
+    let bin = env!("CARGO_BIN_EXE_rss");
+    let temp = tempfile::tempdir().expect("temp dir should be creatable");
+    let file = temp.path().join("argument-types.rss");
+    fs::write(
+        &file,
+        concat!(
+            "fn use_int(value: Int) -> Int {\n",
+            "    return value\n",
+            "}\n",
+            "\n",
+            "fn scale(ratio: Float) -> Float {\n",
+            "    return ratio\n",
+            "}\n",
+            "\n",
+            "fn propagates(text: String) -> Option<Int> {\n",
+            "    let parsed = String.parse_int(value: text)\n",
+            "    return Some(use_int(value: parsed))\n",
+            "}\n",
+            "\n",
+            "fn widens() -> Float {\n",
+            "    return scale(ratio: 7)\n",
+            "}\n",
+            "\n",
+            "fn parses() -> Int {\n",
+            "    return use_int(value: \"12\")\n",
+            "}\n",
+        ),
+    )
+    .expect("fixture should write");
+    let path = file.to_str().expect("path is utf-8");
+
+    let json_out = Command::new(bin)
+        .args(["fix", "--json", path])
+        .output()
+        .expect("rss fix --json runs");
+    let report: serde_json::Value =
+        serde_json::from_slice(&json_out.stdout).expect("fix emits JSON");
+    let applied = report["applied"].as_array().expect("applied array");
+    assert_eq!(applied.len(), 2, "{report}");
+    assert!(
+        applied
+            .iter()
+            .all(|entry| entry["code"] == "RS0207" && entry["replacement"].is_string()),
+        "{report}"
+    );
+    let replacements = applied
+        .iter()
+        .filter_map(|entry| entry["replacement"].as_str())
+        .collect::<Vec<_>>();
+    assert!(replacements.contains(&"?"), "{report}");
+    assert!(replacements.contains(&"7.0"), "{report}");
+
+    let write = Command::new(bin)
+        .args(["fix", "--write", path])
+        .output()
+        .expect("rss fix --write runs");
+    assert!(
+        write.status.success(),
+        "fix --write failed: {}",
+        String::from_utf8_lossy(&write.stderr)
+    );
+    let fixed = fs::read_to_string(&file).unwrap();
+    assert!(
+        fixed.contains("return Some(use_int(value: parsed?))"),
+        "fixed source:\n{fixed}"
+    );
+    assert!(
+        fixed.contains("scale(ratio: 7.0)"),
+        "fixed source:\n{fixed}"
+    );
+    // The `String` literal is untouched on purpose: `"twelve"` has the same
+    // shape and no value, so the repair is a fallible parse the caller has to
+    // write.
+    assert!(
+        fixed.contains("use_int(value: \"12\")"),
+        "fixed source:\n{fixed}"
+    );
+
+    let codes = check_diagnostic_codes(&fixed);
+    assert_eq!(codes, vec!["RS0207".to_owned()], "fixed source:\n{fixed}");
+}
+
 /// A call site that already spells an effect, but the wrong one, must be
 /// *rewritten* rather than prefixed.
 ///

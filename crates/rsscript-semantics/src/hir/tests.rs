@@ -849,6 +849,122 @@ fn check(a: Int, b: Int) -> Unit {
     );
 }
 
+/// The three `RS0207` shapes whose repair is mechanical, checked end to end
+/// through the analyzer rather than through the diagnostic constructor.
+///
+/// Measured on 2026-09-19: `RS0207` is the one class haiku's repair loop
+/// introduces more often than it clears (five against one), and it was the
+/// only large class whose fix named no replacement.
+#[test]
+fn argument_type_mismatches_carry_the_edit_the_checker_can_derive() {
+    let source = r#"
+fn use_int(value: Int) -> Int {
+    return value
+}
+
+fn scale(ratio: Float) -> Float {
+    return ratio
+}
+
+fn propagates(text: String) -> Option<Int> {
+    let parsed = String.parse_int(value: text)
+    return Some(use_int(value: parsed))
+}
+
+fn widens() -> Float {
+    return scale(ratio: 7)
+}
+
+fn parses() -> Int {
+    return use_int(value: "12")
+}
+"#;
+    let diagnostics = analyze_source("argument-repair.rss", source);
+    let mismatches = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == code::ARGUMENT_TYPE_MISMATCH)
+        .collect::<Vec<_>>();
+    assert_eq!(mismatches.len(), 3, "{diagnostics:#?}");
+
+    let fix = |kind: &str| {
+        mismatches
+            .iter()
+            .flat_map(|diagnostic| diagnostic.fixes.iter())
+            .find(|fix| fix.kind == kind)
+            .unwrap_or_else(|| panic!("no `{kind}` fix in {mismatches:#?}"))
+    };
+
+    // An `Option<Int>` where an `Int` is wanted, in a function returning
+    // `Option<Int>`: `?` is the whole edit, inserted after the identifier.
+    let propagate = fix("propagate_with_try");
+    assert_eq!(propagate.applicability, "machine-applicable");
+    let edit = propagate.edit.as_ref().expect("an edit");
+    assert_eq!(edit.replacement, "?");
+    assert_eq!(edit.span.length, 0);
+
+    // An `Int` literal where a `Float` is wanted.
+    let widen = fix("widen_int_literal_to_float");
+    assert_eq!(widen.applicability, "machine-applicable");
+    assert_eq!(
+        widen.edit.as_ref().map(|edit| edit.replacement.as_str()),
+        Some("7.0")
+    );
+
+    // A `String` literal where an `Int` is wanted stays advice: the literal's
+    // text may not be a number, so no edit is safe to apply unseen.
+    let parse = fix("parse_string_literal");
+    assert_eq!(parse.applicability, "manual");
+    assert!(parse.edit.is_none());
+
+    // Every mismatch still carries the advisory fix it always had.
+    for mismatch in &mismatches {
+        assert!(
+            mismatch
+                .fixes
+                .iter()
+                .any(|fix| fix.kind == "match_argument_type"),
+            "{mismatch:#?}"
+        );
+    }
+}
+
+/// `?` is offered only where the try checker would accept it. A function that
+/// returns neither `Result` nor `Option` cannot propagate a failure, and a
+/// `Result` whose error type differs from the enclosing function's would trade
+/// `RS0207` for `RS0013`.
+#[test]
+fn a_try_repair_is_withheld_where_the_function_cannot_propagate() {
+    let source = r#"
+fn use_int(value: Int) -> Int {
+    return value
+}
+
+fn no_target(text: String) -> Int {
+    let parsed = String.parse_int(value: text)
+    return use_int(value: parsed)
+}
+"#;
+    let diagnostics = analyze_source("argument-repair-withheld.rss", source);
+    let mismatch = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == code::ARGUMENT_TYPE_MISMATCH)
+        .unwrap_or_else(|| panic!("{diagnostics:#?}"));
+    assert!(
+        mismatch
+            .fixes
+            .iter()
+            .all(|fix| fix.kind != "propagate_with_try"),
+        "{mismatch:#?}"
+    );
+    assert!(
+        mismatch
+            .fixes
+            .iter()
+            .any(|fix| fix.kind == "match_argument_type"),
+        "{mismatch:#?}"
+    );
+}
+
 #[test]
 fn classifies_fresh_return_facts() {
     let source = r#"
