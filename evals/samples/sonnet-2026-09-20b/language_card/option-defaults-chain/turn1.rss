@@ -1,0 +1,72 @@
+struct Settings {
+    region: String
+    retries: Int
+}
+
+fn same_text(left: read String, right: read String) -> Bool {
+    if String.len(value: left) != String.len(value: right) {
+        return false
+    }
+    return String.starts_with(value: left, prefix: right)
+}
+
+fn lookup(keys: read List<String>, values: read List<String>, key: read String) -> Option<String> {
+    let limit = Math.min(left: List.len(list: keys), right: List.len(list: values))
+    let mut index = 0
+    while index < limit {
+        let candidate = List.get(list: keys, index: index)
+        if same_text(left: candidate, right: key) {
+            return Some(List.get(list: values, index: index))
+        }
+        index = index + 1
+    }
+    return None
+}
+
+fn region_from(keys: read List<String>, values: read List<String>) -> fresh String {
+    match lookup(keys: keys, values: values, key: "region") {
+        Some(value) => {
+            return String.copy(value: value)
+        }
+        None => {
+            return String.copy(value: "us-east")
+        }
+    }
+}
+
+fn retries_from(keys: read List<String>, values: read List<String>) -> Int {
+    match lookup(keys: keys, values: values, key: "retries") {
+        Some(text) => {
+            match String.parse_int(value: text) {
+                Some(count) => {
+                    return count
+                }
+                None => {
+                    return 3
+                }
+            }
+        }
+        None => {
+            return 3
+        }
+    }
+}
+
+fn settings_from(keys: read List<String>, values: read List<String>) -> fresh Settings {
+    local region = region_from(keys: keys, values: values)
+    let retries = retries_from(keys: keys, values: values)
+    return Settings(region: take region, retries: retries)
+}
+
+fn main() -> Unit {
+    local keys = List.new<String>()
+    local values = List.new<String>()
+    List.push(list: mut keys, value: "region")
+    List.push(list: mut values, value: "eu-west")
+    List.push(list: mut keys, value: "retries")
+    List.push(list: mut values, value: "many")
+    let settings = settings_from(keys: keys, values: values)
+    Output.write(message: String.concat(left: "region: ", right: settings.region))
+    Output.write(message: String.concat(left: "retries: ", right: String.from_int(value: settings.retries)))
+    return Unit
+}

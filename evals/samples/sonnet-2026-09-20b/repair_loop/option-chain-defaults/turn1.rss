@@ -1,0 +1,30 @@
+struct Window {
+    start: Int
+    width: Int
+}
+
+fn field_of(line: read String, delimiter: read String) -> Option<String> {
+    return String.after(value: line, delimiter: delimiter)
+}
+
+fn parsed_field(line: read String, delimiter: read String) -> Option<Int> {
+    return Option.and_then(value: field_of(line: line, delimiter: delimiter), mapper: |text| {
+        return String.parse_int(value: text)
+    })
+}
+
+fn window_from(line: read String) -> fresh Window {
+    let start = Option.unwrap_or(value: parsed_field(line: line, delimiter: "start="), default: 0)
+    let positive = Option.filter(value: parsed_field(line: line, delimiter: "width="), predicate: |candidate| {
+        return candidate > 0
+    })
+    let width = Option.unwrap_or(value: positive, default: 60)
+    return Window(start: start, width: width)
+}
+
+fn main() -> Unit {
+    let window = window_from(line: "width=30")
+    Output.write(message: String.concat(left: "start=", right: String.from_int(value: window.start)))
+    Output.write(message: String.concat(left: "width=", right: String.from_int(value: window.width)))
+    return Unit
+}

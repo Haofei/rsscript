@@ -1,0 +1,34 @@
+fn apply_settings(device: read String, settings: read List<String>, value: Int) -> Result<Int, String> {
+    let mut version = 0
+    with DeviceSession.open(device: device)? as session {
+        for setting in settings {
+            match DeviceSession.apply(session: mut session, setting: setting, value: value) {
+                Ok(_) => {
+                }
+                Err(error) => {
+                    Audit.note(event: String.concat(left: "aborted setting ", right: setting))
+                    return Err(error)
+                }
+            }
+        }
+        let committed = DeviceSession.commit(session: mut session)?
+        Audit.note(event: String.concat(left: "committed version ", right: String.from_int(value: committed)))
+        version = committed
+    }
+    return Ok(version)
+}
+
+fn main() -> Unit {
+    local settings = List.new<String>()
+    List.push(list: mut settings, value: "brightness")
+    List.push(list: mut settings, value: "contrast")
+    match apply_settings(device: "display0", settings: settings, value: 50) {
+        Ok(version) => {
+            Output.write(message: String.concat(left: "committed version ", right: String.from_int(value: version)))
+        }
+        Err(error) => {
+            Output.error(message: error)
+        }
+    }
+    return Unit
+}

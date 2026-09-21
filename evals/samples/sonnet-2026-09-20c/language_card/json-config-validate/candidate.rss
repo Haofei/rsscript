@@ -1,0 +1,65 @@
+struct ServiceConfig {
+    name: String
+    port: Int
+    enabled: Bool
+}
+
+fn describe(context: String, error: JsonError) -> fresh String {
+    return String.concat(left: context, right: JsonError.message(error: error))
+}
+
+fn build_config(root: JsonValue) -> Result<fresh ServiceConfig, String> {
+    match Json.field_string(value: root, name: "name") {
+        Err(error) => {
+            return Err(describe(context: "invalid name: ", error: error))
+        }
+        Ok(name) => {
+            match Json.field_int(value: root, name: "port") {
+                Err(error) => {
+                    return Err(describe(context: "invalid port: ", error: error))
+                }
+                Ok(port) => {
+                    if port < 1 {
+                        return Err(String.concat(left: "port must be at least 1, got ", right: String.from_int(value: port)))
+                    }
+                    if port > 65535 {
+                        return Err(String.concat(left: "port must be at most 65535, got ", right: String.from_int(value: port)))
+                    }
+                    match Json.field_optional_bool(value: root, name: "enabled") {
+                        Err(error) => {
+                            return Err(describe(context: "invalid enabled flag: ", error: error))
+                        }
+                        Ok(flag) => {
+                            let enabled = Option.unwrap_or(value: flag, default: true)
+                            local owned = String.copy(value: name)
+                            return Ok(ServiceConfig(name: take owned, port: port, enabled: enabled))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn load_config(text: String) -> Result<fresh ServiceConfig, String> {
+    match Json.parse(text: text) {
+        Err(error) => {
+            return Err(describe(context: "invalid json: ", error: error))
+        }
+        Ok(root) => {
+            return build_config(root: root)
+        }
+    }
+}
+
+fn main() -> Unit {
+    match load_config(text: "{\"name\": \"api\", \"port\": 8080, \"enabled\": true}") {
+        Ok(config) => {
+            Output.write(message: config.name)
+        }
+        Err(message) => {
+            Output.write(message: message)
+        }
+    }
+    return Unit
+}

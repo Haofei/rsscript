@@ -1,0 +1,34 @@
+struct Reading {
+    sensor: String
+    value: Int
+}
+
+fn format_reading(reading: read Reading) -> fresh String {
+    let number = String.from_int(value: reading.value)
+    let tail = String.concat(left: "=", right: number)
+    return String.concat(left: reading.sensor, right: tail)
+}
+
+fn render_report(title: read String, readings: read List<Reading>) -> fresh String {
+    local lines = List.new<String>()
+    List.push(list: mut lines, value: String.copy(value: title))
+    for reading in readings {
+        let line = format_reading(reading: reading)
+        List.push(list: mut lines, value: line)
+    }
+    let count = String.from_int(value: List.len(list: readings))
+    let footer = String.concat(left: "count=", right: count)
+    List.push(list: mut lines, value: footer)
+    return List.join(list: lines, separator: "\n")
+}
+
+fn main() -> Unit {
+    local readings = List.new<Reading>()
+    local first = Reading(sensor: "temp", value: 21)
+    local second = Reading(sensor: "humidity", value: 48)
+    List.push(list: mut readings, value: manage first)
+    List.push(list: mut readings, value: manage second)
+    let report = render_report(title: "Sensor report", readings: readings)
+    Output.write(message: report)
+    return Unit
+}

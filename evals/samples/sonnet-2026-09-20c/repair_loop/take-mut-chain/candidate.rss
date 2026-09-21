@@ -1,0 +1,22 @@
+fn build_report(title: take String) -> fresh Report {
+    return Report(title: take title, lines: List.new<String>())
+}
+
+fn add_line(report: mut Report, line: read String) -> Unit {
+    List.push(list: mut report.lines, value: String.copy(value: line))
+    return Unit
+}
+
+fn finish_report(report: take Report) -> Unit {
+    ReportSink.emit(report: take report)
+    return Unit
+}
+
+fn main() -> Unit {
+    local title = "daily"
+    local report = build_report(title: take title)
+    add_line(report: mut report, line: "first line")
+    add_line(report: mut report, line: "second line")
+    finish_report(report: take report)
+    return Unit
+}

@@ -1,0 +1,29 @@
+struct Entry {
+    label: String
+    count: Int
+}
+
+fn render_entries(title: read String, entries: read List<Entry>) -> fresh String {
+    local builder = StringBuilder.new()
+    StringBuilder.push(builder: mut builder, value: title)
+    StringBuilder.push(builder: mut builder, value: "\n")
+    for entry in entries {
+        StringBuilder.push(builder: mut builder, value: "  ")
+        StringBuilder.push(builder: mut builder, value: entry.label)
+        StringBuilder.push(builder: mut builder, value: ": ")
+        StringBuilder.push(builder: mut builder, value: String.from_int(value: entry.count))
+        StringBuilder.push(builder: mut builder, value: "\n")
+    }
+    return StringBuilder.finish(builder: take builder)
+}
+
+fn main() -> Unit {
+    local entries = List.new<Entry>()
+    local first = Entry(label: "apples", count: 3)
+    local second = Entry(label: "pears", count: 5)
+    List.push(list: mut entries, value: manage first)
+    List.push(list: mut entries, value: manage second)
+    let report = render_entries(title: "Fruit report", entries: entries)
+    Output.write(message: report)
+    return Unit
+}

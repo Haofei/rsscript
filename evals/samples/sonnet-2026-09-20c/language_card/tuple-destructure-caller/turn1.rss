@@ -1,0 +1,29 @@
+fn split_levels(lines: read List<String>) -> (Int, Int, Int) {
+    let mut errors = 0
+    let mut warnings = 0
+    let mut others = 0
+    for line in lines {
+        if String.starts_with(value: line, prefix: "error") {
+            errors = errors + 1
+        } else {
+            if String.starts_with(value: line, prefix: "warn") {
+                warnings = warnings + 1
+            } else {
+                others = others + 1
+            }
+        }
+    }
+    return (errors, warnings, others)
+}
+
+fn main() -> Unit {
+    local lines = List.new<String>()
+    List.push(list: mut lines, value: "error: disk full")
+    List.push(list: mut lines, value: "warn: low memory")
+    List.push(list: mut lines, value: "info: started")
+    let (errors, warnings, others) = split_levels(lines: lines)
+    Output.write(message: String.from_int(value: errors))
+    Output.write(message: String.from_int(value: warnings))
+    Output.write(message: String.from_int(value: others))
+    return Unit
+}

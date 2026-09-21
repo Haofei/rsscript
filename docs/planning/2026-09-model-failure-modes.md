@@ -1274,3 +1274,197 @@ python3 tools/analyze-model-samples.py --model sonnet-2026-09-20 --rss ./target/
 
 Candidates, per-turn sources and per-turn transcripts for all 100 samples are
 committed (1.8 MB), so every count above is re-derivable without model access.
+
+## Concurrency forms, two draws (2026-09-20)
+
+The section above ended with all seven remaining first-attempt failures in one
+place — structured concurrency and resource lifetime — and with the observation
+that every rate in this report is n = 1. Two things were changed against that,
+and then `language_card` and `repair_loop` were collected **twice** over all
+fifty tasks so the result can be read as a rate rather than as a draw.
+
+1. **The card gained a "Structured concurrency and resources" section.** Sixteen
+   right/wrong rows, each carrying the diagnostic code its wrong spelling emits
+   so a model holding a code can find the row by its number, plus one worked
+   program: a bounded channel whose producer and consumer are `async let`
+   children of one `task_group`, a `select` with two arms whose loser is
+   cancelled, and a `with` scope that opens only after the group has drained.
+   Every accepted spelling was run through `rss check` and every rejected one
+   through `rss check` to confirm its code; the worked program is asserted by
+   the generator's tests to check clean against the standard-package prelude
+   plus the small `.rssi` it is shown with, and to be an `rss fmt` fixpoint. The
+   old one-line coverage — the row saying `task_group`, `with` and `select` are
+   statements — now links the section instead of demonstrating `spawn`, which
+   is itself `RS0015`.
+2. **Six explanations gained the canonical spelling.** `RS0015` now carries the
+   structured-concurrency contract it reports, `RS0022` and `RS0030` say that
+   `await` consumes the call rather than a binding, `RS0031` gives its three
+   repairs in order, `RS0301` says there is no managed-to-local conversion and
+   names what does create a local, and `RS0501` names `manage value`. No codes
+   added, no accept/reject behaviour changed.
+
+```bash
+for draw in b c; do
+  python3 tools/collect-model-samples.py --model sonnet \
+    --mode language_card --mode repair_loop --jobs 10 --timeout 400 \
+    --rss <pinned rss> --out "evals/samples/sonnet-2026-09-20$draw"
+done
+```
+
+One draw per task per mode per set, `claude -p --output-format text
+--allowedTools ""` from an empty temporary directory, as before. A session
+limit interrupted both sets; the tasks that produced nothing were re-collected
+after it reset, and every one of the 200 committed candidates has a complete
+transcript with no turn error. All four sets — and the 2026-09-20 set they are
+compared with — were scored with the same pinned `rss`. As a check on that,
+re-scoring the 2026-09-20 set reproduces its published row exactly (43/50,
+50/50, 23 and 26 canonical).
+
+### Pass rates, two draws
+
+| set | old20 | new20 | repair10 | overall | compiles | canonical spelling |
+|---|---|---|---|---|---|---|
+| `language_card` 2026-09-20 (one draw, previous section) | 16/20 | 18/20 | 9/10 | 43/50 | 44/50 | 23 |
+| `language_card` draw **b** | 19/20 | 20/20 | 10/10 | **49/50** | 49/50 | 32 |
+| `language_card` draw **c** | 20/20 | 19/20 | 10/10 | **49/50** | 50/50 | 33 |
+| `language_card` **mean of b and c** | 19.5/20 | 19.5/20 | 10/10 | **49.0/50** | 49.5/50 | 32.5 |
+| `repair_loop` 2026-09-20 (one draw) | 20/20 | 20/20 | 10/10 | 50/50 | 50/50 | 26 |
+| `repair_loop` draw **b** | 20/20 | 20/20 | 10/10 | 50/50 | 50/50 | 32 |
+| `repair_loop` draw **c** | 20/20 | 20/20 | 10/10 | 50/50 | 50/50 | 30 |
+| `repair_loop` **mean of b and c** | 20/20 | 20/20 | 10/10 | **50.0/50** | 50/50 | 31 |
+
+The two draws agree to one candidate on every column, which is the first
+variance estimate this report has. 43/50 was a low draw around a rate the two
+new draws put at 49/50; the section above was right to refuse to call it *the*
+rate, and right about the direction.
+
+The repair loop is 50/50 for the third consecutive collection, and the number of
+candidates that needed a second turn at all went 4 → 1 → 0. In draw c every one
+of the fifty `repair_loop` candidates compiled on its first turn, so the loop
+scored 50/50 without repairing anything.
+
+### Failure classes, per code
+
+Candidates showing the code at least once, out of 50. `a` is the 2026-09-20 set
+from the previous section, `b` and `c` are the two new draws.
+
+| class | a `l_c` | b `l_c` | c `l_c` | a `r_l` | b `r_l` | c `r_l` |
+|---|---|---|---|---|---|---|
+| RS0015 unsupported syntax | 2 | **0** | **0** | 0 | 0 | 0 |
+| RS0022 async call not consumed | 1 | **0** | **0** | 0 | 0 | 0 |
+| RS0030 awaits a non-async expression | 1 | **0** | **0** | 0 | 0 | 0 |
+| RS0031 local live across `await` | 1 | **0** | **0** | 0 | 0 | 0 |
+| RS0301 managed-to-local | 1 | **0** | **0** | 0 | 0 | 0 |
+| RS0306 local class binding | 1 | **0** | **0** | 0 | 0 | 0 |
+| RS0501 local value retained | 1 | **0** | **0** | 0 | 0 | 0 |
+| RS0206 invents a symbol | 0 | 0 | 0 | 0 | 0 | 0 |
+| RS0201 / RS0204 missing labels | 0 | 0 | 0 | 0 | 0 | 0 |
+| RS0202 wrong call-site effect | 0 | 0 | 0 | 0 | 0 | 0 |
+| RS0203 invented label | 0 | 0 | 0 | 0 | 0 | 0 |
+
+All seven codes the section above named go to zero, in both draws, in the mode
+whose prompt is the only thing that changed. The counts are small — one or two
+candidates each — so no single row of this table is a result on its own; seven
+of seven going to zero together, twice, is.
+
+RS0206 and the label classes stay at zero, which is the result the inline
+signature list bought in the previous section holding across two more draws.
+
+### Constructs, counted directly
+
+Scanning the `language_card` candidate sources rather than the diagnostics:
+
+| construct | a | b | c |
+|---|---|---|---|
+| `spawn` written anywhere | 1 | **0** | **0** |
+| `async let` used | 6 | 7 | 7 |
+| a `select` arm written `binding = await … =>` | 1 | **2** | **2** |
+| `Task.cancellation_token()` used | 1 | **2** | **2** |
+| `manage` used | 0 | **6** | **4** |
+| `manage` applied to a literal | 0 | **1** | 0 |
+
+The same pattern every named row in this report has produced: the wrong
+spelling disappears and the named one appears. Two of the fifty tasks need a
+`select`; both draws write the arm correctly, where the previous draw wrote one
+of two. Two need the group's cancellation token; both draws call
+`Task.cancellation_token()` inside the group, where the previous draw did once.
+
+The `manage` row is the one that cuts both ways, and is the honest cost of this
+change: naming `manage value` as the repair for `RS0501` put `manage` into six
+and four candidates that had none, and in draw b one of them wrote
+`manage "started"` — a literal, which is `RS0307`.
+
+### The tasks still failing on the first attempt
+
+**No task fails on the first attempt in both draws.** There is therefore no
+residual list of the kind the previous section printed, and the remaining
+failures are one candidate each:
+
+| draw | task | outcome | reason |
+|---|---|---|---|
+| b | `retains-declaration` | RS0307 ×4 | Took the new `manage` advice and applied it to string literals: `EventLog.record(log: mut log, entry: manage "started", …)`. `manage` moves a named local binding; a literal is not one. |
+| c | `list-index-assign` | compiles clean; fails `source_contains: "] = "` | Clamped with `List.set(list: mut out, index: index, value: ceiling)` instead of the index assignment `out[index] = ceiling` the prompt asks for. Nothing about it is wrong except that it is not the spelling the task scores. |
+
+Both are single candidates at n = 1 and neither is structured concurrency. Every
+one of the seven tasks the previous section listed — `async-stream-consume`,
+`noescape-filter-callback`, `producer-consumer-bounded`, `retains-declaration`,
+`select-deadline-cancel`, `telemetry-cancel-pipeline`, `task-group-cancel` —
+passes on the first attempt in at least one of the two draws, and six of the
+seven pass in both.
+
+### What would move the rest
+
+Ranked by count, with the kind of change each needs stated plainly.
+
+1. **Say that `manage` takes a binding, not a literal — tooling, one row.** It
+   is the only failure this change introduced, it is the same shape as every
+   other row in the table (`RS0308` for `take` of a literal already has one),
+   and `RS0307`'s repair for a literal operand is mechanical: delete the
+   `manage`. That makes it a candidate for a machine-applicable edit as well as
+   a row, which is the `RS0207` treatment from the previous round.
+2. **Show index assignment — tooling, one row.** `out[index] = value` is not in
+   the card anywhere, and the one candidate that needed it reached for
+   `List.set`. It is the `let … else` situation from the previous section: the
+   form never appears because nobody has been told it exists.
+3. **Canonical spelling is now the largest measurable gap — tooling, but not a
+   row.** 32 and 33 of 50 in `language_card`, 32 and 30 in `repair_loop`, up
+   from 23 and 26 and still barely two thirds. A candidate can compile and pass
+   its invariants while spelling something the way `rss fmt` would rewrite it,
+   and the surface-forms table has been closing this one row at a time for four
+   rounds. Running `rss fmt` over the candidate inside the generation loop
+   would close it in one step and is a change to the runner, not the card.
+4. **The corpus has run out of headroom — evals, not language.** 49/50 and
+   50/50 with no task failing in both draws means the remaining signal is
+   one-candidate noise, and a third draw would measure the sampler rather than
+   the card. Further measurement needs harder tasks. The obvious gap the
+   construct table shows is that `async let _ =` is written by **no** candidate
+   in any of the three draws, because no task requires a background child.
+5. **Decide whether a `select` arm with no binding should be a diagnostic —
+   language design.** Found while verifying the rows: `select { await
+   Receiver.recv(receiver: rx) => { } }` checks **clean**. The arm parser looks
+   for a top-level `=` before the `=>`, does not find one, and silently drops
+   the arm, so a `select` with one such arm is a `select` with zero arms rather
+   than an error. The card's row now names `binding = await op => { body }` as
+   the form, which is why no candidate in either draw hits it, but the parser
+   accepting a `select` that waits on nothing is a hole the card is papering
+   over. Either the arm binding becomes optional and defaults to `_`, or a
+   dropped arm becomes `RS0015`.
+6. **The two open language decisions are unchanged — language design.**
+   `Ok(value: x)` / `None()` parsing (implication 7 of the 2026-09-19 ranking)
+   and `+` on two strings (implication 8, settled in the negative). Neither
+   appears in either new draw; both are recorded so the next round does not
+   rediscover them.
+
+### Reproducing
+
+```bash
+for draw in b c; do for mode in language_card repair_loop; do
+  cargo run -p rsscript-xtask -- agent-eval --tasks evals/tasks \
+    --candidates "evals/samples/sonnet-2026-09-20$draw/$mode" \
+    --output "evals/samples/sonnet-2026-09-20$draw/$mode/report.v1.json"
+done; done
+```
+
+Candidates, per-turn sources and per-turn transcripts for all 200 samples are
+committed (3.6 MB for the two draws), so every count above is re-derivable
+without model access.

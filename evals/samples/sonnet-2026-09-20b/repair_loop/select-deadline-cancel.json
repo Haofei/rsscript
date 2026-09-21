@@ -1,0 +1,12 @@
+{
+  "schema": "rsscript.eval.candidate.v1",
+  "task_id": "select-deadline-cancel",
+  "source": "select-deadline-cancel/candidate.rss",
+  "mode": "repair_loop",
+  "model": "sonnet",
+  "model_version": "unknown",
+  "temperature": null,
+  "attempt": 1,
+  "generation_duration_ms": 18842,
+  "repair_turns": 0
+}

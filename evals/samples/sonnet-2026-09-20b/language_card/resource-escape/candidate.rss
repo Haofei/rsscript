@@ -1,0 +1,12 @@
+fn read_lease(name: read String) -> Result<String, String> {
+    let mut contents = ""
+    with Lease.open(name: name)? as lease {
+        let text = Lease.read(lease: mut lease)?
+        contents = text
+    }
+    return Ok(contents)
+}
+
+fn main() -> Unit {
+    return Unit
+}

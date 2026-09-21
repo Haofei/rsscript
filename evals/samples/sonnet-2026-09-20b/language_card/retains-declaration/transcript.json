@@ -1,0 +1,93 @@
+[
+  {
+    "turn": 1,
+    "duration_ms": 13881,
+    "check_ok": false,
+    "codes": [
+      "RS0307"
+    ],
+    "source": "turn1.rss",
+    "diagnostics": [
+      {
+        "code": "RS0307",
+        "severity": "error",
+        "summary": "`manage` requires a local binding.",
+        "line": 27,
+        "label": "not a local binding",
+        "causes": [
+          "`manage` can only move a named local binding or a freshly produced value."
+        ],
+        "fixes": [
+          {
+            "title": "Remove `manage`, or create the value as `local` at its origin.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0307",
+        "severity": "error",
+        "summary": "`manage` requires a local binding.",
+        "line": 27,
+        "label": "not a local binding",
+        "causes": [
+          "`manage` can only move a named local binding or a freshly produced value."
+        ],
+        "fixes": [
+          {
+            "title": "Remove `manage`, or create the value as `local` at its origin.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0307",
+        "severity": "error",
+        "summary": "`manage` requires a local binding.",
+        "line": 28,
+        "label": "not a local binding",
+        "causes": [
+          "`manage` can only move a named local binding or a freshly produced value."
+        ],
+        "fixes": [
+          {
+            "title": "Remove `manage`, or create the value as `local` at its origin.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      },
+      {
+        "code": "RS0307",
+        "severity": "error",
+        "summary": "`manage` requires a local binding.",
+        "line": 28,
+        "label": "not a local binding",
+        "causes": [
+          "`manage` can only move a named local binding or a freshly produced value."
+        ],
+        "fixes": [
+          {
+            "title": "Remove `manage`, or create the value as `local` at its origin.",
+            "applicability": "manual",
+            "replacement": null,
+            "replace_line": null,
+            "replace_column": null,
+            "replace_length": null
+          }
+        ]
+      }
+    ]
+  }
+]

@@ -1,0 +1,12 @@
+{
+  "schema": "rsscript.eval.candidate.v1",
+  "task_id": "firmware-retry-attempts",
+  "source": "firmware-retry-attempts/candidate.rss",
+  "mode": "language_card",
+  "model": "sonnet",
+  "model_version": "unknown",
+  "temperature": null,
+  "attempt": 1,
+  "generation_duration_ms": 15487,
+  "repair_turns": 0
+}

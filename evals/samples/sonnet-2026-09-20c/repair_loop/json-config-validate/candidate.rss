@@ -1,0 +1,74 @@
+struct ServiceConfig {
+    name: String
+    port: Int
+    enabled: Bool
+}
+
+fn read_name(root: JsonValue) -> Result<fresh String, String> {
+    match Json.field_string(value: root, name: "name") {
+        Ok(name) => {
+            return Ok(String.copy(value: name))
+        }
+        Err(error) => {
+            return Err(JsonError.message(error: error))
+        }
+    }
+}
+
+fn read_port(root: JsonValue) -> Result<Int, String> {
+    match Json.field_int(value: root, name: "port") {
+        Ok(port) => {
+            return Ok(port)
+        }
+        Err(error) => {
+            return Err(JsonError.message(error: error))
+        }
+    }
+}
+
+fn read_enabled(root: JsonValue) -> Result<Bool, String> {
+    match Json.field_optional_bool(value: root, name: "enabled") {
+        Ok(flag) => {
+            return Ok(Option.unwrap_or(value: flag, default: true))
+        }
+        Err(error) => {
+            return Err(JsonError.message(error: error))
+        }
+    }
+}
+
+fn build_config(root: JsonValue) -> Result<fresh ServiceConfig, String> {
+    local name = read_name(root: root)?
+    let port = read_port(root: root)?
+    let enabled = read_enabled(root: root)?
+    if port < 1 {
+        return Err(String.concat(left: "port must be at least 1, got ", right: String.from_int(value: port)))
+    }
+    if port > 65535 {
+        return Err(String.concat(left: "port must be at most 65535, got ", right: String.from_int(value: port)))
+    }
+    return Ok(ServiceConfig(name: take name, port: port, enabled: enabled))
+}
+
+fn load_config(text: String) -> Result<fresh ServiceConfig, String> {
+    match Json.parse(text: text) {
+        Ok(root) => {
+            return build_config(root: root)
+        }
+        Err(error) => {
+            return Err(JsonError.message(error: error))
+        }
+    }
+}
+
+fn main() -> Unit {
+    match load_config(text: "{\"name\": \"api\", \"port\": 8080, \"enabled\": true}") {
+        Ok(config) => {
+            Output.write(message: config.name)
+        }
+        Err(message) => {
+            Output.write(message: message)
+        }
+    }
+    return Unit
+}

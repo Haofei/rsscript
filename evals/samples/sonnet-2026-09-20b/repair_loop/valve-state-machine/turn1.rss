@@ -1,0 +1,61 @@
+sum ValveState {
+    Closed
+    Opening(percent: Int)
+    Open
+    Faulted(code: Int)
+}
+
+fn step(state: read ValveState, command: read String) -> fresh ValveState {
+    match state {
+        Closed => {
+            if command == "open" {
+                return Opening(percent: 0)
+            }
+            return Closed
+        }
+        Opening(percent) => {
+            let next = percent + 50
+            if next >= 100 {
+                return Open
+            }
+            return Opening(percent: next)
+        }
+        Open => {
+            if command == "close" {
+                return Closed
+            }
+            return Open
+        }
+        Faulted(code) => {
+            return Faulted(code: code)
+        }
+    }
+}
+
+fn label(state: read ValveState) -> fresh String {
+    match state {
+        Closed => {
+            return String.copy(value: "closed")
+        }
+        Opening(percent) => {
+            return String.concat(left: "opening ", right: String.from_int(value: percent))
+        }
+        Open => {
+            return String.copy(value: "open")
+        }
+        Faulted(code) => {
+            return String.concat(left: "faulted ", right: String.from_int(value: code))
+        }
+    }
+}
+
+fn main() -> Unit {
+    let mut state: ValveState = Closed
+    let mut count = 0
+    while count < 4 {
+        state = step(state: state, command: "open")
+        count = count + 1
+    }
+    Output.write(message: label(state: state))
+    return Unit
+}

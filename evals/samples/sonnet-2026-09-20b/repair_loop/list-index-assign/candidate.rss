@@ -1,0 +1,28 @@
+fn clamp_samples(samples: read List<Int>, ceiling: Int) -> fresh List<Int> {
+    let mut copy = List.slice(list: samples, start: 0, len: List.len(list: samples))
+    let mut index = 0
+    while index < List.len(list: copy) {
+        let current = List.get(list: copy, index: index)
+        if current > ceiling {
+            copy[index] = ceiling
+        }
+        index = index + 1
+    }
+    return copy
+}
+
+fn main() -> Unit {
+    local samples = List.new<Int>()
+    List.push(list: mut samples, value: 3)
+    List.push(list: mut samples, value: 12)
+    List.push(list: mut samples, value: 7)
+    List.push(list: mut samples, value: 25)
+    List.push(list: mut samples, value: 5)
+    let clamped = clamp_samples(samples: samples, ceiling: 8)
+    local render = |x| {
+        return String.from_int(value: x)
+    }
+    let parts = List.map(list: clamped, mapper: render)
+    Output.write(message: String.join(parts: parts, separator: ","))
+    return Unit
+}

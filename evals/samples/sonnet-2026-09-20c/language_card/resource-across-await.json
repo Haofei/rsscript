@@ -1,0 +1,12 @@
+{
+  "schema": "rsscript.eval.candidate.v1",
+  "task_id": "resource-across-await",
+  "source": "resource-across-await/candidate.rss",
+  "mode": "language_card",
+  "model": "sonnet",
+  "model_version": "unknown",
+  "temperature": null,
+  "attempt": 1,
+  "generation_duration_ms": 19499,
+  "repair_turns": 0
+}

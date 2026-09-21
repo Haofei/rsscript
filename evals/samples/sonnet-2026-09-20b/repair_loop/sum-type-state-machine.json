@@ -1,0 +1,12 @@
+{
+  "schema": "rsscript.eval.candidate.v1",
+  "task_id": "sum-type-state-machine",
+  "source": "sum-type-state-machine/candidate.rss",
+  "mode": "repair_loop",
+  "model": "sonnet",
+  "model_version": "unknown",
+  "temperature": null,
+  "attempt": 1,
+  "generation_duration_ms": 16647,
+  "repair_turns": 0
+}

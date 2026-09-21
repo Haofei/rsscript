@@ -1,0 +1,72 @@
+async fn publish(
+    sender: Sender<Int>,
+    samples: read List<Int>,
+    token: CancellationToken,
+) -> Result<Int, ChannelError> {
+    let mut sent = 0
+    for sample in samples {
+        if CancellationToken.is_cancelled(token: token) {
+            return Ok(sent)
+        }
+        local value = sample
+        await Sender.send_cancellable(sender: sender, value: take value, token: token)?
+        sent = sent + 1
+    }
+    return Ok(sent)
+}
+
+async fn collect(
+    receiver: Receiver<Int>,
+    limit: Int,
+    token: CancellationToken,
+) -> Result<Int, ChannelError> {
+    let mut total = 0
+    let mut seen = 0
+    while seen < limit {
+        if CancellationToken.is_cancelled(token: token) {
+            return Ok(total)
+        }
+        let item = await Receiver.recv_cancellable(receiver: receiver, token: token)?
+        let Some(value) = item else {
+            return Ok(total)
+        }
+        total = total + value
+        seen = seen + 1
+    }
+    return Ok(total)
+}
+
+fn run(samples: read List<Int>) -> Result<Int, ChannelError> {
+    let mut channel = Channel.bounded<Int>(capacity: 2)?
+    let sender = Channel.sender(channel: channel)
+    let receiver = Channel.receiver(channel: mut channel)?
+    let source = CancellationSource.new()
+    let token = CancellationSource.token(source: source)
+    let limit = List.len(list: samples)
+    let mut total = 0
+    task_group {
+        async let produced = publish(sender: sender, samples: samples, token: token)
+        async let consumed = collect(receiver: receiver, limit: limit, token: token)
+        total = await consumed?
+        CancellationSource.cancel(source: mut source)
+        let sent = await produced?
+        Output.write(message: String.from_int(value: sent))
+    }
+    return Ok(total)
+}
+
+fn main() -> Unit {
+    local samples = List.new<Int>()
+    List.push(list: mut samples, value: 10)
+    List.push(list: mut samples, value: 20)
+    List.push(list: mut samples, value: 12)
+    match run(samples: samples) {
+        Ok(total) => {
+            Output.write(message: String.from_int(value: total))
+        }
+        Err(error) => {
+            Output.error(message: ChannelError.message(error: error))
+        }
+    }
+    return Unit
+}

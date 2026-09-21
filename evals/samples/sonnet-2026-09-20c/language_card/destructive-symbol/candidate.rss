@@ -1,0 +1,4 @@
+fn main() -> Unit {
+    Output.write(message: "nothing written")
+    return Unit
+}

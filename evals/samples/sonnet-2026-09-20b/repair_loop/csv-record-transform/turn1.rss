@@ -1,0 +1,51 @@
+struct Record {
+    id: String
+    amount: Int
+}
+
+fn parse_record(line: read String) -> Result<fresh Record, String> {
+    let parts = String.split(value: line, delimiter: ",")
+    if List.len(list: parts) != 2 {
+        return Err("expected exactly two fields")
+    }
+    local id = String.trim(value: List.get(list: parts, index: 0))
+    let amount_text = String.trim(value: List.get(list: parts, index: 1))
+    let Some(amount) = String.parse_int(value: amount_text) else {
+        return Err("amount is not an integer")
+    }
+    return Ok(Record(id: take id, amount: amount))
+}
+
+fn parse_all(text: read String) -> Result<fresh List<Record>, String> {
+    local records = List.new<Record>()
+    for line in String.lines(value: text) {
+        let trimmed = String.trim(value: line)
+        if String.is_empty(value: trimmed) {
+            continue
+        }
+        local record = parse_record(line: trimmed)?
+        List.push(list: mut records, value: manage record)
+    }
+    return Ok(records)
+}
+
+fn total_amount(records: read List<Record>) -> Int {
+    let mut total = 0
+    for record in records {
+        total = total + record.amount
+    }
+    return total
+}
+
+fn main() -> Unit {
+    let text = "alpha, 10\n\nbeta ,32\n"
+    match parse_all(text: text) {
+        Ok(records) => {
+            Output.write(message: String.from_int(value: total_amount(records: records)))
+        }
+        Err(error) => {
+            Output.error(message: error)
+        }
+    }
+    return Unit
+}

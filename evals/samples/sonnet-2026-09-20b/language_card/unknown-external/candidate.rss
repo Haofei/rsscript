@@ -1,0 +1,5 @@
+fn main() -> Unit {
+    let account = "acct-7"
+    Output.write(message: account)
+    return Unit
+}

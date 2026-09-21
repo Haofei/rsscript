@@ -1,0 +1,12 @@
+{
+  "schema": "rsscript.eval.candidate.v1",
+  "task_id": "csv-record-transform",
+  "source": "csv-record-transform/candidate.rss",
+  "mode": "repair_loop",
+  "model": "sonnet",
+  "model_version": "unknown",
+  "temperature": null,
+  "attempt": 1,
+  "generation_duration_ms": 24441,
+  "repair_turns": 0
+}

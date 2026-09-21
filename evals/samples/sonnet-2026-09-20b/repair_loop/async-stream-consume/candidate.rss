@@ -1,0 +1,27 @@
+async fn drain(stream: Stream<Int>, limit: Int) -> Result<Int, ChannelError> {
+    let mut total = 0
+    let mut seen = 0
+    while seen < limit {
+        let item = await Stream.next(stream: stream)?
+        let Some(value) = item else {
+            return Ok(total)
+        }
+        total = total + value
+        seen = seen + 1
+    }
+    return Ok(total)
+}
+
+fn main() -> Result<Unit, ChannelError> {
+    local samples = List.new<Int>()
+    List.push(list: mut samples, value: 10)
+    List.push(list: mut samples, value: 32)
+    let stream = Stream.from_list<Int>(items: take samples)
+    let mut total = 0
+    task_group {
+        async let handle = drain(stream: stream, limit: 2)
+        total = await handle?
+    }
+    Output.write(message: String.from_int(value: total))
+    return Ok(Unit)
+}

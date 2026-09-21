@@ -1,0 +1,73 @@
+sum IngestError {
+    Malformed(detail: String)
+    Rejected(detail: String)
+}
+
+fn IngestError.detail(error: read IngestError) -> fresh String {
+    match error {
+        Malformed(detail) => {
+            return String.concat(left: "malformed amount: ", right: detail)
+        }
+        Rejected(detail) => {
+            return String.concat(left: "rejected amount: ", right: detail)
+        }
+    }
+}
+
+fn parse_amount(raw: read String) -> Result<Int, IngestError> {
+    let trimmed = String.trim(value: raw)
+    match String.parse_int(value: trimmed) {
+        Some(amount) => {
+            return Ok(amount)
+        }
+        None => {
+            local detail = String.concat(left: "not an integer: ", right: trimmed)
+            return Err(Malformed(detail: take detail))
+        }
+    }
+}
+
+fn check_amount(amount: Int) -> Result<Int, IngestError> {
+    if amount <= 0 {
+        local detail = String.concat(left: "must be positive: ", right: String.from_int(value: amount))
+        return Err(Rejected(detail: take detail))
+    }
+    return Ok(amount)
+}
+
+fn ingest(raw: read String) -> Result<Int, IngestError> {
+    let parsed = parse_amount(raw: raw)?
+    let checked = check_amount(amount: parsed)?
+    return Ok(checked * 2)
+}
+
+fn ingest_all(raws: read List<String>) -> Result<Int, String> {
+    let mut total = 0
+    for raw in raws {
+        match ingest(raw: raw) {
+            Ok(amount) => {
+                total = total + amount
+            }
+            Err(error) => {
+                return Err(IngestError.detail(error: error))
+            }
+        }
+    }
+    return Ok(total)
+}
+
+fn main() -> Unit {
+    local raws = List.new<String>()
+    List.push(list: mut raws, value: "10")
+    List.push(list: mut raws, value: " 32 ")
+    List.push(list: mut raws, value: "5")
+    match ingest_all(raws: raws) {
+        Ok(total) => {
+            Output.write(message: String.from_int(value: total))
+        }
+        Err(message) => {
+            Output.error(message: message)
+        }
+    }
+    return Unit
+}

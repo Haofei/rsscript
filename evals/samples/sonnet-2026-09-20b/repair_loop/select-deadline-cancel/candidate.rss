@@ -1,0 +1,51 @@
+async fn send_work(sender: Sender<Int>, value: Int) -> Result<Int, ChannelError> {
+    local item = value
+    await Sender.send(sender: sender, value: take item)?
+    return Ok(value)
+}
+
+async fn send_deadline(sender: Sender<Int>, mark: Int) -> Result<Int, ChannelError> {
+    local item = mark
+    await Sender.send(sender: sender, value: take item)?
+    return Ok(mark)
+}
+
+fn race() -> Result<Int, ChannelError> {
+    let mut work = Channel.bounded<Int>(capacity: 1)?
+    let work_tx = Channel.sender(channel: work)
+    let work_rx = Channel.receiver(channel: mut work)?
+    let mut deadline = Channel.bounded<Int>(capacity: 1)?
+    let deadline_tx = Channel.sender(channel: deadline)
+    let deadline_rx = Channel.receiver(channel: mut deadline)?
+    let source = CancellationSource.new()
+    let mut total = 0
+    task_group {
+        async let work_task = send_work(sender: work_tx, value: 42)
+        async let deadline_task = send_deadline(sender: deadline_tx, mark: 1)
+        select {
+            _ = await Receiver.recv(receiver: work_rx) => {
+                Output.write(message: "work finished first")
+            }
+            _ = await Receiver.recv(receiver: deadline_rx) => {
+                Output.write(message: "deadline fired")
+                CancellationSource.cancel(source: mut source)
+            }
+        }
+        let work_sent = await work_task?
+        let deadline_sent = await deadline_task?
+        total = work_sent + deadline_sent
+    }
+    return Ok(total)
+}
+
+fn main() -> Unit {
+    match race() {
+        Ok(total) => {
+            Output.write(message: String.from_int(value: total))
+        }
+        Err(error) => {
+            Output.error(message: ChannelError.message(error: error))
+        }
+    }
+    return Unit
+}

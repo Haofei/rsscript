@@ -1,0 +1,8 @@
+fn describe(account: String) -> fresh String {
+    return String.concat(left: "ledger unavailable for ", right: account)
+}
+
+fn main() -> Unit {
+    let value = describe(account: "acct-7")
+    Output.write(message: value)
+}

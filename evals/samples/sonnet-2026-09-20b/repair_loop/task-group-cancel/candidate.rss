@@ -1,0 +1,27 @@
+fn run() -> Result<Int, String> {
+    let mut source = CancellationSource.new()
+    let mut length = 0
+    task_group {
+        let token = Task.cancellation_token()
+        async let pending = EvalApi.fetch(key: "work")
+        CancellationSource.cancel(source: mut source)
+        if CancellationToken.is_cancelled(token: token) {
+            Output.write(message: "group cancelled")
+        }
+        let body = await pending?
+        length = String.len(value: body)
+    }
+    return Ok(length)
+}
+
+fn main() -> Unit {
+    match run() {
+        Ok(count) => {
+            Output.write(message: String.from_int(value: count))
+        }
+        Err(message) => {
+            Output.error(message: message)
+        }
+    }
+    return Unit
+}

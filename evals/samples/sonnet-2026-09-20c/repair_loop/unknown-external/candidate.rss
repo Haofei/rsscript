@@ -1,0 +1,5 @@
+fn main() -> Unit {
+    let account = "acct-7"
+    let value = String.concat(left: "ledger entry for ", right: account)
+    Output.write(message: value)
+}

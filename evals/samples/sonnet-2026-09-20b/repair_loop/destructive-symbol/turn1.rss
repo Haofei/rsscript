@@ -1,0 +1,4 @@
+fn main() -> Unit {
+    Output.write(message: "no file written")
+    return Unit
+}

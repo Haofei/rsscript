@@ -1,0 +1,30 @@
+fn read_cursor(path: read String) -> Result<fresh String, String> {
+    let mut cursor = String.copy(value: "")
+    with ConfigStore.open(path)? as store {
+        cursor = ConfigStore.read_key(store: mut store, key: "cursor")?
+    }
+    return Ok(cursor)
+}
+
+async fn sync_next_page(path: read String) -> Result<String, String> {
+    let cursor = read_cursor(path: path)?
+    let fetched = await Sync.fetch_page(cursor: cursor)
+    match fetched {
+        Ok(page) => {
+            return Ok(page)
+        }
+        Err(error) => {
+            return Err(SyncError.message(error: error))
+        }
+    }
+}
+
+fn main() -> Result<Unit, String> {
+    let path = "config.json"
+    task_group {
+        async let handle = sync_next_page(path: path)
+        let page = await handle?
+        Output.write(message: page)
+    }
+    return Ok(Unit)
+}

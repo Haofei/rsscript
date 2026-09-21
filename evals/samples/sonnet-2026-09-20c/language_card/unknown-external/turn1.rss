@@ -1,0 +1,5 @@
+fn main() -> Unit {
+    let value = String.concat(left: "acct-7", right: ": unavailable")
+    Output.write(message: value)
+    return Unit
+}
