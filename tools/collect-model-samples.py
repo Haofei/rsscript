@@ -14,6 +14,14 @@ Generation modes
 `repair_loop`    starts from the `language_card` prompt, then feeds `rss check
                  --json` diagnostics back for up to `--max-turns` turns.
 
+Formatting
+----------
+A candidate that checks clean is passed through `rss fmt` and the formatted
+source is what gets stored as `candidate.rss` and scored; the model's own reply
+is kept beside it as `raw.rss`, and the sidecar records `formatted: true`.
+Canonical spelling is a property of the formatter, not of the model, and
+measuring it against an unformatted reply was the corpus's largest scorer gap.
+
 Everything is stdlib-only and idempotent: a task that already has a candidate is
 skipped unless `--force` is passed.
 
@@ -238,6 +246,45 @@ def run_check(source_path: Path, task: dict, rss: str | None = None) -> tuple[bo
     return not errors, diagnostics
 
 
+def run_fmt(source_path: Path, rss: str | None = None) -> str | None:
+    """`rss fmt` output for a candidate, or `None` if the formatter declined.
+
+    Canonical spelling is measured by round-tripping the candidate through the
+    formatter, and it was the largest scorer gap: 32-33 of 50 candidates
+    compiled and still scored non-canonical purely on surface spelling. The
+    generation loop is the right place to close it — a model asked for
+    RSScript should be judged on the program it wrote, not on whether it
+    guessed the formatter's line breaks — so a candidate that checks clean is
+    stored the way `rss fmt` prints it.
+
+    The raw reply is kept beside it as `raw.rss`; this rewrites the spelling,
+    and the evidence for what the model actually produced must not be lost.
+    """
+    if rss:
+        command = [rss, "fmt", str(source_path)]
+    else:
+        command = [
+            "cargo",
+            "run",
+            "-q",
+            "-p",
+            "rsscript-cli",
+            "--bin",
+            "rss",
+            "--",
+            "fmt",
+            str(source_path),
+        ]
+    lock = CHECK_LOCK if not rss else contextlib.nullcontext()
+    with lock:
+        completed = subprocess.run(
+            command, capture_output=True, text=True, cwd=ROOT, check=False
+        )
+    if completed.returncode != 0 or not completed.stdout:
+        return None
+    return completed.stdout
+
+
 def diagnostic_rows(diagnostics: list[dict]) -> list[dict]:
     """The error rows a repair turn is shown, and the transcript records.
 
@@ -387,6 +434,25 @@ def sample_task(task: dict, mode: str, args, out_dir: Path) -> dict:
                 }
             )
 
+    # A candidate that checks clean is stored as `rss fmt` prints it, and the
+    # model's own text is kept beside it. A candidate that does not check is
+    # left exactly as written: the formatter declines unparseable source, and
+    # a failing candidate's evidence is the text that failed.
+    formatted = False
+    if ok:
+        (task_dir / "raw.rss").write_text(source_path.read_text())
+        canonical = run_fmt(source_path, args.rss)
+        if canonical is not None:
+            source_path.write_text(canonical)
+            formatted = True
+            # Formatting must not change what the checker says; if it somehow
+            # does, the raw text is what gets scored.
+            ok, diagnostics = run_check(source_path, task, args.rss)
+            if not ok:
+                source_path.write_text((task_dir / "raw.rss").read_text())
+                formatted = False
+                ok, diagnostics = run_check(source_path, task, args.rss)
+
     sidecar = {
         "schema": "rsscript.eval.candidate.v1",
         "task_id": task_id,
@@ -398,6 +464,7 @@ def sample_task(task: dict, mode: str, args, out_dir: Path) -> dict:
         "attempt": 1,
         "generation_duration_ms": total_ms,
         "repair_turns": turns,
+        "formatted": formatted,
     }
     sidecar_path.write_text(json.dumps(sidecar, indent=2) + "\n")
     log_path.write_text(json.dumps(transcript, indent=2) + "\n")

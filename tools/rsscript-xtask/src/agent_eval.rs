@@ -206,6 +206,16 @@ struct CandidateManifest {
     generation_tokens: Option<u64>,
     generation_duration_ms: Option<u64>,
     repair_turns: Option<u64>,
+    /// Whether the collector ran `rss fmt` over the model's reply before
+    /// storing it as the candidate.
+    ///
+    /// This is provenance about the generation loop, not a measurement: the
+    /// scorer re-derives `canonical_spelling.formatted` from the source it
+    /// actually reads, and that is what a score claims. Recording it here says
+    /// which loop produced the sample, so a `formatted: true` sidecar whose
+    /// candidate is not byte-identical to `rss fmt` output is visible as the
+    /// contradiction it is.
+    formatted: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -220,6 +230,9 @@ struct CandidateMetadata {
     generation_tokens: u64,
     generation_duration_ms: u64,
     repair_turns: u64,
+    /// Whether the collecting loop formatted the candidate (sidecar
+    /// provenance; see [`CandidateManifest::formatted`]).
+    formatted_by_collector: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -768,6 +781,10 @@ fn candidate_input(
             .as_ref()
             .and_then(|manifest| manifest.repair_turns)
             .unwrap_or(0),
+        formatted_by_collector: manifest
+            .as_ref()
+            .and_then(|manifest| manifest.formatted)
+            .unwrap_or(false),
     };
     Ok((source_path, metadata))
 }

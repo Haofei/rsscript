@@ -119,3 +119,27 @@ cargo run -p rsscript-xtask -- agent-eval \
   --candidates evals/samples/sonnet/prompt_only \
   --output evals/samples/sonnet/prompt_only/report.v1.json
 ```
+
+### The collector formats what it stores
+
+A candidate that checks clean is passed through `rss fmt`, and the formatted
+source is what is written to `<task>/candidate.rss` and therefore what gets
+scored. The model's own reply is kept beside it as `<task>/raw.rss`, and the
+sidecar records `"formatted": true`.
+
+This is deliberate. `canonical_spelling.formatted` measures a property of the
+formatter, not of the model: it was the corpus's largest single gap — 32 to 33
+of 50 candidates compiled and scored non-canonical purely on line breaks and
+spacing no prompt can teach. Scoring the formatted source asks the question
+that matters, which is whether the model wrote the language, and `raw.rss`
+keeps the evidence of what it actually typed.
+
+A candidate that does *not* check clean is stored exactly as written: the
+formatter declines unparseable source, and a failing candidate's evidence is
+the text that failed. If formatting a clean candidate somehow changed what the
+checker says, the collector restores the raw text and records
+`"formatted": false`.
+
+The sidecar flag is provenance, not a measurement. The scorer re-derives
+`canonical_spelling.formatted` from the source it reads, and that is what a
+score claims; the flag only says which generation loop produced the sample.

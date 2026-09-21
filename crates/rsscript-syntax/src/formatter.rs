@@ -214,7 +214,7 @@ impl Formatter {
         if !function.retained_params.is_empty() {
             self.out.push('\n');
             self.indent(2);
-            self.retains(&function.retained_params);
+            self.retains(&function.retained_params, 2);
         }
     }
 
@@ -274,7 +274,7 @@ impl Formatter {
         if !function.retained_params.is_empty() {
             self.out.push('\n');
             self.indent(1);
-            self.retains(&function.retained_params);
+            self.retains(&function.retained_params, 1);
         }
         if function.body.statements.is_empty() {
             return;
@@ -995,16 +995,23 @@ impl Formatter {
         self.out.push('>');
     }
 
-    fn retains(&mut self, params: &[String]) {
-        self.out.push_str("retains(");
-        self.out.push_str(
-            &params
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>()
-                .join(", "),
-        );
-        self.out.push(')');
+    /// `retains(...)` names exactly one parameter.
+    ///
+    /// The parser accepts a single name per clause and rejects
+    /// `retains(a, b)`, so a function that retains two parameters is written
+    /// as two clauses and has to be printed as two. Joining them produced
+    /// source the parser then refused, which is the one thing a formatter may
+    /// never do.
+    fn retains(&mut self, params: &[String], indent: usize) {
+        for (index, param) in params.iter().enumerate() {
+            if index > 0 {
+                self.out.push('\n');
+                self.indent(indent);
+            }
+            self.out.push_str("retains(");
+            self.out.push_str(param);
+            self.out.push(')');
+        }
     }
 
     fn callee_at(&mut self, callee: &Callee, indent: usize) {
@@ -1181,7 +1188,13 @@ fn format_call_arg(arg: &CallArg) -> String {
 fn inline_expr(expr: &Expr) -> Option<String> {
     match expr {
         Expr::Ident(name, _) | Expr::Number(name, _) => Some(name.clone()),
-        Expr::String(value, _) => Some(quoted_string(value)),
+        // The AST holds a string literal's *source* spelling, escapes and all
+        // (`lexer.rs` copies the characters between the quotes verbatim), so
+        // re-escaping it here turned `"\n"` into `"\\n"` — a newline into a
+        // backslash and an `n`. Emit it exactly as it was written, and decline
+        // to inline a value carrying a real newline, which cannot sit inside a
+        // one-line `"..."`.
+        Expr::String(value, _) => (!value.contains('\n')).then(|| format!("\"{value}\"")),
         Expr::CharLiteral(value, _) => Some(format!("'{value}'")),
         Expr::MultilineString(value, _) => Some(format!("\"\"\"{value}\"\"\"")),
         Expr::ObjectLiteral { fields, .. } => inline_object_literal(fields),
@@ -1951,6 +1964,44 @@ return item + 1
         assert_eq!(
             format_source("multiline-string-raw.rss", source),
             "fn prompt() -> String {\n    return \"\"\"literal \\n text\"\"\"\n}\n"
+        );
+    }
+
+    /// A string literal inside an inlined call argument took a second escaping
+    /// pass, so `"\n"` came back as `"\\n"` — a newline turned into a
+    /// backslash and an `n`, silently changing what the program prints. Found
+    /// by round-tripping the eval corpus through `rss fmt`.
+    #[test]
+    fn inlined_string_arguments_keep_their_escapes() {
+        let source = "fn render(lines: List<String>) -> String {\n    return List.join(list: lines, separator: \"\\n\")\n}\n";
+
+        let formatted = format_source("inline-escape.rss", source);
+        assert_eq!(formatted, source, "formatting must not re-escape");
+        assert_eq!(
+            format_source("inline-escape.rss", &formatted),
+            formatted,
+            "and it must be idempotent"
+        );
+    }
+
+    /// `retains(...)` names one parameter; the parser rejects `retains(a, b)`.
+    /// The formatter used to join a function's retained parameters into one
+    /// clause, so formatting a two-retains function produced source that no
+    /// longer parsed.
+    #[test]
+    fn two_retained_parameters_stay_two_clauses() {
+        let source = "fn record(log: mut EventLog, entry: String, tag: String) -> Unit\n    retains(entry)\n    retains(tag)\n{\n    return Unit\n}\n";
+
+        let formatted = format_source("retains-two.rss", source);
+        assert!(
+            formatted.contains("retains(entry)\n    retains(tag)"),
+            "each retained parameter needs its own clause: {formatted}"
+        );
+        assert!(!formatted.contains("retains(entry, tag)"));
+        assert_eq!(
+            format_source("retains-two.rss", &formatted),
+            formatted,
+            "and it must be idempotent"
         );
     }
 
