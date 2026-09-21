@@ -1336,6 +1336,132 @@ const OSR_MATCH_LAYOUT_DECLINED_KERNELS: &[(&str, &str, &str)] = &[
     ),
 ];
 
+/// A map key the loop *builds*.
+///
+/// `String.concat` produces a live heap `String` — the string length-law fold
+/// exists to dissolve such a value, not to keep one — so the OSR lowering had no
+/// arm for it and the whole loop stayed on the interpreter with
+/// `lower reject: StringConcat`. The arm lowers it through the same host helper
+/// the whole-function translator uses, so the loop reaches generated code and
+/// the key's hash work is charged by the helper that hashes it.
+///
+/// The third case keeps the built key live *past* the loop and varies its length
+/// per iteration, so a stale value would change the program's output: it pins
+/// that the clean OSR exit materializes the handle live-out from the heap table
+/// rather than leaving the interpreter's slot behind.
+const OSR_BUILT_KEY_CASES: &[(&str, &str)] = &[
+    // The key is consumed by the map insert and dead afterwards.
+    (
+        "osr-built-map-key.rss",
+        "fn hot(limit: Int, prefix: String) -> Int { Output.write(message: \"begin\"); let mut table = Map<String, Int>.new(); let mut i = 0; while i < limit { let key = String.concat(left: prefix, right: String.from_int(value: i % 8)); Map.insert(map: mut table, key: key, value: i); i = i + 1 }; let n = Map.len(map: read table); Output.write(message: String.from_int(value: n)); return n } fn main() -> Unit { Output.write(message: String.from_int(value: hot(limit: 3000, prefix: \"k\"))); return Unit }",
+    ),
+    // The same key in a set, which hashes through the other helper.
+    (
+        "osr-built-set-key.rss",
+        "fn hot(limit: Int, prefix: String) -> Int { Output.write(message: \"begin\"); let mut seen = Set<String>.new(); let mut i = 0; while i < limit { let key = String.concat(left: prefix, right: String.from_int(value: i % 8)); Set.insert(set: mut seen, value: key); i = i + 1 }; let n = Set.len(set: read seen); Output.write(message: String.from_int(value: n)); return n } fn main() -> Unit { Output.write(message: String.from_int(value: hot(limit: 3000, prefix: \"k\"))); return Unit }",
+    ),
+    // The built key survives the backedge and is read after the loop.
+    (
+        "osr-built-key-live-after-the-loop.rss",
+        "fn hot(limit: Int, prefix: String) -> Int { Output.write(message: \"begin\"); let mut table = Map<String, Int>.new(); let mut i = 0; let mut last = prefix; while i < limit { last = String.concat(left: prefix, right: String.from_int(value: i * 7)); Map.insert(map: mut table, key: last, value: i); i = i + 1 }; let n = Map.len(map: read table) + String.len(value: last); Output.write(message: String.from_int(value: n)); return n } fn main() -> Unit { Output.write(message: String.from_int(value: hot(limit: 3000, prefix: \"k\"))); return Unit }",
+    ),
+];
+
+#[test]
+fn an_osr_loop_that_builds_its_map_key_accounts_exactly_armed_and_unarmed() {
+    for (name, source) in OSR_BUILT_KEY_CASES {
+        let mut osr_entries = 0_u64;
+        let mut limit_cases = vec![RunLimits::unbounded_for_trusted_host()];
+        limit_cases.extend(
+            STEP_PARITY_BUDGETS
+                .iter()
+                .map(|budget| RunLimits::unbounded_for_trusted_host().with_step_budget(*budget)),
+        );
+        limit_cases
+            .push(RunLimits::unbounded_for_trusted_host().with_intrinsic_call_budget(1_000_000));
+        for limits in limit_cases {
+            for eager_osr in [false, true] {
+                let (interpreter, native) = accounting_pair(
+                    name,
+                    source,
+                    limits.clone(),
+                    NativeJitOptions {
+                        cost_model: NativeCostModel::Off,
+                        eager_osr,
+                        collect_telemetry: true,
+                        ..NativeJitOptions::default()
+                    },
+                );
+                assert_eq!(
+                    native.outcome(),
+                    interpreter.outcome(),
+                    "{name} (eager_osr={eager_osr}) must terminate for the same reason as the interpreter"
+                );
+                assert_eq!(
+                    native.usage.steps_consumed, interpreter.usage.steps_consumed,
+                    "{name} (eager_osr={eager_osr}) must report the interpreter's step count"
+                );
+                assert_eq!(
+                    native.usage.intrinsic_calls, interpreter.usage.intrinsic_calls,
+                    "{name} (eager_osr={eager_osr}) must report the interpreter's intrinsic count"
+                );
+                assert_eq!(
+                    native.stdout, interpreter.stdout,
+                    "{name} (eager_osr={eager_osr}) must produce the interpreter's output"
+                );
+                osr_entries = osr_entries.saturating_add(native_telemetry(&native).osr_entries);
+            }
+        }
+        assert!(
+            osr_entries > 0,
+            "{name} must enter OSR for its counts to be a statement about generated code"
+        );
+    }
+}
+
+/// An armed allocation budget or live-memory limit still refuses the region: the
+/// string helper does not charge its own capacity delta into the transaction-local
+/// allocation cell the way `List.push` does, so the region fails closed rather
+/// than under-reporting.
+#[test]
+fn an_osr_loop_that_builds_its_map_key_declines_under_armed_memory_controls() {
+    let (name, source) = OSR_BUILT_KEY_CASES[0];
+    for limits in [
+        RunLimits::unbounded_for_trusted_host().with_allocation_budget(4_000_000),
+        RunLimits::unbounded_for_trusted_host().with_live_memory_limit(4_000_000),
+    ] {
+        let (interpreter, native) = accounting_pair(
+            name,
+            source,
+            limits,
+            NativeJitOptions {
+                cost_model: NativeCostModel::Off,
+                eager_osr: true,
+                collect_telemetry: true,
+                ..NativeJitOptions::default()
+            },
+        );
+        assert_eq!(
+            native.outcome(),
+            interpreter.outcome(),
+            "{name} under an armed memory control must terminate like the interpreter"
+        );
+        assert_eq!(
+            native.usage.steps_consumed, interpreter.usage.steps_consumed,
+            "{name} under an armed memory control must report the interpreter's steps"
+        );
+        assert_eq!(
+            native.usage.allocation_bytes_consumed, interpreter.usage.allocation_bytes_consumed,
+            "{name} under an armed memory control must report the interpreter's allocation bytes"
+        );
+        assert_eq!(
+            native_telemetry(&native).osr_entries,
+            0,
+            "the string helper charges no capacity delta, so the region must decline"
+        );
+    }
+}
+
 #[test]
 fn an_osr_loop_whose_body_matches_reaches_generated_code_and_accounts_exactly() {
     for (name, source) in OSR_MATCH_LAYOUT_PARITY_CASES {

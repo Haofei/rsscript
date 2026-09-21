@@ -821,6 +821,35 @@ pub(super) fn translate_osr_loop_inner(request: OsrLoweringRequest<'_>) -> Optio
     // its index bits never leak back into an interpreter slot). Sound because every
     // closure read goes through the runtime helper + identity guard/bail.
     let handle_reg = |reg: usize| ty[reg] == Some(NativeTy::Handle);
+    // A handle register the *interpreter* can still observe after the region runs.
+    // The OSR exit restore deliberately never writes a Handle register back into
+    // the interpreter window — its payload word is a heap-table index, not a VM
+    // value — so a handle generated code produces is invisible to the interpreter
+    // and may only be read inside the region. A register read anywhere outside
+    // `[header, exit)`, and every parameter (whose slot the restore also skips,
+    // and whose incoming value would be lost), is therefore not one a native
+    // producer may define. Unmodelled read sets fail closed through
+    // `RegFootprint::All`.
+    let handle_read_outside_region: Vec<bool> = {
+        let mut read = vec![false; n_regs];
+        for (ip, instr) in code.iter().enumerate() {
+            if in_loop(ip) {
+                continue;
+            }
+            match instr_read_regs(instr) {
+                RegFootprint::Some(regs) => {
+                    for reg in regs {
+                        if let Some(slot) = read.get_mut(reg) {
+                            *slot = true;
+                        }
+                    }
+                }
+                RegFootprint::All => read.fill(true),
+            }
+        }
+        read
+    };
+    let iteration_local_handle = |reg: usize| reg >= n_params && !handle_read_outside_region[reg];
     let r = |reg: usize| reg as u32;
     let cmp = |op: &RegIntCompare| match op {
         RegIntCompare::Less => JitCompare::Lt,
@@ -1046,6 +1075,44 @@ pub(super) fn translate_osr_loop_inner(request: OsrLoweringRequest<'_>) -> Optio
             // the interpreter, which re-runs the loop and raises the error itself —
             // so OSR never has to model the trap's semantics.
             RegInstr::RuntimeError { .. } => JitInstr::Bail,
+            // A `String` the loop builds — the key shape
+            // `let key = String.concat(..); Map.insert(map: mut table, key, ..)`.
+            // The result is a live heap `String`, not one the length-law fold can
+            // dissolve, so it is lowered through the same host helper the
+            // whole-function translator uses.
+            //
+            // The admitted case is a concat whose own destination is
+            // `iteration_local_handle`. MIR always concatenates into a temporary
+            // and copies out of it, so a key the loop carries past the backedge is
+            // admitted too: the copy's register is an ordinary Handle live-out,
+            // which the clean OSR exit materializes out of the heap table before
+            // committing the transaction. What stays declined is a concat writing
+            // *directly* into a parameter slot or into a register the interpreter
+            // reads after the loop — the live-out materialization covers neither a
+            // parameter nor a slot the region never proves it owns, so the arm
+            // fails closed rather than leaving a stale interpreter value behind.
+            //
+            // Accounting: the interpreter runs one `RegInstr::StringConcat` tick
+            // and charges no hidden work and no intrinsic dispatch for it, so this
+            // item owns exactly one source step and no intrinsic call, like every
+            // other copy-through item. The key's own hash work is charged where the
+            // interpreter charges it — inside the map/set helper that hashes it.
+            // Allocation is unchanged: the helper allocates through the region's
+            // heap transaction, and `osr_memory_controls_supported` still refuses
+            // the whole region when an allocation budget or live-memory limit is
+            // armed, because this helper does not charge its own capacity delta.
+            RegInstr::StringConcat { dst, left, right } => {
+                require(handle_reg(*left) && handle_reg(*right) && handle_reg(*dst))?;
+                require(iteration_local_handle(*dst))?;
+                JitInstr::HostCall {
+                    helper: native_string_concat_host().helper,
+                    dst: r(*dst),
+                    args: vec![
+                        vm_jit::HostArg::Reg(r(*left)),
+                        vm_jit::HostArg::Reg(r(*right)),
+                    ],
+                }
+            }
             RegInstr::GetFieldSlot { dst, base, slot } => {
                 require(handle_reg(*base))?;
                 if let Some(field_reg) = scalar_field_reg(*base, *slot) {

@@ -235,7 +235,9 @@ a per-region read-only proof (`whole_function_memory_controls_supported` in
 shape-preserving stores and `List.push`, whose helper charges the exact capacity
 delta into a transaction-local cell that is committed only with the heap
 transaction. Every other allocating or replacing helper and every native-call
-edge fails closed.
+edge fails closed — including the string helper an OSR-lowered
+`String.concat` calls, so a loop that builds its own map key runs natively with
+no memory control armed and declines with one armed.
 
 The proof is per region, and every region is offered it. A function that declines
 because it contains a call does not take its callees down with it: the
@@ -345,16 +347,40 @@ accounting segment rather than by one instruction.
    so a change that does unblock one has to update this list rather than pass
    silently.
 
-2. **A key the loop builds keeps the loop on the interpreter.** The OSR lowering
-   has no arm for a `StringConcat` whose result survives as a live heap `String` —
-   the string length-law fold exists to dissolve such a value, not to keep one — so
+2. **A key the loop builds now reaches generated code.** The OSR lowering had no
+   arm for a `StringConcat` whose result survives as a live heap `String` — the
+   string length-law fold exists to dissolve such a value, not to keep one — so
    `while ... { let key = String.concat(...); Map.insert(map: mut table, key, ...) }`
-   is refused with `lower reject: StringConcat` and the interpreter owns the loop.
-   This is a lowering gap rather than an accounting one: the counts are exact
-   because nothing runs natively, and the key-hash charge closed in "Step count"
-   above is covered by the shapes that do reach generated code (a key loaded in the
-   preheader or passed in). Needed: an OSR lowering for a surviving heap `String`
-   producer, which is the same work a heap-allocating native subset would need.
+   was refused at `translate_osr_loop_inner` with `lower reject: StringConcat`
+   and the interpreter owned the loop. The arm now lowers it through the same
+   host helper the whole-function translator uses
+   (`native_string_concat_host`), so the loop runs natively and the key's
+   data-dependent hash work is charged by the helper that hashes it, against the
+   same call-owned cell.
+
+   **What is covered.** A concat whose own destination is a non-parameter
+   register that no instruction outside `[header, exit)` reads. MIR always
+   concatenates into a temporary and copies out of it, so a key the loop *carries
+   past the backedge and reads after the loop* is covered too: the copy's
+   register is an ordinary Handle live-out, which the clean OSR exit materializes
+   out of the heap table (`handle_liveouts` in `RegVm::try_osr`) before the heap
+   transaction commits, and `osr-built-key-live-after-the-loop.rss` varies the
+   key's length per iteration so a stale interpreter slot would change the
+   program's output. **What still declines**: a concat writing directly into a
+   parameter slot or into a register the interpreter reads after the loop. The
+   live-out materialization skips parameters, so that shape fails closed rather
+   than leaving a stale value behind; no source spelling produces it today, and
+   the arm does not depend on that being true.
+
+   Accounting is unchanged by the arm. `RegInstr::StringConcat` costs the
+   interpreter one tick, no hidden work and no intrinsic dispatch, so the item
+   owns exactly one source step and no intrinsic call like any other
+   copy-through item. **Allocation still fails closed**: the helper allocates
+   through the region's heap transaction but does not charge its own capacity
+   delta into the transaction-local allocation cell the way `List.push` does, so
+   `osr_memory_controls_supported` refuses the whole region whenever an
+   allocation budget or a live-memory limit is armed. Closing *that* is the same
+   work "Allocation bytes" above describes for every other allocating helper.
 
 3. **A region containing a call still needs a per-region allocation proof.** See
    "Allocation bytes" above: whole-function entry admits an armed
@@ -419,8 +445,9 @@ decided, because both decisions turned on evidence rather than on principle.
    already proven to be a `Handle` now keeps it (`native_key_operand_ty` in
    `crates/rsscript-vm/src/reg_vm/native/translate/osr_loop.rs`).
 
-   What still declines is a key the loop *builds*; that is gap 2 above, and it is
-   a lowering gap rather than an accounting one.
+   A key the loop *builds* was gap 2 above and now lowers too; what its helper
+   still cannot do is charge its own allocation, so the region declines whenever
+   a memory control is armed.
 
 - **A sunk closure's steps are attributed, and the loop now runs natively.**
    `native_inline_leaf_calls_inner` deletes a sunk `MakeClosure` and its dead copy
@@ -503,6 +530,9 @@ instruction. Enabling closure sinking end to end likewise leaves the gate's
 own code untouched — its loop allocates no closure — and measured a native median
 of 1.76 ms against 2.00 ms over four interleaved paired runs; the shape it does
 change, `native_closure_sinking.rss`, is in the closure-sinking table above.
+Lowering a `StringConcat` that produces a live heap `String` (gap 2) adds one
+match arm the gate's own loop never reaches — it builds no string — and measured
+a native median of 1.41 ms against 1.46 ms over four interleaved paired runs.
 Relocating a `match`-shaped loop's exit block before the OSR pass chain runs
 (gap 1) emits no different code for the gate either — the gate's own loop is
 contiguous, so `native_normalize_osr_loop_layout` returns `None` and the chain is
@@ -561,6 +591,15 @@ segment-reservation model rather than block charging),
 helper (`String.len`), an `Int`-keyed map get whose constant key-hash unit rides
 the step meter beside it, and an intrinsic inside a leaf call the inliner
 dissolves, so a helper-side charge would fail three of the four.
+
+`an_osr_loop_that_builds_its_map_key_accounts_exactly_armed_and_unarmed` replays
+`OSR_BUILT_KEY_CASES` — a built map key, the same key in a set, and a built key
+the loop carries past the backedge and reads after it — unarmed, across the whole
+`STEP_PARITY_BUDGETS` list and under an armed intrinsic budget, with eager OSR
+off and on, asserting `osr_entries > 0` alongside the interpreter's steps,
+intrinsic calls and output. `an_osr_loop_that_builds_its_map_key_declines_under_armed_memory_controls`
+pins the other half: with an allocation budget or a live-memory limit armed the
+region declines and the interpreter's allocation bytes are reported.
 
 `an_osr_loop_whose_body_matches_reaches_generated_code_and_accounts_exactly` and
 `an_osr_loop_whose_body_matches_accounts_intrinsics_under_the_production_defaults`
