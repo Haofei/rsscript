@@ -382,21 +382,56 @@ accounting segment rather than by one instruction.
    allocation budget or a live-memory limit is armed. Closing *that* is the same
    work "Allocation bytes" above describes for every other allocating helper.
 
-3. **A region containing a call still needs a per-region allocation proof.** See
-   "Allocation bytes" above: whole-function entry admits an armed
-   `allocation_budget` or `live_memory_limit` only for a body that cannot grow
-   retained storage, which a function containing *any* call is not.
-   `whole_function_memory_controls_supported` is unchanged, and the reason it is
-   unchanged is concrete rather than conservative: the interpreter charges a
-   called frame's register-window growth through `RegVm::ensure_regs`
-   (`crates/rsscript-vm/src/reg_vm/exec.rs`), which bills
-   `grew * (size_of::<VmValue>() + 1)` against the high-water mark of the shared
-   register stack. That charge is data-dependent on the stack depth at the call,
-   so an inlined callee body or a native-to-native edge has no compile-time
-   constant to reserve it with, and the region declines rather than
-   under-reporting. Threading the memory controls through the call edge the way
-   the step and intrinsic cells were threaded would still leave that charge
-   unattributed.
+3. **A region containing a call still needs a per-region allocation proof, and
+   the register-window charge cannot be expressed as a compile-time
+   reservation.** See "Allocation bytes" above: whole-function entry admits an
+   armed `allocation_budget` or `live_memory_limit` only for a body that cannot
+   grow retained storage, which a function containing *any* call is not.
+   `whole_function_memory_controls_supported` is unchanged. This round
+   investigated the specific proposal of charging the callee frame's
+   register-window growth as a per-call-site constant, since the caller's frame
+   size and the callee's `regs` are both static in the `RegFunction` metadata.
+   **It does not work, and the reason is measurable rather than conservative.**
+
+   `RegVm::ensure_regs` (`crates/rsscript-vm/src/reg_vm/exec.rs`) bills
+   `grew * (size_of::<VmValue>() + 1)` where `grew = upto - self.stack.len()`.
+   `self.stack` is a shared, append-only register stack: nothing in the VM ever
+   truncates it, so `stack.len()` is the *evaluation's* high-water mark, and the
+   charge is a function of everything that ran before the call rather than of the
+   call. Only the offset `base + caller.regs + callee.regs` is static; the term
+   subtracted from it is history. The consequence is directly observable: two
+   programs that differ only in whether `hot(n: 10)`'s result is computed twice
+   or copied report the **same** 310 allocation bytes, because the second call at
+   that depth raises no high-water mark and charges nothing. A constant per call
+   site would have charged twice.
+
+   Charging the whole region's static extent once at native entry —
+   `max(0, base + max_window_extent - stack.len())` scaled by that constant — is
+   computable at entry, but it is not exact and roll-back does not rescue it. A
+   region whose call sits under an `if` that is false on this run charges the
+   interpreter nothing; the reservation charges the full window anyway. That
+   over-reports `allocation_bytes_consumed`, which is a *reported usage fact*
+   rather than only a ceiling, and it can trip an armed `allocation_budget` the
+   interpreter would not have tripped. The divergence happens on the clean exit,
+   so an exact roll-back on deopt never sees it. Reserving and refunding on exit
+   fails for the same reason: the budget comparison has already happened.
+
+   What *would* be exact is not a reservation. It is a helper at each call edge
+   that performs the interpreter's own `ensure_regs` arithmetic against a
+   mirrored high-water carried in the existing native memory cell
+   (`JIT_MEM_CELL` / `jit_mem_charge` in `crates/rsscript-vm/src/reg_vm/mod.rs`,
+   which `List.push` already uses), committed to `RegVm::allocated_bytes` only on
+   a clean exit and discarded on a bail — the VM then applying the real
+   `stack` growth without recharging it. That is a data-dependent helper charge
+   of the same shape as the key-hash work in "Step count" above, not a
+   compile-time constant, and it would additionally need the clean-exit
+   commit/rollback path that today exists only for OSR to be extended to
+   whole-function entry. Until that lands the region declines, because the
+   alternative is under- or over-reporting a fact the contract publishes.
+
+   Note also what is *not* at stake: the growth stores `VmValue::Unit`, which
+   retains nothing, so the live-memory figures do not move with it. Only
+   `allocation_bytes_consumed` does.
 
    What this no longer costs is the *callee*. A `main` that calls a hot helper
    now runs the helper natively under the default runner profile, on the helper's
@@ -591,6 +626,10 @@ segment-reservation model rather than block charging),
 helper (`String.len`), an `Int`-keyed map get whose constant key-hash unit rides
 the step meter beside it, and an intrinsic inside a leaf call the inliner
 dissolves, so a helper-side charge would fail three of the four.
+
+`the_register_window_charge_is_a_high_water_mark_not_a_per_call_constant` pins
+the measurement gap 3 rests on: two programs differing only in whether a call is
+made twice or its result copied report the same allocation bytes on both engines.
 
 `an_osr_loop_that_builds_its_map_key_accounts_exactly_armed_and_unarmed` replays
 `OSR_BUILT_KEY_CASES` — a built map key, the same key in a set, and a built key

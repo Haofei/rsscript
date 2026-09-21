@@ -1336,6 +1336,50 @@ const OSR_MATCH_LAYOUT_DECLINED_KERNELS: &[(&str, &str, &str)] = &[
     ),
 ];
 
+/// The evidence gap 3 in the native-jit contract rests on: the callee frame's
+/// register-window growth is charged against a **high-water mark**, not per call.
+///
+/// `RegVm::ensure_regs` bills `grew * (size_of::<VmValue>() + 1)` where `grew`
+/// is measured against the shared register stack's current length, and nothing
+/// in the VM ever truncates that stack. The two programs below differ only in
+/// whether `hot`'s result is computed a second time or copied, so a per-call-site
+/// constant would charge the second call's window too. It does not: both report
+/// the same allocation bytes. That is why the charge cannot be reserved as a
+/// compile-time constant at a native call edge, on either engine.
+#[test]
+fn the_register_window_charge_is_a_high_water_mark_not_a_per_call_constant() {
+    const TWO_CALLS: &str = "fn hot(n: Int) -> Int { let mut i = 0; let mut t = 0; while i < n { t = t + i; i = i + 1 }; return t } fn main() -> Unit { let x = hot(n: 10); let y = hot(n: 10); Output.write(message: String.from_int(value: x)); Output.write(message: String.from_int(value: y)); return Unit }";
+    const ONE_CALL: &str = "fn hot(n: Int) -> Int { let mut i = 0; let mut t = 0; while i < n { t = t + i; i = i + 1 }; return t } fn main() -> Unit { let x = hot(n: 10); let y = x; Output.write(message: String.from_int(value: x)); Output.write(message: String.from_int(value: y)); return Unit }";
+    let limits = RunLimits::unbounded_for_trusted_host();
+    let options = NativeJitOptions {
+        cost_model: NativeCostModel::Off,
+        collect_telemetry: true,
+        ..NativeJitOptions::default()
+    };
+    let (two_interpreter, two_native) =
+        accounting_pair("two-calls.rss", TWO_CALLS, limits.clone(), options);
+    let (one_interpreter, one_native) = accounting_pair("one-call.rss", ONE_CALL, limits, options);
+    assert_eq!(
+        two_interpreter.usage.allocation_bytes_consumed,
+        one_interpreter.usage.allocation_bytes_consumed,
+        "a second call at the same depth raises no high-water mark, so it charges no \
+         register-window bytes; a per-call-site constant would have charged twice"
+    );
+    for (interpreter, native, name) in [
+        (&two_interpreter, &two_native, "two-calls.rss"),
+        (&one_interpreter, &one_native, "one-call.rss"),
+    ] {
+        assert_eq!(
+            native.usage.allocation_bytes_consumed, interpreter.usage.allocation_bytes_consumed,
+            "{name} must report the interpreter's allocation bytes under native execution"
+        );
+        assert_eq!(
+            native.usage.steps_consumed, interpreter.usage.steps_consumed,
+            "{name} must report the interpreter's step count"
+        );
+    }
+}
+
 /// A map key the loop *builds*.
 ///
 /// `String.concat` produces a live heap `String` — the string length-law fold
