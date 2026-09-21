@@ -1,0 +1,10 @@
+// expect: RS0015
+
+// A `select` with no arms has nothing to wait on.
+fn pipeline() -> Result<Int, ChannelError> {
+    task_group {
+        select {
+        }
+    }
+    return Ok(0)
+}

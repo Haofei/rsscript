@@ -1627,4 +1627,80 @@ fn run() -> Unit {
             assert_eq!(field.ty.name, tuple.type_params[index].name);
         }
     }
+
+    fn select_statement(source: &str) -> SelectStmt {
+        let program = parse_source("test.rss", source);
+        let Stmt::Select(select) = body_statement(&program, 0) else {
+            panic!("expected a select statement");
+        };
+        select.clone()
+    }
+
+    /// An arm written without its binding used to be skipped outright, so
+    /// `select { await op => { ... } }` parsed to a `select` with zero arms and
+    /// checked clean. The arm must be recorded as malformed instead.
+    #[test]
+    fn select_arm_without_a_binding_is_recorded_as_malformed() {
+        let select = select_statement(
+            "fn run() -> Unit {\n    select {\n        await Receiver.recv(receiver: rx) => {\n            return Unit\n        }\n    }\n}\n",
+        );
+
+        assert!(
+            select.arms.is_empty(),
+            "an arm with no binding is not a parsed arm: {:?}",
+            select.arms
+        );
+        assert_eq!(
+            select.malformed_arm_spans.len(),
+            1,
+            "the dropped arm must leave a malformed span behind"
+        );
+    }
+
+    /// The malformed arm must not swallow the arms written after it: recovery
+    /// steps past the arm body, so a well-formed neighbour still parses.
+    #[test]
+    fn select_recovers_from_a_binding_less_arm_and_keeps_the_next_arm() {
+        let select = select_statement(
+            "fn run() -> Unit {\n    select {\n        await Receiver.recv(receiver: left) => {\n            return Unit\n        }\n        right = await Receiver.recv(receiver: right_rx) => {\n            return Unit\n        }\n    }\n}\n",
+        );
+
+        assert_eq!(select.malformed_arm_spans.len(), 1);
+        assert_eq!(select.arms.len(), 1, "the well-formed arm must survive");
+        assert_eq!(select.arms[0].binding, "right");
+    }
+
+    /// `_` is the spelling for an arm whose value the body does not use, and it
+    /// stays a real arm.
+    #[test]
+    fn select_arm_bound_to_underscore_is_a_well_formed_arm() {
+        let select = select_statement(
+            "fn run() -> Unit {\n    select {\n        _ = await Receiver.recv(receiver: rx) => {\n            return Unit\n        }\n    }\n}\n",
+        );
+
+        assert!(select.malformed_arm_spans.is_empty());
+        assert_eq!(select.arms.len(), 1);
+        assert_eq!(select.arms[0].binding, "_");
+    }
+
+    /// Text inside `select { ... }` that has no `=>` at all is also kept as a
+    /// malformed span rather than skipped.
+    #[test]
+    fn select_body_text_without_an_arrow_is_recorded_as_malformed() {
+        let select =
+            select_statement("fn run() -> Unit {\n    select {\n        let x = 1\n    }\n}\n");
+
+        assert!(select.arms.is_empty());
+        assert!(!select.malformed_arm_spans.is_empty());
+    }
+
+    /// An empty `select` parses cleanly here; the "nothing to wait on" rule is
+    /// the checker's, and it needs the arm list to be honestly empty.
+    #[test]
+    fn select_with_no_arms_parses_to_an_empty_arm_list() {
+        let select = select_statement("fn run() -> Unit {\n    select {\n    }\n}\n");
+
+        assert!(select.arms.is_empty());
+        assert!(select.malformed_arm_spans.is_empty());
+    }
 }

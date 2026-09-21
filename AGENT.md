@@ -119,8 +119,10 @@ scope, is the *Structured concurrency and resources* section of the generated
   never `let handle = work(id: 1)` followed by `await handle` (`RS0022`,
   `RS0030`). An `async fn` is only reached from inside a task group.
 - A `select` arm is `binding = await <operation> => { body }`; `_` ignores the
-  result. The arm awaits a direct async operation, never an `async let` handle
-  (`RS0015`), and the losing arms are cancelled.
+  result. The binding is not optional — `await <operation> => { ... }` is
+  `RS0015`, as is a `select` with no arms. The arm awaits a direct async
+  operation, never an `async let` handle (`RS0015`), and the losing arms are
+  cancelled.
 - `Task.cancellation_token()` returns the *lexically enclosing* group's token,
   so it is called inside the `task_group` block and passed into the child as a
   `read CancellationToken` (`RS0412`). Cancellation itself is an explicit

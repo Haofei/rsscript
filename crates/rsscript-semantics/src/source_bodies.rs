@@ -2,6 +2,7 @@
 
 use crate::{task_group_async_let_diagnostics, unsupported_syntax_diagnostic};
 use rsscript_diagnostics::Diagnostic;
+use rsscript_syntax::Span;
 use rsscript_syntax::ast::{Block, Expr, Item, Stmt};
 
 /// Derive all source-level statement and expression diagnostics for one item.
@@ -98,16 +99,24 @@ fn collect_statement(statement: &Stmt, in_task_group: bool, diagnostics: &mut Ve
             collect_block(&statement.body, true, diagnostics);
         }
         Stmt::Select(statement) => {
+            for span in &statement.malformed_arm_spans {
+                diagnostics.push(malformed_select_arm_diagnostic(span.clone()));
+            }
             for arm in &statement.arms {
                 if await_inner(&arm.operation).is_none() {
-                    diagnostics.push(unsupported_syntax_diagnostic(
-                        arm.span.clone(),
-                        "malformed select arm",
-                        "Select arms must use `name = await operation => { ... }`.",
-                    ));
+                    diagnostics.push(malformed_select_arm_diagnostic(arm.span.clone()));
                 }
                 collect_expr(&arm.operation, in_task_group, diagnostics);
                 collect_block(&arm.body, in_task_group, diagnostics);
+            }
+            if statement.arms.is_empty() && statement.malformed_arm_spans.is_empty() {
+                diagnostics.push(unsupported_syntax_diagnostic(
+                    statement.span.clone(),
+                    "select with no arms",
+                    "A `select` waits on the operations its arms name, so a `select` with no arms \
+                     has nothing to wait on. Write at least one arm as \
+                     `binding = await <operation> => { body }`.",
+                ));
             }
         }
         Stmt::MalformedFor(span) => diagnostics.push(unsupported_syntax_diagnostic(
@@ -149,6 +158,20 @@ fn collect_statement(statement: &Stmt, in_task_group: bool, diagnostics: &mut Ve
             "This statement is outside the current RSScript parser surface.",
         )),
     }
+}
+
+/// The one diagnostic for an arm that is not `binding = await op => { body }`.
+///
+/// The binding is not optional: dropping it is the shape that used to parse to
+/// a `select` with fewer arms than the source wrote, so the message names the
+/// canonical form and the `_` spelling for a result the body does not use.
+fn malformed_select_arm_diagnostic(span: Span) -> Diagnostic {
+    unsupported_syntax_diagnostic(
+        span,
+        "malformed select arm",
+        "Every `select` arm is `binding = await <operation> => { body }`. The binding is required; \
+         write `_ = await <operation> => { body }` when the arm's value is not used.",
+    )
 }
 
 fn collect_expr(expr: &Expr, in_task_group: bool, diagnostics: &mut Vec<Diagnostic>) {

@@ -906,19 +906,31 @@ fn parse_select_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usi
     let Some(close) = find_matching(tokens, open, "{", "}") else {
         return (Stmt::Unknown(tokens[start].span.clone()), limit);
     };
+    let parsed_arms = parse_select_arms(tokens, open + 1, close);
     (
         Stmt::Select(SelectStmt {
-            arms: parse_select_arms(tokens, open + 1, close),
+            arms: parsed_arms.arms,
+            malformed_arm_spans: parsed_arms.malformed_spans,
             span: tokens[start].span.clone(),
         }),
         close + 1,
     )
 }
 
-fn parse_select_arms(tokens: &[Token], start: usize, end: usize) -> Vec<SelectArm> {
+struct ParsedSelectArms {
+    arms: Vec<SelectArm>,
+    malformed_spans: Vec<Span>,
+}
+
+fn parse_select_arms(tokens: &[Token], start: usize, end: usize) -> ParsedSelectArms {
     // Each arm is `<binding> = <await-operation> => { body }`, where the body is
     // a brace block or a single statement (mirroring `match` arms).
+    //
+    // Text that does not read as an arm is recorded in `malformed_spans` rather
+    // than skipped: a `select` whose arms all failed to parse must report that,
+    // not check clean as a `select` with nothing in it.
     let mut arms = Vec::new();
+    let mut malformed_spans = Vec::new();
     let mut index = start;
     while index < end {
         while index < end && is_trivia_boundary(&tokens[index]) {
@@ -929,19 +941,24 @@ fn parse_select_arms(tokens: &[Token], start: usize, end: usize) -> Vec<SelectAr
         }
         let line_end = next_line_or_block_end(tokens, index, end);
         let Some(arrow) = find_top_level_symbol(tokens, index, line_end, "=>") else {
+            malformed_spans.push(tokens[index].span.clone());
             index = line_end.max(index + 1);
             continue;
         };
         let arm_start = index;
         let Some(eq) = find_top_level_symbol(tokens, index, arrow, "=") else {
-            index = arrow + 1;
+            // `await op => { ... }` with no binding. The binding is not optional
+            // sugar, so the arm is malformed rather than a nameless arm.
+            malformed_spans.push(tokens[arm_start].span.clone());
+            index = skip_select_arm_body(tokens, arrow, end);
             continue;
         };
         let binding = ident_name(&tokens[index])
             .map(str::to_string)
             .unwrap_or_else(|| "_".to_string());
         let Some(operation) = parse_expr(tokens, eq + 1, arrow) else {
-            index = arrow + 1;
+            malformed_spans.push(tokens[arm_start].span.clone());
+            index = skip_select_arm_body(tokens, arrow, end);
             continue;
         };
         let body_start = arrow + 1;
@@ -950,11 +967,13 @@ fn parse_select_arms(tokens: &[Token], start: usize, end: usize) -> Vec<SelectAr
             .is_some_and(|token| token.symbol("{"))
         {
             let Some(body_close) = find_matching(tokens, body_start, "{", "}") else {
+                malformed_spans.push(tokens[arm_start].span.clone());
                 break;
             };
             (parse_block(tokens, body_start, body_close), body_close + 1)
         } else {
             if body_start >= end {
+                malformed_spans.push(tokens[arm_start].span.clone());
                 break;
             }
             let body_end = next_line_or_block_end(tokens, body_start, end);
@@ -975,7 +994,24 @@ fn parse_select_arms(tokens: &[Token], start: usize, end: usize) -> Vec<SelectAr
         });
         index = next;
     }
-    arms
+    ParsedSelectArms {
+        arms,
+        malformed_spans,
+    }
+}
+
+/// Step past the body of an arm that has already been recorded as malformed so
+/// the next arm is read as an arm and not as leftover body text.
+fn skip_select_arm_body(tokens: &[Token], arrow: usize, end: usize) -> usize {
+    let body_start = arrow + 1;
+    if tokens
+        .get(body_start)
+        .is_some_and(|token| token.symbol("{"))
+        && let Some(body_close) = find_matching(tokens, body_start, "{", "}")
+    {
+        return body_close + 1;
+    }
+    next_line_or_block_end(tokens, body_start, end).max(arrow + 1)
 }
 
 fn parse_match_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {

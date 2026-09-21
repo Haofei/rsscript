@@ -488,9 +488,12 @@ fn stmt_has_recovery_marker(stmt: &Stmt) -> bool {
         }
         Stmt::Match(match_stmt) => match_stmt_has_recovery_marker(match_stmt),
         Stmt::TaskGroup(task_group) => block_has_recovery_marker(&task_group.body),
-        Stmt::Select(select) => select.arms.iter().any(|arm| {
-            expr_has_recovery_marker(&arm.operation) || block_has_recovery_marker(&arm.body)
-        }),
+        Stmt::Select(select) => {
+            !select.malformed_arm_spans.is_empty()
+                || select.arms.iter().any(|arm| {
+                    expr_has_recovery_marker(&arm.operation) || block_has_recovery_marker(&arm.body)
+                })
+        }
         Stmt::LetElse(let_else) => {
             expr_has_recovery_marker(&let_else.value)
                 || block_has_recovery_marker(&let_else.else_body)

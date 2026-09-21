@@ -424,6 +424,12 @@ pub struct TaskGroupStmt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelectStmt {
     pub arms: Vec<SelectArm>,
+    /// Spans of arms the parser could not read as `binding = await op => body`.
+    ///
+    /// The parser keeps them instead of skipping the text, exactly as
+    /// `MatchStmt::malformed_arm_spans` does, so an unreadable arm becomes a
+    /// diagnostic rather than a silently shorter `select`.
+    pub malformed_arm_spans: Vec<Span>,
     pub span: Span,
 }
 

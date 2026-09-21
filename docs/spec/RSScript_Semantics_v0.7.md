@@ -4062,6 +4062,15 @@ select {
 `select` waits on several async operations and runs the body of whichever
 becomes ready first. `_` may be used as the binding to ignore the result.
 
+The binding is **required**: `binding = await <operation> => { body }` is the
+whole of the arm grammar, and an arm written as `await <operation> => { body }`
+is `RS0015` ("malformed select arm"), not an arm with an implicit name. Write
+`_ = await <operation> => { body }` when the body does not use the value. A
+`select` with no arms is `RS0015` too — there is nothing for it to wait on.
+Both rules exist so source inside `select { ... }` can never be discarded
+silently (`parser/stmt.rs::parse_select_arms` records what it cannot read in
+`SelectStmt::malformed_arm_spans`, and `source_bodies.rs` reports it).
+
 Each arm's *operation* is checked in an async context regardless of the enclosing
 function, while each arm's *body* is ordinary code in the enclosing context
 (`await_placement.rs::collect_statement`). A `select` body is an independent

@@ -327,8 +327,9 @@ fn concurrency_forms() -> Vec<ConcurrencyForm> {
             wrong: "let v = race()",
             code: "RS0022",
         },
-        // The arm binding is mandatory: without a top-level `=` before the
-        // `=>` the parser silently drops the arm.
+        // The arm binding is mandatory: an arm with no top-level `=` before
+        // its `=>` is `RS0015` ("malformed select arm"), and a `select` whose
+        // arms all fail that way is a `select` with nothing to wait on.
         ConcurrencyForm {
             form: "a `select` arm is `binding = await op => { body }`",
             right: "_ = await Receiver.recv(receiver: rx) => { }",

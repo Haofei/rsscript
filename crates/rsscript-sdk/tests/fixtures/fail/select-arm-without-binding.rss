@@ -1,0 +1,16 @@
+// expect: RS0015
+
+// A `select` arm with no binding used to be dropped by the parser, leaving a
+// `select` with zero arms that checked clean. It is a syntax error now.
+fn pipeline() -> Result<Int, ChannelError> {
+    let mut left = Channel.bounded<Int>(capacity: 1)?
+    let left_rx = Channel.receiver<Int>(channel: mut left)?
+    task_group {
+        select {
+            await Receiver.recv<Int>(receiver: left_rx) => {
+                Output.write(message: "left")
+            }
+        }
+    }
+    return Ok(0)
+}
