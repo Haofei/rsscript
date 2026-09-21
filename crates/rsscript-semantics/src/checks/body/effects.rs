@@ -17,12 +17,14 @@ pub(super) fn check_manage_operand_is_local(
         if expr_is_fresh_shell(value) {
             return;
         }
-        analyzer
-            .diagnostics
-            .push(rsscript_semantics::invalid_manage_operand_diagnostic(
+        let hoist = derive_manage_literal_hoist(analyzer.tokens, value, span, state);
+        analyzer.diagnostics.push(
+            rsscript_semantics::invalid_manage_operand_diagnostic_with_hoist(
                 "`manage` can only move a named local binding or a freshly produced value.",
                 span.clone(),
-            ));
+                hoist,
+            ),
+        );
         return;
     };
     if !state.is_local(name) {
@@ -325,4 +327,188 @@ pub(super) fn check_fresh_returns(
             }
         }
     }
+}
+
+/// Derive the `manage <literal>` → `local <name> = <literal>` / `manage <name>`
+/// repair for `RS0307`, or `None` when it cannot be derived exactly.
+///
+/// The card tells a model to manage an argument the callee retains, and the
+/// shape models then write is `entry: manage "started"` — `manage` on a
+/// literal, which is `RS0307`. The repair is mechanical, but it changes two
+/// places at once: a new `local` line above the statement, and the operand
+/// itself. A `Fix` carries one `FixEdit`, and one edit is one contiguous span,
+/// so the edit produced here spans the whole region from the statement's first
+/// column through the end of the literal and re-emits it.
+///
+/// Re-emitting means every character of that region has to be known, and the
+/// only source this layer holds is the token stream. A token is reproduced
+/// exactly when its rendered spelling fills its span; anything that does not —
+/// an interpolated or multi-line string, an unknown character — ends the
+/// derivation and the diagnostic advises instead. The other guards keep the
+/// insertion point honest: the statement must start the line at paren/bracket
+/// depth zero (so a multi-line argument list is left alone), nothing between
+/// the statement start and the `manage` may open a nested body (`{`, `|`,
+/// `=>`), and the hoisted name must be unused in the file and unambiguous —
+/// the same literal managed twice would want the same name twice.
+fn derive_manage_literal_hoist(
+    tokens: &[Token],
+    value: &HirExpr,
+    manage_span: &Span,
+    state: &BodyState,
+) -> Option<ManageLiteralHoist> {
+    let (literal_span, slug) = match value {
+        HirExpr::String { value, span } => (span, identifier_slug(value)?),
+        HirExpr::Number { value, span } => (span, identifier_slug(value)?),
+        HirExpr::Char { value, span } => (span, identifier_slug(value)?),
+        _ => return None,
+    };
+    if literal_span.line != manage_span.line || literal_span.file != manage_span.file {
+        return None;
+    }
+
+    let manage_index = token_at(tokens, manage_span)?;
+    let literal_index = token_at(tokens, literal_span)?;
+    if literal_index != manage_index + 1 {
+        return None;
+    }
+    let literal_text = token_source(&tokens[literal_index])?;
+
+    let statement_index = statement_start_index(tokens, manage_index)?;
+    let statement_span = &tokens[statement_index].span;
+    if statement_span.line != manage_span.line {
+        return None;
+    }
+
+    // The prefix is everything the statement already says before `manage`.
+    let mut prefix = String::new();
+    for token in &tokens[statement_index..manage_index] {
+        if token.symbol("{") || token.symbol("|") || token.symbol("=>") || token.symbol("}") {
+            return None;
+        }
+        let text = token_source(token)?;
+        let offset = token.span.column.checked_sub(statement_span.column)?;
+        while prefix.chars().count() < offset {
+            prefix.push(' ');
+        }
+        if prefix.chars().count() != offset {
+            return None;
+        }
+        prefix.push_str(&text);
+    }
+    // Keep whatever spacing separated the last prefix token from `manage`.
+    let manage_offset = manage_span.column.checked_sub(statement_span.column)?;
+    while prefix.chars().count() < manage_offset {
+        prefix.push(' ');
+    }
+    if prefix.chars().count() != manage_offset {
+        return None;
+    }
+
+    let name = format!("managed_{slug}");
+    if state.locals.contains(&name)
+        || state.managed.contains(&name)
+        || state.value_types.contains_key(&name)
+        || tokens.iter().any(|token| token.is_ident_text(&name))
+    {
+        return None;
+    }
+    // Two `manage` of the same literal would each want this one name.
+    let occurrences = tokens
+        .iter()
+        .enumerate()
+        .filter(|(index, token)| {
+            token.is_ident_text("manage")
+                && tokens
+                    .get(index + 1)
+                    .and_then(token_source)
+                    .is_some_and(|text| text == literal_text)
+        })
+        .count();
+    if occurrences != 1 {
+        return None;
+    }
+
+    let indent = " ".repeat(statement_span.column.saturating_sub(1));
+    let replacement = format!("local {name} = {literal_text}\n{indent}{prefix}manage {name}");
+    let length = (literal_span.column + literal_span.length).checked_sub(statement_span.column)?;
+
+    Some(ManageLiteralHoist {
+        span: Span {
+            file: statement_span.file.clone(),
+            line: statement_span.line,
+            column: statement_span.column,
+            length,
+        },
+        replacement,
+        name,
+        literal: literal_text,
+    })
+}
+
+/// The token whose span starts exactly at `span`, if it is still there.
+fn token_at(tokens: &[Token], span: &Span) -> Option<usize> {
+    tokens.iter().position(|token| {
+        token.span.file == span.file
+            && token.span.line == span.line
+            && token.span.column == span.column
+    })
+}
+
+/// The first token of the line `index` sits on, if a statement can start there.
+///
+/// A line that opens inside a `(` or `[` is a continuation of the statement
+/// above it, so there is no place on it to insert a binding.
+fn statement_start_index(tokens: &[Token], index: usize) -> Option<usize> {
+    let line = tokens[index].span.line;
+    let file = &tokens[index].span.file;
+    let mut start = index;
+    while start > 0 && tokens[start - 1].span.line == line && tokens[start - 1].span.file == *file {
+        start -= 1;
+    }
+    let mut depth = 0i32;
+    for token in &tokens[..start] {
+        if token.symbol("(") || token.symbol("[") {
+            depth += 1;
+        } else if token.symbol(")") || token.symbol("]") {
+            depth -= 1;
+        }
+    }
+    (depth == 0).then_some(start)
+}
+
+/// The exact source spelling of `token`, or `None` when it cannot be known.
+///
+/// A token is reproduced only when its rendered spelling fills its recorded
+/// span. That rules out escapes, interpolation and multi-line strings, whose
+/// stored value is not what the source says.
+fn token_source(token: &Token) -> Option<String> {
+    let text = match &token.kind {
+        TokenKind::Ident(value) | TokenKind::Number(value) => value.clone(),
+        TokenKind::Keyword(value) | TokenKind::Symbol(value) => (*value).to_string(),
+        TokenKind::String(value) => format!("\"{value}\""),
+        TokenKind::Char(value) => format!("'{value}'"),
+        TokenKind::InterpolatedString(_)
+        | TokenKind::MultilineString(_)
+        | TokenKind::Unknown(_)
+        | TokenKind::Eof => return None,
+    };
+    (text.chars().count() == token.span.length).then_some(text)
+}
+
+/// An identifier-safe slug for a literal, or `None` when there is not one.
+fn identifier_slug(value: &str) -> Option<String> {
+    let mut slug = String::new();
+    for character in value.chars() {
+        if character.is_ascii_alphanumeric() {
+            slug.extend(character.to_lowercase());
+        } else if character == '_' || character == '-' || character == ' ' {
+            if !slug.ends_with('_') && !slug.is_empty() {
+                slug.push('_');
+            }
+        } else {
+            return None;
+        }
+    }
+    let slug = slug.trim_end_matches('_').to_string();
+    (!slug.is_empty() && slug.len() <= 32).then_some(slug)
 }

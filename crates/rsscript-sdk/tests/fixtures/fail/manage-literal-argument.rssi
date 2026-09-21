@@ -1,0 +1,2 @@
+pub fn EventLog.record(log: mut EventLog, entry: String) -> Unit
+    retains(entry)

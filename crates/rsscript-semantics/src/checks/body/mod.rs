@@ -17,7 +17,8 @@ use super::local::{
     merge_loop_state,
 };
 pub(crate) use rsscript_semantics::Flow;
-use rsscript_semantics::is_copy_type_name;
+use rsscript_semantics::{ManageLiteralHoist, is_copy_type_name};
+use rsscript_syntax::lexer::{Token, TokenKind};
 
 mod binding;
 pub(crate) mod closure_captures;

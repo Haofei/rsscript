@@ -78,6 +78,16 @@
       "wrong": "build(title: take \"daily\")"
     },
     {
+      "form": "`manage` moves a binding, never a literal (`RS0307`)",
+      "right": "local entry = \"started\"; record(entry: manage entry)",
+      "wrong": "record(entry: manage \"started\")"
+    },
+    {
+      "form": "an element is assigned through the index",
+      "right": "xs[index] = value",
+      "wrong": "List.set(list: mut xs, index: index, value: value)"
+    },
+    {
       "form": "strings are joined by a call, never by `+`",
       "right": "String.concat(left: head, right: tail)",
       "wrong": "head + tail"

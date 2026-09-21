@@ -232,16 +232,77 @@ pub fn local_class_binding_diagnostic(binding: &str, span: Span) -> Diagnostic {
     }
 }
 
+/// The one derivable repair for `manage` on a literal: bind the literal to a
+/// `local` on the line above and `manage` that binding instead.
+///
+/// A `Fix` carries exactly one `FixEdit`, and one edit is one contiguous span,
+/// so the caller hands over the whole region it rewrites — from the enclosing
+/// statement's first column through the end of the literal — together with the
+/// text that replaces it. The caller derives that region only when every
+/// character of it is known exactly; see
+/// `checks::body::effects::derive_manage_literal_hoist`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManageLiteralHoist {
+    /// The contiguous source region the edit replaces.
+    pub span: Span,
+    /// The replacement text, including the new `local` line and its newline.
+    pub replacement: String,
+    /// The binding the literal is hoisted into, for the fix title.
+    pub name: String,
+    /// The literal exactly as the source spells it, for the fix title.
+    pub literal: String,
+}
+
 /// Diagnose `manage` applied to a value which is not a local binding or fresh shell.
 pub fn invalid_manage_operand_diagnostic(cause: impl Into<String>, span: Span) -> Diagnostic {
-    Diagnostic::error(
+    invalid_manage_operand_diagnostic_with_hoist(cause, span, None)
+}
+
+/// `RS0307` with the literal hoist attached when one could be derived.
+///
+/// The advisory `remove_manage_or_create_local` fix is always present and
+/// unchanged, so a consumer reading only it sees exactly what it saw before.
+/// The hoist adds a more specific fix in front of it, and that fix is the only
+/// one claiming `machine-applicable` — it carries the edit that earns the
+/// claim (ADR 0238).
+pub fn invalid_manage_operand_diagnostic_with_hoist(
+    cause: impl Into<String>,
+    span: Span,
+    hoist: Option<ManageLiteralHoist>,
+) -> Diagnostic {
+    let diagnostic = Diagnostic::error(
         code::INVALID_MANAGE_OPERAND,
         "`manage` requires a local binding.",
         span,
         "not a local binding",
     )
-    .with_cause(cause)
-    .with_fix(
+    .with_cause(cause);
+
+    let diagnostic = match hoist {
+        Some(hoist) => {
+            let ManageLiteralHoist {
+                span,
+                replacement,
+                name,
+                literal,
+            } = hoist;
+            diagnostic
+                .with_cause(format!(
+                    "`manage` moves a value that already exists; a literal such as `{literal}` has no binding to move."
+                ))
+                .with_fix_edit(
+                    "bind_literal_then_manage",
+                    format!("Bind the literal first: `local {name} = {literal}`, then pass `manage {name}`."),
+                    FixEdit {
+                        span,
+                        replacement,
+                    },
+                )
+        }
+        None => diagnostic,
+    };
+
+    diagnostic.with_fix(
         "remove_manage_or_create_local",
         "Remove `manage`, or create the value as `local` at its origin.",
         "manual",

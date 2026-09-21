@@ -1,0 +1,18 @@
+// expect: RS0307
+
+// interface: manage-literal-argument.rssi
+
+// The same mistake spread over several lines: the `manage` sits inside an open
+// argument list, so there is no statement start on its line to insert a
+// binding before. The diagnostic advises instead of carrying an edit.
+class EventLog {
+    entries: List<String>
+}
+
+fn record_start(log: mut EventLog) -> Unit {
+    EventLog.record(
+        log: mut log,
+        entry: manage "started",
+    )
+    return Unit
+}

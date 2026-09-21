@@ -230,19 +230,19 @@ pub use operators::{
     operator_type_mismatch_diagnostic,
 };
 pub use ownership::{
-    closure_capture_mutation_diagnostic, constructor_field_effect_diagnostic,
+    ManageLiteralHoist, closure_capture_mutation_diagnostic, constructor_field_effect_diagnostic,
     explicit_closure_capture_contract_diagnostic, explicit_closure_missing_capture_diagnostic,
     explicit_closure_unused_capture_diagnostic, fresh_requires_local_binding_diagnostic,
     fresh_return_not_clean_diagnostic, freshness_unknown_diagnostic,
     invalid_fresh_return_type_diagnostic, invalid_manage_operand_diagnostic,
-    invalid_take_operand_diagnostic, local_class_binding_diagnostic,
-    managed_closure_local_capture_diagnostic, managed_inline_constructor_field_diagnostic,
-    managed_to_local_diagnostic, moved_use_diagnostic, noescape_consumes_capture_diagnostic,
-    read_view_mutation_diagnostic, resource_capture_diagnostic, resource_escape_diagnostic,
-    resource_producer_escape_diagnostic, resource_producer_missing_try_diagnostic,
-    retained_closure_capture_diagnostic, retained_local_diagnostic, spawn_local_capture_diagnostic,
-    take_handle_field_diagnostic, uninferable_binding_type_diagnostic,
-    weak_field_requires_weak_handle_diagnostic,
+    invalid_manage_operand_diagnostic_with_hoist, invalid_take_operand_diagnostic,
+    local_class_binding_diagnostic, managed_closure_local_capture_diagnostic,
+    managed_inline_constructor_field_diagnostic, managed_to_local_diagnostic, moved_use_diagnostic,
+    noescape_consumes_capture_diagnostic, read_view_mutation_diagnostic,
+    resource_capture_diagnostic, resource_escape_diagnostic, resource_producer_escape_diagnostic,
+    resource_producer_missing_try_diagnostic, retained_closure_capture_diagnostic,
+    retained_local_diagnostic, spawn_local_capture_diagnostic, take_handle_field_diagnostic,
+    uninferable_binding_type_diagnostic, weak_field_requires_weak_handle_diagnostic,
 };
 pub use place::{
     field_partial_access_conflict_diagnostic, field_prefix_conflict_diagnostic,

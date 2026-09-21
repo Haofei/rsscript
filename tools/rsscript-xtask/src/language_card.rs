@@ -213,6 +213,24 @@ fn canonical_surface_forms() -> Vec<CanonicalSurfaceForm> {
             right: "local title = \"daily\"; build(title: take title)",
             wrong: "build(title: take \"daily\")",
         },
+        // Measured on 2026-09-20: the row above it — "an argument the callee
+        // retains is managed first" — was followed to the letter and applied
+        // to a literal (`entry: manage "started"`), which is `RS0307`.
+        // `manage` moves a binding for the same reason `take` does, and the
+        // card said so for `take` only.
+        CanonicalSurfaceForm {
+            form: "`manage` moves a binding, never a literal (`RS0307`)",
+            right: "local entry = \"started\"; record(entry: manage entry)",
+            wrong: "record(entry: manage \"started\")",
+        },
+        // `List.set(list: mut xs, index: i, value: v)` checks clean, so the
+        // checker never says anything; the scorer measures the spelling the
+        // formatter prints, and that is the index-assignment statement.
+        CanonicalSurfaceForm {
+            form: "an element is assigned through the index",
+            right: "xs[index] = value",
+            wrong: "List.set(list: mut xs, index: index, value: value)",
+        },
         // Measured on 2026-09-19 as the largest class the card could name and
         // did not: `RS1001` appears in 26 of the 300 candidates and in 16 of
         // the 100 written *with* this card in the prompt, 28 instances in the
@@ -1597,7 +1615,7 @@ mod tests {
     #[test]
     fn canonical_surface_forms_show_a_right_and_wrong_pair() {
         let forms = canonical_surface_forms();
-        assert_eq!(forms.len(), 14);
+        assert_eq!(forms.len(), 16);
         let section = canonical_surface_forms_section();
         for form in &forms {
             assert_ne!(form.right, form.wrong);

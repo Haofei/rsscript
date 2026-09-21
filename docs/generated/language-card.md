@@ -58,6 +58,8 @@ These are the forms most often written wrong. The right column is what `rss fmt`
 | mutable binding | `let mut total: Int = 0` | `mut total: Int = 0` |
 | a value you will `take` is bound with `local` | `local title = "daily"` | `let title = "daily"` |
 | `take` moves a binding, never a literal | `local title = "daily"; build(title: take title)` | `build(title: take "daily")` |
+| `manage` moves a binding, never a literal (`RS0307`) | `local entry = "started"; record(entry: manage entry)` | `record(entry: manage "started")` |
+| an element is assigned through the index | `xs[index] = value` | `List.set(list: mut xs, index: index, value: value)` |
 | strings are joined by a call, never by `+` | `String.concat(left: head, right: tail)` | `head + tail` |
 | closure literal | `local double = \|x\| { return x * 2 }` | `let double = fn(x: Int) -> Int { return x * 2 }` |
 | closure with an explicit capture list | `local add = fn(x) captures(read base) { return x + base }` | `local add = \|x\| captures(read base) { return x + base }` |

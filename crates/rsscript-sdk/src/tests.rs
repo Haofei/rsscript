@@ -3180,3 +3180,71 @@ fn main() -> fresh String {
         "a nested literal field tests before the arm is taken, and `..` names nothing"
     );
 }
+
+/// `RS0307` on a literal carries the rewrite, not only advice.
+///
+/// The measured regression was a candidate following the card's "manage first"
+/// rule with `entry: manage "started"`. The repair hoists the literal into a
+/// `local` on the line above, and the fix is machine-applicable only because
+/// it carries that whole edit (ADR 0238).
+#[test]
+fn manage_on_a_literal_carries_the_hoisting_edit() {
+    let interface =
+        "pub fn EventLog.record(log: mut EventLog, entry: String) -> Unit\n    retains(entry)\n";
+    let source = "class EventLog {\n    entries: List<String>\n}\n\nfn record_start(log: mut EventLog) -> Unit {\n    EventLog.record(log: mut log, entry: manage \"started\")\n    return Unit\n}\n";
+
+    let diagnostics = Compiler.check_snapshot(&FrontendInputSnapshot::from_sources(
+        [("manage-literal.rss", source)],
+        [("manage-literal.rssi", interface)],
+    ));
+    let diagnostic = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "RS0307")
+        .expect("RS0307 is reported");
+
+    let fix = diagnostic
+        .fixes
+        .iter()
+        .find(|fix| fix.applicability == "machine-applicable")
+        .expect("the literal case carries a machine-applicable fix");
+    let edit = fix
+        .edit
+        .as_ref()
+        .expect("a machine-applicable fix has an edit");
+
+    // The edit replaces the statement from its first column through the end of
+    // the literal, so applying it leaves the binding above and the call intact.
+    assert_eq!(edit.span.line, 6);
+    assert_eq!(edit.span.column, 5);
+    assert_eq!(
+        edit.replacement,
+        "local managed_started = \"started\"\n    EventLog.record(log: mut log, entry: manage managed_started"
+    );
+}
+
+/// The same mistake inside an open argument list has no statement start on its
+/// own line, so no edit can be derived and the diagnostic only advises.
+#[test]
+fn manage_on_a_literal_in_a_continuation_line_only_advises() {
+    let interface =
+        "pub fn EventLog.record(log: mut EventLog, entry: String) -> Unit\n    retains(entry)\n";
+    let source = "class EventLog {\n    entries: List<String>\n}\n\nfn record_start(log: mut EventLog) -> Unit {\n    EventLog.record(\n        log: mut log,\n        entry: manage \"started\",\n    )\n    return Unit\n}\n";
+
+    let diagnostics = Compiler.check_snapshot(&FrontendInputSnapshot::from_sources(
+        [("manage-literal-multiline.rss", source)],
+        [("manage-literal.rssi", interface)],
+    ));
+    let diagnostic = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "RS0307")
+        .expect("RS0307 is reported");
+
+    assert!(
+        diagnostic
+            .fixes
+            .iter()
+            .all(|fix| fix.applicability == "manual"),
+        "no edit is derivable here: {:?}",
+        diagnostic.fixes
+    );
+}

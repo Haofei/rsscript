@@ -645,7 +645,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::INVALID_MANAGE_OPERAND,
         title: "invalid manage operand",
-        explanation: "`manage value` moves a local exclusive binding into the managed runtime. The operand must be a local binding that has not already become managed.",
+        explanation: "`manage value` moves a local exclusive binding into the managed runtime. The operand must be a local binding that has not already become managed. A literal has no binding to move, so when the literal can be hoisted exactly — the statement starts its own line and every character between that start and the literal is known — the instance fix carries a machine-applicable edit that binds the literal to a `local` on the line above and manages that name instead. Where it cannot be derived the fix only advises.",
     },
     DiagnosticExplanation {
         code: code::INVALID_TAKE_OPERAND,

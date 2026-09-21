@@ -1,0 +1,15 @@
+// expect: RS0307
+
+// interface: manage-literal-argument.rssi
+
+// The card says to manage an argument the callee retains, and a candidate
+// following it wrote `manage "started"`. `manage` moves a binding, so the
+// literal has to be bound first — `RS0307` carries that rewrite as an edit.
+class EventLog {
+    entries: List<String>
+}
+
+fn record_start(log: mut EventLog) -> Unit {
+    EventLog.record(log: mut log, entry: manage "started")
+    return Unit
+}
