@@ -123,6 +123,19 @@ pub(in crate::reg_vm) struct CanonicalLoopFacts {
     /// Normal successor targets outside the loop. The current supported shape
     /// has exactly one, but retaining the set makes the fact explicit.
     pub(in crate::reg_vm) exits: Box<[usize]>,
+    /// One past the last source instruction the loop's own blocks occupy. For a
+    /// loop whose blocks are laid out contiguously this is `region.exit`; for a
+    /// loop whose exit block sits *inside* that span (the MIR layout a
+    /// `match`-shaped body produces) it is one past the last loop instruction,
+    /// which is larger than `region.exit`.
+    pub(in crate::reg_vm) span_end: usize,
+    /// Source instructions inside `[region.header, span_end)` that are **not**
+    /// loop instructions: the loop's own post-exit block, which the MIR block
+    /// numbering can lay out between two of the loop's blocks. Empty for a
+    /// contiguous loop. When it is non-empty its first entry is `region.exit`,
+    /// every run is bounded by terminators, and
+    /// `native_normalize_osr_loop_layout` can relocate it past the loop.
+    pub(in crate::reg_vm) hole: Box<[usize]>,
     pub(in crate::reg_vm) induction: Option<CanonicalInductionVariable>,
 }
 
@@ -1315,13 +1328,20 @@ impl CanonicalLoopGraph {
             let RegInstr::Jump { target } = code.get(trampoline)? else {
                 return None;
             };
-            if *target <= body_end {
-                return None;
-            }
             (*target, Some(trampoline))
         };
-        if exit <= body_end || exit > n {
+        if exit > n || exit <= header {
             return None;
+        }
+        // MIR numbers the `while`'s exit block before the blocks its *body* needs,
+        // so a body holding a `match` (or any other nested branch) leaves the exit
+        // block laid out between two of the loop's own blocks. The loop is then not
+        // the contiguous interval `[header, exit)` and `exit <= body_end`. That
+        // layout is recognized by `holed_facts_at`, which computes loop membership
+        // by reachability instead of by interval; everything else keeps the exact
+        // interval recognition below, so no already-recognized loop changes shape.
+        if exit <= body_end {
+            return self.holed_facts_at(code, header, cond_ip, exit, budget);
         }
 
         let in_region = |target: usize| target >= header && target < exit;
@@ -1396,6 +1416,155 @@ impl CanonicalLoopGraph {
             condition: cond_ip,
             latches: latches.clone().into_boxed_slice(),
             exits: exits.into_boxed_slice(),
+            span_end: exit,
+            hole: Box::from([]),
+            induction,
+        })
+    }
+
+    /// Recognize a loop whose own blocks are **not** a contiguous interval because
+    /// MIR laid the post-loop block out between them. Membership is the set of
+    /// instructions reachable from `header` once the exit edge is cut, so a body
+    /// with internal conditional control flow (a hand-written `match` over an
+    /// `Option`/`Result`, a nested `if`) is recognized as long as it still has one
+    /// header, backedges only to that header, and one edge leaving it.
+    ///
+    /// The instructions inside the span that are not loop instructions are the
+    /// `hole`. It is accepted only when it starts exactly at `exit` and every run
+    /// of it is bounded by terminators on both sides, which is what lets
+    /// `native_normalize_osr_loop_layout` relocate it past the loop without
+    /// changing any fall-through.
+    fn holed_facts_at(
+        &self,
+        code: &[RegInstr],
+        header: usize,
+        cond_ip: usize,
+        exit: usize,
+        budget: &mut CanonicalLoopWorkBudget,
+    ) -> Option<CanonicalLoopFacts> {
+        let n = code.len();
+        let latches = self.backedges_by_header.get(header)?;
+        if !budget.charge(n.max(1)) {
+            return None;
+        }
+        let mut in_loop = vec![false; n];
+        in_loop[header] = true;
+        let mut worklist = vec![header];
+        while let Some(ip) = worklist.pop() {
+            for &target in self.successors.get(ip)? {
+                if target == exit || target >= n || in_loop[target] {
+                    continue;
+                }
+                if !budget.charge(1) {
+                    return None;
+                }
+                in_loop[target] = true;
+                worklist.push(target);
+            }
+        }
+        let inside = |ip: usize| ip < n && in_loop[ip];
+        if latches.iter().any(|&latch| !inside(latch)) {
+            return None;
+        }
+
+        // Single exit, and no in-loop `Return`: the region has exactly one normal
+        // way out, which is the ip OSR deopts at.
+        let mut exits = Vec::new();
+        let mut span_end = header.checked_add(1)?;
+        for ip in header..n {
+            if !in_loop[ip] {
+                continue;
+            }
+            span_end = ip.checked_add(1)?;
+            if matches!(code[ip], RegInstr::Return { .. }) {
+                return None;
+            }
+            let outgoing = self.successors.get(ip)?;
+            if !budget.charge(outgoing.len().max(1)) {
+                return None;
+            }
+            exits.extend(outgoing.iter().copied().filter(|target| !inside(*target)));
+        }
+        exits.sort_unstable();
+        exits.dedup();
+        if exits.as_slice() != [exit] {
+            return None;
+        }
+
+        // Single entry: only the header may be entered from outside the loop.
+        for (ip, _) in in_loop
+            .iter()
+            .enumerate()
+            .take(span_end)
+            .skip(header.checked_add(1)?)
+            .filter(|(_, member)| **member)
+        {
+            let incoming = self.predecessors.get(ip)?;
+            if !budget.charge(incoming.len().max(1)) {
+                return None;
+            }
+            if incoming.iter().any(|source| !inside(*source)) {
+                return None;
+            }
+        }
+        let outside_predecessors = self
+            .predecessors
+            .get(header)?
+            .iter()
+            .copied()
+            .filter(|source| !inside(*source))
+            .collect::<Vec<_>>();
+        if !budget.charge(outside_predecessors.len().max(1)) || outside_predecessors.len() > 1 {
+            return None;
+        }
+
+        let falls_through = |ip: usize| {
+            self.successors
+                .get(ip)
+                .is_some_and(|targets| targets.contains(&(ip + 1)))
+        };
+        let mut hole = Vec::new();
+        for (ip, _) in in_loop
+            .iter()
+            .enumerate()
+            .take(span_end)
+            .skip(header)
+            .filter(|(_, member)| !**member)
+        {
+            if !budget.charge(1) {
+                return None;
+            }
+            // A relocatable run may not be entered by fall-through from the
+            // instruction laid out before it, and may not fall out of its own end.
+            // Both neighbours change after relocation; a terminator on each side is
+            // what makes the move a pure permutation.
+            let run_start = hole.last() != Some(&ip.checked_sub(1)?);
+            if run_start && falls_through(ip.checked_sub(1)?) {
+                return None;
+            }
+            hole.push(ip);
+        }
+        // An empty hole here would mean the exit sits past the loop after all, which
+        // the interval recognizer above already owns.
+        if hole.first() != Some(&exit) || falls_through(span_end.checked_sub(1)?) {
+            return None;
+        }
+        for (index, &ip) in hole.iter().enumerate() {
+            let run_end = hole.get(index + 1) != Some(&ip.checked_add(1)?);
+            if run_end && falls_through(ip) {
+                return None;
+            }
+        }
+
+        let induction = canonical_induction_variable(code, header, span_end, cond_ip, budget);
+        Some(CanonicalLoopFacts {
+            region: OsrLoop { header, exit },
+            preheader: outside_predecessors.first().copied(),
+            condition: cond_ip,
+            latches: latches.clone().into_boxed_slice(),
+            exits: exits.into_boxed_slice(),
+            span_end,
+            hole: hole.into_boxed_slice(),
             induction,
         })
     }
@@ -1414,17 +1583,134 @@ pub(in crate::reg_vm) fn canonical_loop_at(
     graph.facts_at(code, header, &mut budget)
 }
 
+/// The loop at `header` **as a contiguous region**. A loop whose exit block is
+/// laid out inside its own span has no such region until
+/// `native_normalize_osr_loop_layout` has relocated that block, so it is not
+/// offered here: every consumer of an `OsrLoop` reads `[header, exit)` as the
+/// whole region, and a partial region would be a silent unsoundness rather than
+/// a missed optimization.
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn detect_natural_loop_at(
     code: &[RegInstr],
     header: usize,
 ) -> Option<OsrLoop> {
-    canonical_loop_at(code, header).map(|facts| facts.region)
+    canonical_loop_at(code, header)
+        .filter(|facts| facts.hole.is_empty())
+        .map(|facts| facts.region)
 }
 
+/// Contiguous canonical loops only, for the same reason as
+/// [`detect_natural_loop_at`]. Read-only LICM and the OSR candidate scan both
+/// treat `[header, exit)` as the entire loop.
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn detect_canonical_loops(code: &[RegInstr]) -> Vec<CanonicalLoopFacts> {
+    let mut facts = analyze_canonical_loops(code).facts;
+    facts.retain(|facts| facts.hole.is_empty());
+    facts
+}
+
+/// Every canonical loop, including one whose exit block the MIR layout placed
+/// inside its span. Only OSR candidate selection and the layout normalization
+/// consume these, and both handle the hole explicitly.
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) fn detect_canonical_loops_with_layout(
+    code: &[RegInstr],
+) -> Vec<CanonicalLoopFacts> {
     analyze_canonical_loops(code).facts
+}
+
+/// Relocate the loop at `header`'s hole — the post-loop block MIR laid out
+/// between two of the loop's own blocks — to the end of the loop's span, so the
+/// loop becomes the contiguous region `[header, exit)` every OSR consumer
+/// expects. Returns the rewritten stream and `ip_map[new_ip] = source_ip`.
+///
+/// This is a pure permutation of the function's instructions: no instruction is
+/// added, removed, duplicated or edited except for the branch targets, which are
+/// remapped through the permutation. Every source instruction therefore still
+/// owns exactly one item and exactly one interpreter step, and the header keeps
+/// its source ip, because only instructions after it move. `None` means the loop
+/// is already contiguous (or is not recognized at all), and the caller keeps the
+/// original stream.
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) fn native_normalize_osr_loop_layout(
+    code: &[RegInstr],
+    header: usize,
+) -> Option<(Vec<RegInstr>, Vec<usize>)> {
+    let facts = canonical_loop_at(code, header)?;
+    if facts.hole.is_empty() {
+        return None;
+    }
+    let n = code.len();
+    let span_end = facts.span_end;
+    if span_end > n {
+        return None;
+    }
+    let mut relocated = vec![false; n];
+    for &ip in &facts.hole {
+        *relocated.get_mut(ip)? = true;
+    }
+    let mut order: Vec<usize> = Vec::with_capacity(n);
+    order.extend(0..header);
+    order.extend((header..span_end).filter(|ip| !relocated[*ip]));
+    order.extend(facts.hole.iter().copied());
+    order.extend(span_end..n);
+    if order.len() != n {
+        return None;
+    }
+    // `new_index[source_ip] = new_ip`, with the synthetic one-past-the-end target
+    // mapping to itself.
+    let mut new_index = vec![n; n.checked_add(1)?];
+    for (new_ip, &source_ip) in order.iter().enumerate() {
+        new_index[source_ip] = new_ip;
+    }
+    let mut normalized = Vec::with_capacity(n);
+    for &source_ip in &order {
+        let mut instr = code.get(source_ip)?.clone();
+        native_retarget_branches(&mut instr, |target| new_index.get(target).copied())?;
+        normalized.push(instr);
+    }
+    Some((normalized, order))
+}
+
+/// Rewrite every control-flow target of `instr` through `map`. The match ops are
+/// two-way branches, so a pass that moves instructions must remap both arms; a
+/// target `map` cannot resolve fails the caller closed.
+#[cfg(feature = "native-jit")]
+fn native_retarget_branches(
+    instr: &mut RegInstr,
+    map: impl Fn(usize) -> Option<usize>,
+) -> Option<()> {
+    match instr {
+        RegInstr::Jump { target }
+        | RegInstr::JumpIfBool { target, .. }
+        | RegInstr::JumpIfIntCompare { target, .. } => {
+            *target = map(*target)?;
+        }
+        RegInstr::MatchOption {
+            some_ip, none_ip, ..
+        }
+        | RegInstr::MatchMapGet {
+            some_ip, none_ip, ..
+        }
+        | RegInstr::MatchSortedMapGet {
+            some_ip, none_ip, ..
+        } => {
+            *some_ip = map(*some_ip)?;
+            *none_ip = map(*none_ip)?;
+        }
+        RegInstr::MatchResult { ok_ip, err_ip, .. } => {
+            *ok_ip = map(*ok_ip)?;
+            *err_ip = map(*err_ip)?;
+        }
+        RegInstr::MatchVariant {
+            match_ip, else_ip, ..
+        } => {
+            *match_ip = map(*match_ip)?;
+            *else_ip = map(*else_ip)?;
+        }
+        _ => {}
+    }
+    Some(())
 }
 
 #[cfg(feature = "native-jit")]
@@ -1455,7 +1741,7 @@ fn analyze_canonical_loops(code: &[RegInstr]) -> CanonicalLoopAnalysisResult {
     }
 }
 
-#[cfg(feature = "native-jit")]
+#[cfg(all(test, feature = "native-jit"))]
 pub(in crate::reg_vm) fn detect_natural_loops(code: &[RegInstr]) -> Vec<OsrLoop> {
     detect_canonical_loops(code)
         .into_iter()
@@ -1704,6 +1990,129 @@ mod canonical_loop_tests {
         assert_eq!(facts.condition, 4);
         assert_eq!(&*facts.latches, &[7]);
         assert_eq!(&*facts.exits, &[8]);
+    }
+
+    /// The layout MIR produces for a `while` whose body holds a `match`: the
+    /// loop's own exit block is numbered before the blocks the body needs, so it
+    /// is laid out *between* two of the loop's blocks and the loop is no longer
+    /// the interval `[header, exit)`.
+    fn match_shaped_loop() -> Vec<RegInstr> {
+        vec![
+            RegInstr::LoadInt { dst: 0, value: 0 },
+            RegInstr::LoadInt { dst: 1, value: 8 },
+            RegInstr::LoadInt { dst: 2, value: 1 },
+            RegInstr::LessInt {
+                dst: 3,
+                lhs: 0,
+                rhs: 1,
+            },
+            RegInstr::JumpIfBool {
+                cond: 3,
+                expected: true,
+                target: 6,
+            },
+            RegInstr::Jump { target: 7 },
+            RegInstr::MatchOption {
+                src: 4,
+                some_ip: 11,
+                none_ip: 9,
+            },
+            // The post-loop block, laid out inside the loop's span.
+            RegInstr::Move { dst: 5, src: 0 },
+            RegInstr::Return { src: 5 },
+            RegInstr::AddInt {
+                dst: 0,
+                lhs: 0,
+                rhs: 2,
+            },
+            RegInstr::Jump { target: 3 },
+            // The match's other arm, laid out after the latch.
+            RegInstr::AddInt {
+                dst: 0,
+                lhs: 0,
+                rhs: 2,
+            },
+            RegInstr::Jump { target: 9 },
+        ]
+    }
+
+    #[test]
+    fn a_match_shaped_body_is_recognized_with_its_exit_block_as_a_relocatable_hole() {
+        let code = match_shaped_loop();
+        let facts = canonical_loop_at(&code, 3).expect("match-shaped loop is canonical");
+        assert_eq!(facts.region, OsrLoop { header: 3, exit: 7 });
+        assert_eq!(facts.span_end, 13);
+        assert_eq!(&*facts.hole, &[7, 8]);
+        assert_eq!(&*facts.latches, &[10]);
+        assert_eq!(&*facts.exits, &[7]);
+        assert_eq!(facts.preheader, Some(2));
+        // Every consumer of an `OsrLoop` reads `[header, exit)` as the whole
+        // region, so the loop is offered as one only once it is contiguous.
+        assert_eq!(detect_natural_loop_at(&code, 3), None);
+        assert!(detect_canonical_loops(&code).is_empty());
+    }
+
+    #[test]
+    fn normalizing_the_layout_makes_the_match_shaped_loop_a_contiguous_region() {
+        let code = match_shaped_loop();
+        let (normalized, ip_map) =
+            native_normalize_osr_loop_layout(&code, 3).expect("the hole is relocatable");
+        assert_eq!(ip_map, vec![0, 1, 2, 3, 4, 5, 6, 9, 10, 11, 12, 7, 8]);
+        assert_eq!(normalized.len(), code.len());
+        let region = detect_natural_loop_at(&normalized, 3).expect("normalized loop is canonical");
+        assert_eq!(
+            region,
+            OsrLoop {
+                header: 3,
+                exit: 11
+            }
+        );
+        // The header keeps its source ip, which is what the interpreter's OSR
+        // header check fires on, and the exit maps back to the post-loop block.
+        assert_eq!(ip_map[region.header], 3);
+        assert_eq!(ip_map[region.exit], 7);
+        assert!(matches!(normalized[5], RegInstr::Jump { target: 11 }));
+        assert!(matches!(
+            normalized[6],
+            RegInstr::MatchOption {
+                src: 4,
+                some_ip: 9,
+                none_ip: 7,
+            }
+        ));
+        assert!(matches!(normalized[8], RegInstr::Jump { target: 3 }));
+        assert!(matches!(normalized[10], RegInstr::Jump { target: 7 }));
+        assert!(matches!(normalized[11], RegInstr::Move { dst: 5, src: 0 }));
+        assert!(matches!(normalized[12], RegInstr::Return { src: 5 }));
+        // Every source instruction still owns exactly one item, which is what
+        // keeps the region's step and intrinsic accounting exact.
+        let mut owners = ip_map.clone();
+        owners.sort_unstable();
+        assert_eq!(owners, (0..code.len()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_hole_entered_by_fall_through_is_declined_rather_than_relocated() {
+        let mut code = match_shaped_loop();
+        // The instruction before the hole now falls through into it, so moving the
+        // hole would change which instruction runs next.
+        code[6] = RegInstr::JumpIfBool {
+            cond: 3,
+            expected: true,
+            target: 11,
+        };
+        assert!(canonical_loop_at(&code, 3).is_none());
+        assert!(native_normalize_osr_loop_layout(&code, 3).is_none());
+    }
+
+    #[test]
+    fn a_contiguous_loop_normalizes_to_nothing_and_keeps_its_region() {
+        let code = inverted_mir_loop();
+        let facts = canonical_loop_at(&code, 3).expect("canonical loop");
+        assert!(facts.hole.is_empty());
+        assert_eq!(facts.span_end, facts.region.exit);
+        assert!(native_normalize_osr_loop_layout(&code, 3).is_none());
+        assert_eq!(detect_natural_loops(&code), vec![facts.region]);
     }
 
     #[test]

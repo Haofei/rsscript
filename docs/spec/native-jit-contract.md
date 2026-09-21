@@ -285,34 +285,65 @@ accounting segment rather than by one instruction.
 
 ### Remaining gap list
 
-1. **Option/Result scalar replacement under OSR is reachable only through the
-   combinator expansion.** The OSR accounting gap that used to make
-   `RegVm::build_osr_plan` decline **any** loop containing a `CallKnown`,
-   `CallClosure` or `SpawnTask` is closed (see "The OSR pass chain carries the same
-   cost vector" above), and closing it fixed a live mis-count rather than only
-   unlocking an optimization: the shape
-   `while i < 3000 { total = total + Option.unwrap_or<Int>(value: Some(i * 2), default: 0) ... }`
-   ran natively through the combinator expansion and reported **51053 of the
-   interpreter's 54014 steps and 41 of its 3002 intrinsic calls**. It now reports
-   both exactly, and the same loop with a dissolvable `CallKnown` in it
-   (`Result.unwrap_or(value: checked(v: i), default: 0)`) reaches OSR at all for
-   the first time.
+1. **Two hand-written kernels still decline, each for a reason of its own.** The
+   loop-recognition half of this entry is closed. `detect_natural_loops`
+   (`crates/rsscript-vm/src/reg_vm/native/translate/loop_regions.rs`) read a loop
+   as the contiguous interval `[header, exit)`, and MIR numbers a `while`'s exit
+   block *before* the blocks its body needs — so a body holding a hand-written
+   `match` (or any other nested branch) leaves that exit block laid out *between*
+   two of the loop's own blocks, `exit` lands below the latch, and recognition
+   returned **no loop at all**: `select_osr_candidate_loops` offered nothing,
+   `RegVm::try_osr` was never reached, no region was generated and the
+   interpreter owned every step exactly.
 
-   What remains is upstream of accounting and is a lost optimization rather than a
-   mis-count. Measured: for a `main` whose `while` body holds a hand-written
-   `match` over an `Option`/`Result`, `detect_natural_loops`
-   (`crates/rsscript-vm/src/reg_vm/native/translate/loop_regions.rs`, via
-   `analyze_canonical_loops`) returns **no loop at all**, so
-   `select_osr_candidate_loops` offers nothing, `RegVm::try_osr` is never reached,
-   no region is generated, and the interpreter owns every step exactly. The same
-   holds for the hand-written kernels `osr_option_loop.rss`, `osr_struct_loop.rss`
-   and `osr_closure_loop.rss`, which all report
-   `native_calls + osr_entries + continuation_entries == 0`. Option/Result scalar
-   replacement is therefore observable under OSR only through the combinator forms
-   (`Option.unwrap_or`, `Result.unwrap_or`), whose source shape is a
-   `CallIntrinsic` and carries no match op until the expansion pass rewrites it.
-   Needed: find and lift whichever canonical-loop precondition the match-shaped
-   body fails, which is a loop-recognition change rather than an accounting one.
+   The precondition that failed was contiguity, not the number of branches in the
+   body. `CanonicalLoopGraph::holed_facts_at` now computes loop membership by
+   reachability from the header with the exit edge cut, so a loop with internal
+   conditional control flow is recognized whenever it still has one header,
+   backedges only to that header, one edge leaving it and no in-loop `Return`.
+   The instructions inside the span that are not loop instructions are its
+   `hole`, accepted only when the hole starts exactly at the exit and every run
+   of it is bounded by terminators on both sides.
+   `native_normalize_osr_loop_layout` then relocates the hole past the loop
+   before `RegVm::build_osr_plan` runs its pass chain, which is what makes the
+   region the contiguous `[header, exit)` every OSR consumer reads.
+
+   That relocation is a **pure permutation**: no instruction is added, removed or
+   duplicated, only branch targets are remapped, and the header keeps its source
+   ip (only instructions after it move), so the interpreter's header check is
+   unchanged. Each source instruction therefore still owns exactly one item and
+   exactly one interpreter step, and the permutation is composed onto
+   `expand_map` so every later hop — the boundary mapping, the per-item resume
+   map and the cost vector — lands directly on the interpreter's own index.
+   `detect_natural_loop_at` and `detect_canonical_loops` deliberately keep
+   returning contiguous loops only, because read-only LICM and the candidate scan
+   both read `[header, exit)` as the whole loop and a partial region would be a
+   silent unsoundness rather than a missed optimization.
+
+   `osr_option_loop.rss` now tiers up, as does the `Result` sibling
+   (`match checked(v: i) { Ok(value) => ... Err(_) => ... }` over a dissolvable
+   leaf call). What remains is the other two kernels this entry used to group
+   with them, and measurement shows neither was ever a loop-recognition problem —
+   both loops are contiguous and always were recognized:
+
+   - `osr_struct_loop.rss` declines because `p.x` on a locally built struct lowers
+     to `GetField` keyed by *name*, which `native_lowering_class` classifies as an
+     aggregate barrier. The loop-local struct pass
+     (`native_scalar_replace_structs_in_region`) dissolves `MakeStruct` +
+     `GetFieldSlot`, and a slot-keyed read exists only inside the typed-region
+     lowering the *direct* OSR path derives — which this loop cannot reach,
+     because its untyped region is not native-subset. Needed: either a name-keyed
+     arm in the struct pass or a slot resolution before native-subset checking.
+   - `osr_closure_loop.rss` declines because its closure is a *parameter*: there
+     is no `MakeClosure` for the sinking pass to name a callee from, and naming
+     one dynamically is the profile-guided closure PIC that was removed after
+     failing its retention threshold. This is a deliberate decline, not a gap to
+     close.
+
+   Both are pinned as declines by
+   `the_kernels_the_layout_normalization_does_not_unblock_still_account_exactly`,
+   so a change that does unblock one has to update this list rather than pass
+   silently.
 
 2. **A key the loop builds keeps the loop on the interpreter.** The OSR lowering
    has no arm for a `StringConcat` whose result survives as a live heap `String` —
@@ -472,6 +503,11 @@ instruction. Enabling closure sinking end to end likewise leaves the gate's
 own code untouched — its loop allocates no closure — and measured a native median
 of 1.76 ms against 2.00 ms over four interleaved paired runs; the shape it does
 change, `native_closure_sinking.rss`, is in the closure-sinking table above.
+Relocating a `match`-shaped loop's exit block before the OSR pass chain runs
+(gap 1) emits no different code for the gate either — the gate's own loop is
+contiguous, so `native_normalize_osr_loop_layout` returns `None` and the chain is
+byte-for-byte the previous path — and measured a native median of 1.53 ms against
+1.51 ms over four interleaved paired runs, within noise.
 Composing the OSR pass chain's cost vector likewise emits no
 different code for the gate — whose loop is call-free and takes the direct OSR
 entry — and measured a native median of 1.72 ms against 1.79 ms over four
@@ -525,6 +561,17 @@ segment-reservation model rather than block charging),
 helper (`String.len`), an `Int`-keyed map get whose constant key-hash unit rides
 the step meter beside it, and an intrinsic inside a leaf call the inliner
 dissolves, so a helper-side charge would fail three of the four.
+
+`an_osr_loop_whose_body_matches_reaches_generated_code_and_accounts_exactly` and
+`an_osr_loop_whose_body_matches_accounts_intrinsics_under_the_production_defaults`
+replay `OSR_MATCH_LAYOUT_PARITY_CASES` — the `osr_option_loop.rss` kernel, a
+`Result` match over a dissolvable leaf call, and an `Option` match whose payload
+is a heap `String` the scalar replacement cannot dissolve — across the whole
+`STEP_PARITY_BUDGETS` list under eager OSR and the production defaults, each
+asserting `osr_entries > 0` so neither can pass by declining the region. Their
+companion `the_kernels_the_layout_normalization_does_not_unblock_still_account_exactly`
+pins `osr_struct_loop.rss` and `osr_closure_loop.rss` as interpreter-owned with
+exact counts, naming the reason each one declines.
 
 `native_step_accounting_matches_the_interpreter_for_an_osr_loop_containing_an_inlined_call`
 and `an_osr_loop_containing_an_inlined_call_reports_the_interpreter_intrinsic_call_count`
@@ -730,7 +777,12 @@ separate compatibility feature or promotion surface. OSR selection and
 helper-hoisting consume
 one canonical loop-fact
 projection: unique preheader (when present), header condition, latches, exits, and
-a conservative affine induction variable. The existing backend range proof may
+a conservative affine induction variable. A loop whose own blocks MIR did
+not lay out contiguously additionally carries the `hole` those blocks leave —
+its post-loop block — and is offered to OSR only after
+`native_normalize_osr_loop_layout` has relocated that hole past the loop, which
+is a pure permutation of the function's instructions with its branch targets
+remapped. The existing backend range proof may
 remove an individual flat-list bounds check, and reports the exact eliminated-site
 count separately from checks retained.
 

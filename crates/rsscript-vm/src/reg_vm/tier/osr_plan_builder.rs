@@ -167,20 +167,55 @@ impl RegVm {
                 // expanded body is a conservative restriction, never unsound). The
                 // final OSR boundary is composed back through `expand_map` to land in
                 // the REAL `func.code` (where the interpreter resumes).
-                let direct_entry = detect_natural_loop_at(&func.code, header_ip)
-                    .filter(|lp| osr_loop_region_is_native_subset(&func.code, *lp, func.params))
+                // MIR numbers a `while`'s exit block *before* the blocks its body
+                // needs, so a body holding a hand-written `match` (or any other
+                // nested branch) leaves that exit block laid out between two of the
+                // loop's own blocks: the loop is then not the contiguous region
+                // `[header, exit)` that every OSR consumer reads, and recognition
+                // declined it outright. `native_normalize_osr_loop_layout` relocates
+                // that block past the loop. It is a pure permutation — no instruction
+                // is added, removed or duplicated, only branch targets are remapped,
+                // and the header keeps its source ip — so the whole chain below,
+                // including its exact per-item accounting, runs on the normalized
+                // stream and every ip composes back to the interpreter's own index
+                // through `layout_map`. A loop that is already contiguous normalizes
+                // to `None` and the chain is byte-for-byte the previous path.
+                let (base_owned, layout_map): (Option<RegFunction>, Vec<usize>) =
+                    match native_normalize_osr_loop_layout(&func.code, header_ip) {
+                        Some((normalized, map)) => (
+                            Some(RegFunction {
+                                ordinal: func.ordinal,
+                                name: func.name.clone(),
+                                params: func.params,
+                                captures: func.captures,
+                                regs: func.regs,
+                                local_regs: HashMap::new(),
+                                code: normalized,
+                            }),
+                            map,
+                        ),
+                        None => (None, (0..func.code.len()).collect()),
+                    };
+                let base_func: &RegFunction = base_owned.as_ref().unwrap_or(func);
+                // A relocated stream no longer agrees with the recorded per-ip branch
+                // profile, so drop it exactly as the combinator expansion does.
+                let profile = if base_owned.is_some() { None } else { profile };
+                let direct_entry = detect_natural_loop_at(&base_func.code, header_ip)
                     .filter(|lp| {
-                        !osr_loop_region_needs_optimized_native_subset_path(&func.code, *lp)
+                        osr_loop_region_is_native_subset(&base_func.code, *lp, func.params)
+                    })
+                    .filter(|lp| {
+                        !osr_loop_region_needs_optimized_native_subset_path(&base_func.code, *lp)
                     })
                     .and_then(|lp| {
-                        let identity_ip_map: Vec<usize> = (0..func.code.len()).collect();
+                        let identity_ip_map: Vec<usize> = layout_map.clone();
                         let translation_started =
                             native.collect_stats.then(std::time::Instant::now);
                         let translation = translate_osr_loop_profiled(OsrTranslationRequest {
                             function: func,
                             facts: &function_facts,
                             profile,
-                            code: &func.code,
+                            code: &base_func.code,
                             register_count: func.regs,
                             parameter_count: func.params,
                             capture_count: func.captures,
@@ -331,23 +366,24 @@ impl RegVm {
                         })
                     });
                 let entry = direct_entry.or_else(|| {
-                let expanded = detect_natural_loop_at(&func.code, header_ip).and_then(|lp_pre| {
-                    native_expand_option_result_combinators_in_region(
-                        &unit,
-                        func,
-                        &func.code,
-                        func.regs,
-                        lp_pre.header,
-                        lp_pre.exit,
-                    )
-                });
+                let expanded =
+                    detect_natural_loop_at(&base_func.code, header_ip).and_then(|lp_pre| {
+                        native_expand_option_result_combinators_in_region(
+                            &unit,
+                            base_func,
+                            &base_func.code,
+                            func.regs,
+                            lp_pre.header,
+                            lp_pre.exit,
+                        )
+                    });
                 let (eff_owned, expand_map): (Option<RegFunction>, Vec<usize>) = match expanded {
                     // The identity fast-path returns the code unchanged with
                     // `eregs == func.regs` and `ecode.len() == func.code.len()`; a real
                     // expansion always adds temp regs AND grows the stream. Detect "did
                     // it fire" by either growing.
                     Some((ecode, eregs, emap))
-                        if eregs != func.regs || ecode.len() != func.code.len() =>
+                        if eregs != func.regs || ecode.len() != base_func.code.len() =>
                     {
                         let f_e = RegFunction {
                             ordinal: func.ordinal,
@@ -360,9 +396,20 @@ impl RegVm {
                         };
                         (Some(f_e), emap)
                     }
-                    _ => (None, (0..func.code.len()).collect()),
+                    _ => (None, (0..base_func.code.len()).collect()),
                 };
-                let eff_func: &RegFunction = eff_owned.as_ref().unwrap_or(func);
+                let eff_func: &RegFunction = eff_owned.as_ref().unwrap_or(base_func);
+                // `expand_map` indexes the normalized stream; compose the layout
+                // permutation onto it so every later hop lands directly on the
+                // interpreter's own instruction index.
+                let expand_map: Vec<usize> = match expand_map
+                    .iter()
+                    .map(|&base_idx| layout_map.get(base_idx).copied())
+                    .collect::<Option<Vec<usize>>>()
+                {
+                    Some(map) => map,
+                    None => return None,
+                };
                 // `expand_map[eff_idx] = real func.code idx`. A combinator at a real
                 // index maps MANY expanded indices back to itself; the OSR boundary
                 // (loop header/exit) is copy-through control flow, so it maps 1:1 to a

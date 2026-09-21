@@ -526,13 +526,17 @@ fn native_compiled_call_sites_inner(
 }
 
 #[cfg(feature = "native-jit")]
-fn osr_loop_region_is_transform_candidate(unit: &RegUnit, func: &RegFunction, lp: OsrLoop) -> bool {
-    let has_elidable_full_list_slice = native_region_has_readonly_full_list_slice_elision(
-        &func.code, func.regs, lp.header, lp.exit,
-    );
+fn osr_loop_region_is_transform_candidate(
+    unit: &RegUnit,
+    func: &RegFunction,
+    code: &[RegInstr],
+    lp: OsrLoop,
+) -> bool {
+    let has_elidable_full_list_slice =
+        native_region_has_readonly_full_list_slice_elision(code, func.regs, lp.header, lp.exit);
     let mut direct_call_results: Vec<usize> = Vec::new();
     let mut direct_await_results: Vec<usize> = Vec::new();
-    if let Some(region) = func.code.get(lp.header..lp.exit) {
+    if let Some(region) = code.get(lp.header..lp.exit) {
         for instr in region {
             match instr {
                 RegInstr::CallKnown { dst, .. } => direct_call_results.push(*dst),
@@ -554,9 +558,9 @@ fn osr_loop_region_is_transform_candidate(unit: &RegUnit, func: &RegFunction, lp
         }
     }
     let checked_payload_rewrite_ips =
-        native_checked_payload_rewrite_ips_in_region(&func.code, func.regs, lp.header, lp.exit)
+        native_checked_payload_rewrite_ips_in_region(code, func.regs, lp.header, lp.exit)
             .unwrap_or_else(|| vec![false; func.code.len()]);
-    func.code.get(lp.header..lp.exit).is_some_and(|region| {
+    code.get(lp.header..lp.exit).is_some_and(|region| {
         let region_defs = native_osr_region_defined_regs(region);
         region.iter().enumerate().all(|(offset, instr)| {
             let ip = lp.header + offset;
@@ -671,14 +675,50 @@ fn osr_loop_candidate_score(code: &[RegInstr], lp: OsrLoop) -> (u8, u8, u8, usiz
 pub(in crate::reg_vm) fn select_osr_candidate_loops(
     unit: &RegUnit,
     func: &RegFunction,
-) -> Vec<OsrLoop> {
-    let mut candidates: Vec<_> = detect_natural_loops(&func.code)
-        .into_iter()
-        .filter(|lp| osr_loop_region_is_transform_candidate(unit, func, *lp))
-        .collect();
-    candidates.sort_by_key(|lp| std::cmp::Reverse(osr_loop_candidate_score(&func.code, *lp)));
+) -> Vec<OsrCandidate> {
+    // A loop whose exit block MIR laid out inside its own span is a candidate on
+    // the *normalized* stream — the one `RegVm::build_osr_plan` compiles — because
+    // that is where its region is the contiguous `[header, exit)` every region
+    // predicate below reads. The header keeps its source ip either way, which is
+    // what the interpreter's header check fires on.
+    let mut candidates: Vec<(OsrLoop, Option<Vec<RegInstr>>)> = Vec::new();
+    for facts in detect_canonical_loops_with_layout(&func.code) {
+        if facts.hole.is_empty() {
+            candidates.push((facts.region, None));
+            continue;
+        }
+        let Some((normalized, _)) =
+            native_normalize_osr_loop_layout(&func.code, facts.region.header)
+        else {
+            continue;
+        };
+        let Some(lp) = detect_natural_loop_at(&normalized, facts.region.header) else {
+            continue;
+        };
+        candidates.push((lp, Some(normalized)));
+    }
+    candidates.retain(|(lp, normalized)| {
+        let code: &[RegInstr] = normalized.as_deref().unwrap_or(&func.code);
+        osr_loop_region_is_transform_candidate(unit, func, code, *lp)
+    });
+    candidates.sort_by_key(|(lp, normalized)| {
+        let code: &[RegInstr] = normalized.as_deref().unwrap_or(&func.code);
+        std::cmp::Reverse(osr_loop_candidate_score(code, *lp))
+    });
     candidates.truncate(MAX_OSR_REGIONS_PER_FUNCTION);
     candidates
+        .into_iter()
+        .map(|(lp, normalized)| {
+            let code: &[RegInstr] = normalized.as_deref().unwrap_or(&func.code);
+            OsrCandidate {
+                header_ip: lp.header,
+                iteration_work: code
+                    .get(lp.header..lp.exit)
+                    .map(interpreted_region_work)
+                    .unwrap_or(1),
+            }
+        })
+        .collect()
 }
 
 impl RegVm {

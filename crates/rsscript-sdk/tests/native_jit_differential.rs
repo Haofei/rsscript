@@ -1018,6 +1018,31 @@ fn accounting_pair(
     (interpreter, native)
 }
 
+fn accounting_pair_with_args(
+    name: &str,
+    source: &str,
+    args: &[&str],
+    limits: RunLimits,
+    options: NativeJitOptions,
+) -> (ExecutionReport, ExecutionReport) {
+    let built = Compiler.compile(name, source).expect("source compiles");
+    let admitted = ArtifactVerifier
+        .verify(built)
+        .expect("artifact verifies")
+        .admit_trusted_input();
+    let linked = Runtime::new(ProviderRegistry::default())
+        .link(&admitted)
+        .expect("artifact links");
+    let interpreter =
+        linked.execute(ExecutionRequest::new(args.iter().copied()).limits(limits.clone()));
+    let native = linked.execute(
+        ExecutionRequest::new(args.iter().copied())
+            .limits(limits)
+            .native_jit(options),
+    );
+    (interpreter, native)
+}
+
 fn native_region_entries(report: &ExecutionReport) -> u64 {
     let telemetry = native_telemetry(report);
     telemetry
@@ -1250,6 +1275,198 @@ const OSR_INLINE_PARITY_CASES: &[(&str, &str)] = &[
         "fn checked(v: Int) -> Result<Int, String> { return Ok(v * 2) } fn main() -> Unit { let mut i = 0; let mut total = 0; while i < 3000 { total = total + Result.unwrap_or<Int, String>(value: checked(v: i), default: 0); i = i + 1 }; Output.write(message: String.from_int(value: total)); return Unit }",
     ),
 ];
+
+/// Loops whose body holds internal conditional control flow, which MIR lays out
+/// with the loop's own exit block *between* two of the loop's blocks.
+///
+/// Loop recognition read a loop as the contiguous interval `[header, exit)`, so
+/// `detect_natural_loops` returned **no loop at all** for these: no region was
+/// generated, `RegVm::try_osr` was never reached, and the interpreter owned every
+/// step. `native_normalize_osr_loop_layout` relocates the exit block past the
+/// loop before the OSR pass chain runs. That is a pure permutation of the
+/// function's instructions — none added, removed or duplicated, only branch
+/// targets remapped — so each source instruction still owns exactly one item and
+/// exactly one interpreter step, which is what the budgets below check.
+const OSR_MATCH_LAYOUT_PARITY_CASES: &[(&str, &str)] = &[
+    // The kernel the native-jit contract's gap list named, at a test-sized
+    // iteration count through its own `bench_size` argument.
+    (
+        "osr_option_loop.rss",
+        include_str!("../../../benchmarks/vm-jit/kernels/osr_option_loop.rss"),
+    ),
+    // The `Result` sibling: a hand-written `match` over a `Result` a dissolvable
+    // leaf call returns, so the layout normalization, the leaf inliner and the
+    // Result scalar replacement all have to compose on one region.
+    (
+        "osr-result-match-loop.rss",
+        "fn checked(v: Int) -> Result<Int, String> { return Ok(v * 2) } fn hot(limit: Int) -> Int { Output.write(message: \"begin\"); let mut i = 0; let mut total = 0; while i < limit { match checked(v: i) { Ok(value) => { total = total + value } Err(_) => { total = total + 1 } }; i = i + 1 }; Output.write(message: String.from_int(value: total)); return total } fn main(args: read List<String>) -> Unit { let limit = Arguments.get_or_default(args: read args, index: 0, default: \"3000\"); match String.parse_int(value: limit) { Some(value) => { Output.write(message: String.from_int(value: hot(limit: value))) } None => { Output.write(message: \"bad\") } }; return Unit }",
+    ),
+    // A `match` over an `Option` that is *not* dissolvable into a scalar: the
+    // payload is a `String` the loop keeps, so Option scalar replacement declines
+    // and the region is the interpreter's. Recognition must still be exact.
+    (
+        "osr-option-match-heap-payload.rss",
+        "fn hot(limit: Int) -> Int { Output.write(message: \"begin\"); let mut i = 0; let mut total = 0; while i < limit { let mut o: Option<String> = None; if i % 3 == 0 { o = Some(\"abc\") }; match o { Some(text) => { total = total + String.len(value: text) } None => { total = total + 1 } }; i = i + 1 }; Output.write(message: String.from_int(value: total)); return total } fn main(args: read List<String>) -> Unit { Output.write(message: String.from_int(value: hot(limit: 3000))); return Unit }",
+    ),
+];
+
+/// The two hand-written kernels the contract's gap list grouped with
+/// `osr_option_loop.rss`, which the layout normalization does **not** unblock.
+/// Their loops are contiguous and always were recognized; each is refused
+/// further down the pipeline, for a reason that has nothing to do with loop
+/// shape. They are pinned as declines so that a change which does unblock one
+/// has to say so in the contract's gap list rather than pass silently.
+const OSR_MATCH_LAYOUT_DECLINED_KERNELS: &[(&str, &str, &str)] = &[
+    // `p.x` on a locally built struct lowers to `GetField` keyed by *name*, which
+    // is an aggregate barrier; the loop-local struct pass dissolves only
+    // `MakeStruct` + `GetFieldSlot`, and a slot-keyed read exists solely in the
+    // typed-region lowering the direct path uses.
+    (
+        "osr_struct_loop.rss",
+        include_str!("../../../benchmarks/vm-jit/kernels/osr_struct_loop.rss"),
+        "a name-keyed GetField is not dissolvable by the loop-local struct pass",
+    ),
+    // The closure is a *parameter*, so there is no `MakeClosure` to sink and no
+    // static callee; naming one would need the profile-guided closure PIC that
+    // was removed after failing its retention threshold.
+    (
+        "osr_closure_loop.rss",
+        include_str!("../../../benchmarks/vm-jit/kernels/osr_closure_loop.rss"),
+        "a closure parameter has no statically named callee to sink",
+    ),
+];
+
+#[test]
+fn an_osr_loop_whose_body_matches_reaches_generated_code_and_accounts_exactly() {
+    for (name, source) in OSR_MATCH_LAYOUT_PARITY_CASES {
+        for eager_osr in [false, true] {
+            let mut osr_entries = 0_u64;
+            for &budget in STEP_PARITY_BUDGETS {
+                let limits = RunLimits::unbounded_for_trusted_host().with_step_budget(budget);
+                let (interpreter, native) = accounting_pair_with_args(
+                    name,
+                    source,
+                    &["3000"],
+                    limits,
+                    NativeJitOptions {
+                        cost_model: NativeCostModel::Off,
+                        eager_osr,
+                        collect_telemetry: true,
+                        ..NativeJitOptions::default()
+                    },
+                );
+                assert_eq!(
+                    native.outcome(),
+                    interpreter.outcome(),
+                    "{name} at step budget {budget} (eager_osr={eager_osr}) must terminate for the same reason as the interpreter"
+                );
+                assert_eq!(
+                    native.usage.steps_consumed, interpreter.usage.steps_consumed,
+                    "{name} at step budget {budget} (eager_osr={eager_osr}) must report the interpreter's step count"
+                );
+                assert_eq!(
+                    native.usage.intrinsic_calls, interpreter.usage.intrinsic_calls,
+                    "{name} at step budget {budget} (eager_osr={eager_osr}) must report the interpreter's intrinsic count"
+                );
+                assert_eq!(
+                    native.stdout, interpreter.stdout,
+                    "{name} at step budget {budget} (eager_osr={eager_osr}) must produce the interpreter's output"
+                );
+                osr_entries = osr_entries.saturating_add(native_telemetry(&native).osr_entries);
+            }
+            // The counts above are a statement about the attribution only if the
+            // loop actually reaches generated code; declining would satisfy them.
+            assert!(
+                osr_entries > 0,
+                "{name} (eager_osr={eager_osr}) must enter OSR for its step counts to mean anything"
+            );
+        }
+    }
+}
+
+#[test]
+fn an_osr_loop_whose_body_matches_accounts_intrinsics_under_the_production_defaults() {
+    for (name, source) in OSR_MATCH_LAYOUT_PARITY_CASES {
+        let mut osr_entries = 0_u64;
+        for limits in [
+            RunLimits::unbounded_for_trusted_host(),
+            RunLimits::unbounded_for_trusted_host().with_intrinsic_call_budget(1_500),
+            RunLimits::unbounded_for_trusted_host()
+                .with_intrinsic_call_budget(1_000_000)
+                .with_step_budget(10_000_000),
+        ] {
+            let (interpreter, native) = accounting_pair_with_args(
+                name,
+                source,
+                &["3000"],
+                limits,
+                NativeJitOptions {
+                    cost_model: NativeCostModel::Off,
+                    collect_telemetry: true,
+                    ..NativeJitOptions::default()
+                },
+            );
+            assert_eq!(
+                native.outcome(),
+                interpreter.outcome(),
+                "{name} must terminate like the interpreter under the production tiering defaults"
+            );
+            assert_eq!(
+                native.usage.intrinsic_calls, interpreter.usage.intrinsic_calls,
+                "{name} must report the interpreter's intrinsic count"
+            );
+            assert_eq!(
+                native.usage.steps_consumed, interpreter.usage.steps_consumed,
+                "{name} must report the interpreter's step count"
+            );
+            osr_entries = osr_entries.saturating_add(native_telemetry(&native).osr_entries);
+        }
+        assert!(
+            osr_entries > 0,
+            "{name} must enter OSR under the production tiering defaults"
+        );
+    }
+}
+
+#[test]
+fn the_kernels_the_layout_normalization_does_not_unblock_still_account_exactly() {
+    for (name, source, reason) in OSR_MATCH_LAYOUT_DECLINED_KERNELS {
+        for &budget in STEP_PARITY_BUDGETS {
+            let limits = RunLimits::unbounded_for_trusted_host().with_step_budget(budget);
+            let (interpreter, native) = accounting_pair_with_args(
+                name,
+                source,
+                &["3000"],
+                limits,
+                NativeJitOptions {
+                    cost_model: NativeCostModel::Off,
+                    eager_osr: true,
+                    collect_telemetry: true,
+                    ..NativeJitOptions::default()
+                },
+            );
+            assert_eq!(
+                native.outcome(),
+                interpreter.outcome(),
+                "{name} at step budget {budget} must terminate for the same reason as the interpreter"
+            );
+            assert_eq!(
+                native.usage.steps_consumed, interpreter.usage.steps_consumed,
+                "{name} at step budget {budget} must report the interpreter's step count"
+            );
+            assert_eq!(
+                native.stdout, interpreter.stdout,
+                "{name} at step budget {budget} must produce the interpreter's output"
+            );
+            assert_eq!(
+                native_region_entries(&native),
+                0,
+                "{name} is still interpreter-owned ({reason}); if that changed, update the \
+                 gap list in docs/spec/native-jit-contract.md"
+            );
+        }
+    }
+}
 
 #[test]
 fn native_step_accounting_matches_the_interpreter_for_an_osr_loop_containing_an_inlined_call() {

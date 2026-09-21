@@ -16,18 +16,13 @@ impl RegVm {
 
         // Resource gates remain in `try_osr`: candidacy cannot determine transformed
         // allocation effects, and eager tests must use the same candidate ordering.
+        // `select_osr_candidate_loops` owns the per-loop work estimate: a loop whose
+        // blocks the MIR layout interleaved with its exit block is measured on the
+        // normalized stream, where its region is contiguous.
         let loops = select_osr_candidate_loops(&self.unit, func);
         let mut candidates = OsrCandidates::default();
-        for (slot, lp) in candidates.entries.iter_mut().zip(loops) {
-            let iteration_work = func
-                .code
-                .get(lp.header..lp.exit)
-                .map(interpreted_region_work)
-                .unwrap_or(1);
-            *slot = Some(OsrCandidate {
-                header_ip: lp.header,
-                iteration_work,
-            });
+        for (slot, candidate) in candidates.entries.iter_mut().zip(loops) {
+            *slot = Some(candidate);
         }
         if let Some(native) = self.native.as_mut() {
             for candidate in candidates.iter() {
