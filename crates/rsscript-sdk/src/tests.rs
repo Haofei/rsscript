@@ -1937,10 +1937,12 @@ fn main() -> Int {
 /// not cause.
 ///
 /// The second was lowering. `List.map`, `List.filter`, `List.fold`,
-/// `List.sort_by`, `List.sort_with` and `Set.for_each` are declared `special`
-/// in the intrinsic catalog, which means the MIR lowerer owns them — and it had
-/// no case for any of them, so every one of these programs reached
-/// "unsupported checked HIR builtin call" after `rss check` reported nothing.
+/// `List.sort`, `List.sort_by`, `List.sort_with` and `Set.for_each` are
+/// declared `special` in the intrinsic catalog, which means the MIR lowerer
+/// owns them — and it had no case for any of them, so every one of these
+/// programs reached "unsupported checked HIR builtin call" after `rss check`
+/// reported nothing. `Pipeline.map` and `Pipeline.filter` were worse: they had
+/// no VM opcode either, and are now catalog-owned direct builtins (ADR 0239).
 ///
 /// Both classes are covered end to end here rather than at the checker alone.
 #[test]
@@ -1991,6 +1993,29 @@ fn main() -> Int {
 }
 "#;
 
+    // `List.sort` is the one `special` list combinator with no callback at all:
+    // an `Ord`-bounded place mutation. It had a register-VM opcode and no MIR
+    // case, so it checked clean and died in the backend like the rest.
+    const PLAIN_SORT: &str = r#"
+fn main() -> Int {
+    let mut values: fresh List<Int> = [3, 1, 2]
+    List.sort(list: mut values)
+    return List.get(list: values, index: 0) * 100 + List.get(list: values, index: 2)
+}
+"#;
+
+    // The two `Pipeline` stages, which had no VM opcode at all until ADR 0239
+    // appended their catalog entries.
+    const PIPELINE_STAGES: &str = r#"
+fn main() -> Int {
+    let values: fresh List<Int> = [1, 2, 3]
+    let stage = List.pipeline(list: values)
+    let doubled = Pipeline.map(pipeline: stage, mapper: |x| { return x * 2 })
+    let kept = Pipeline.filter(pipeline: doubled, predicate: |x| { return x > 2 })
+    return List.len(list: Pipeline.collect(pipeline: kept))
+}
+"#;
+
     // A callback returning `Unit`, over a set receiver.
     const SET_FOR_EACH: &str = r#"
 fn main() -> Int {
@@ -2010,6 +2035,8 @@ fn main() -> Int {
         ("nested-option-combinators.rss", NESTED_OPTION, "7"),
         ("result-combinators-with-closures.rss", RESULTS, "7"),
         ("set-for-each-with-a-closure.rss", SET_FOR_EACH, "2"),
+        ("list-sort-plain.rss", PLAIN_SORT, "103"),
+        ("pipeline-map-and-filter.rss", PIPELINE_STAGES, "2"),
     ] {
         let built = Compiler
             .compile(file, source)

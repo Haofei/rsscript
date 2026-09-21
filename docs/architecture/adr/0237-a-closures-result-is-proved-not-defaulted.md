@@ -72,6 +72,13 @@ them means adding catalog entries, which would renumber every later `BuiltinId`
 — a separate change with a real compatibility cost. No diagnostic code is added
 or retired.
 
+> **Superseded in part by ADR 0239.** The `BuiltinId` cost priced here was a
+> cost of *where* a catalog entry is filed, not of adding one: a `BuiltinId` is
+> a binding's index in the direct-lowering table read in file order, so an
+> entry appended at the end renumbers nothing. `Pipeline.map` and
+> `Pipeline.filter` are lowered as of ADR 0239, along with `List.sort`, which
+> this ADR's list of `special` combinators missed.
+
 ## Compatibility and migration
 
 MIR gains six instruction variants. `MirInstruction` is `#[non_exhaustive]`-free

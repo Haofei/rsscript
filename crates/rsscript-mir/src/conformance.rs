@@ -380,6 +380,57 @@ impl fmt::Display for MirExecutionError {
 
 impl std::error::Error for MirExecutionError {}
 
+/// Sort a list of `Ord`-comparable scalars in place.
+///
+/// The checker only admits `List.sort` over a `T: Ord`, so a mixed or
+/// non-scalar list cannot reach a well-typed program. This oracle still
+/// declines rather than assume one: an ordering it invented would be an
+/// oracle answer with nothing behind it.
+fn sort_ordered_values(items: &mut [MirValue]) -> Result<(), MirExecutionError> {
+    #[derive(PartialEq, PartialOrd)]
+    enum Key<'a> {
+        Int(i64),
+        Float(f64),
+        Bool(bool),
+        Char(char),
+        Str(&'a str),
+    }
+
+    fn key(value: &MirValue) -> Option<Key<'_>> {
+        Some(match value {
+            MirValue::Int(value) => Key::Int(*value),
+            MirValue::Float(value) => Key::Float(*value),
+            MirValue::Bool(value) => Key::Bool(*value),
+            MirValue::Char(value) => Key::Char(*value),
+            MirValue::String(value) => Key::Str(value.as_str()),
+            _ => return None,
+        })
+    }
+
+    for item in items.iter() {
+        if key(item).is_none() {
+            return Err(MirExecutionError::InvalidOperation("list sort element"));
+        }
+    }
+    // A `Float` list can hold a NaN, which has no total order. `sort_by` needs
+    // one, so an incomparable pair is reported instead of silently ordered.
+    let mut incomparable = false;
+    items.sort_by(|left, right| {
+        let (Some(left), Some(right)) = (key(left), key(right)) else {
+            incomparable = true;
+            return std::cmp::Ordering::Equal;
+        };
+        left.partial_cmp(&right).unwrap_or_else(|| {
+            incomparable = true;
+            std::cmp::Ordering::Equal
+        })
+    });
+    if incomparable {
+        return Err(MirExecutionError::InvalidOperation("list sort ordering"));
+    }
+    Ok(())
+}
+
 /// Execute a pure MIR module from its debug-name entry point.
 pub fn execute_named(
     module: &MirModule,
@@ -649,6 +700,23 @@ impl<'a> Interpreter<'a> {
                             }
                         };
                         items.clear();
+                        values[destination.index()] = Some(MirValue::Unit);
+                    }
+                    // `List.sort` is `Ord`-bounded, so the order is the
+                    // elements' own. The oracle sorts only the scalar element
+                    // kinds it can compare without inventing an ordering;
+                    // anything else declines rather than guess one.
+                    MirInstruction::ListSort { destination, list } => {
+                        let items = match places[list.index()].as_mut() {
+                            Some(MirValue::List(items)) => items,
+                            Some(_) => {
+                                return Err(MirExecutionError::InvalidOperation("list base"));
+                            }
+                            None => {
+                                return Err(MirExecutionError::UninitializedPlace(list.index()));
+                            }
+                        };
+                        sort_ordered_values(items)?;
                         values[destination.index()] = Some(MirValue::Unit);
                     }
                     MirInstruction::ListPop { destination, list } => {

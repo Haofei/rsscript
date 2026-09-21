@@ -508,6 +508,7 @@ pub(super) fn instruction_definitions(instruction: &MirInstruction) -> Vec<Value
         | MirInstruction::ListFilter { destination, .. }
         | MirInstruction::ListFold { destination, .. }
         | MirInstruction::ListSortBy { destination, .. }
+        | MirInstruction::ListSort { destination, .. }
         | MirInstruction::ListSortWith { destination, .. }
         | MirInstruction::SetForEach { destination, .. }
         | MirInstruction::ListRemoveAt { destination, .. }
@@ -601,6 +602,9 @@ pub(super) fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
         MirInstruction::ListSortBy {
             list, key, compare, ..
         } => vec![*list, *key, *compare],
+        // `ListSort` holds its receiver as a mutable place and takes no
+        // callback, so it contributes no value operand at all.
+        MirInstruction::ListSort { .. } => Vec::new(),
         MirInstruction::ListSortWith { compare, .. } => vec![*compare],
         MirInstruction::SetForEach { set, callback, .. } => vec![*set, *callback],
         MirInstruction::ListAppend { values, .. }
@@ -830,6 +834,7 @@ pub(super) fn transfer_move_state(
         | MirInstruction::ListPush { list, .. }
         | MirInstruction::ListRemoveAt { list, .. }
         | MirInstruction::ListSet { list, .. }
+        | MirInstruction::ListSort { list, .. }
         | MirInstruction::ListSortWith { list, .. } => check_live(*list, moved_places),
         MirInstruction::ListMap { .. }
         | MirInstruction::ListFilter { .. }
@@ -1030,6 +1035,11 @@ pub(super) fn verify_instruction(
             check_live_place(*list, moved_places)?;
             define(*destination, defined)?;
             used.push(*value);
+            Ok(())
+        }
+        MirInstruction::ListSort { destination, list } => {
+            check_live_place(*list, moved_places)?;
+            define(*destination, defined)?;
             Ok(())
         }
         MirInstruction::ListSortWith {

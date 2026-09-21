@@ -596,6 +596,34 @@ impl RegVm {
                 }
                 self.fresh_list(values)
             }
+            // A `Pipeline<T>` is its backing list; `Pipeline.map` and
+            // `Pipeline.filter` walk it eagerly, the way `Pipeline.each` and
+            // `Pipeline.try_map` beside them already do.
+            RegIntrinsic::PipelineMap => {
+                let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let mapper = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let len = list.borrow().len();
+                let mut mapped = Vec::with_capacity(len);
+                for index in 0..len {
+                    let value = list.borrow().get(index).expect("index in bounds");
+                    mapped.push(self.call_closure_one(unit, &mapper, value, next_base)?);
+                }
+                self.fresh_list(TypedVec::from_values(mapped))
+            }
+            RegIntrinsic::PipelineFilter => {
+                let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let predicate = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let len = list.borrow().len();
+                let mut kept = Vec::new();
+                for index in 0..len {
+                    let value = list.borrow().get(index).expect("index in bounds");
+                    let keep = self.call_closure_one(unit, &predicate, value.clone(), next_base)?;
+                    if expect_bool_ref(&keep)? {
+                        kept.push(value);
+                    }
+                }
+                self.fresh_list(TypedVec::from_values(kept))
+            }
             RegIntrinsic::PipelineTryMap => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let mapper = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;

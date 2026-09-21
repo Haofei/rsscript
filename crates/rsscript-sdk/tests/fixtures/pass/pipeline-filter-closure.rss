@@ -1,0 +1,9 @@
+// `Pipeline.filter`, the other stage ADR 0239 closed. Kept separate from
+// `Pipeline.map` so a regression in one cannot hide behind the other.
+
+fn main() -> Int {
+    let values: fresh List<Int> = [1, 2, 3, 4]
+    let stage = List.pipeline(list: values)
+    let kept = Pipeline.filter(pipeline: stage, predicate: |x| { return x > 2 })
+    return List.len(list: Pipeline.collect(pipeline: kept))
+}

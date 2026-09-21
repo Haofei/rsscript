@@ -1,0 +1,11 @@
+// `Pipeline.map` had no lowering and no VM opcode at all: a program using it
+// checked clean and reached "unsupported checked HIR builtin call". ADR 0239
+// made it a catalog-owned direct builtin.
+
+fn main() -> Int {
+    let values: fresh List<Int> = [1, 2, 3]
+    let stage = List.pipeline(list: values)
+    let doubled = Pipeline.map(pipeline: stage, mapper: |x| { return x * 2 })
+    let collected = Pipeline.collect(pipeline: doubled)
+    return List.get(list: collected, index: 2)
+}

@@ -241,6 +241,15 @@ pub enum MirInstruction {
         key: ValueId,
         compare: ValueId,
     },
+    /// Sort a resolved mutable list place in place by its elements' own order.
+    ///
+    /// `List.sort` takes no callback, so unlike the other `special` list
+    /// combinators it is an ordinary place mutation; the register VM's
+    /// `ListSort` opcode already implements it.
+    ListSort {
+        destination: ValueId,
+        list: PlaceId,
+    },
     /// Sort a resolved mutable list place in place with a comparator closure.
     ListSortWith {
         destination: ValueId,

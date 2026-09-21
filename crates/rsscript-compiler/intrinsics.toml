@@ -281,6 +281,8 @@ intrinsic = [
   { id = "PersistentMapRemove" },
   { id = "PipelineCollect" },
   { id = "PipelineEach" },
+  { id = "PipelineFilter" },
+  { id = "PipelineMap" },
   { id = "PipelineTryMap" },
   { id = "RegexCaptures" },
   { id = "RegexCompile" },
@@ -699,8 +701,6 @@ binding = [
   { namespace = "PersistentMap", name = "remove", vm_id = "PersistentMapRemove", runtime_target = "rsscript_runtime::persistent_map_remove", lowering = "direct" },
   { namespace = "Pipeline", name = "collect", vm_id = "PipelineCollect", runtime_target = "rsscript_runtime::pipeline_collect", lowering = "direct" },
   { namespace = "Pipeline", name = "each", vm_id = "PipelineEach", runtime_target = "rsscript_runtime::pipeline_each", lowering = "direct" },
-  { namespace = "Pipeline", name = "filter", runtime_target = "rsscript_runtime::pipeline_filter", lowering = "special" },
-  { namespace = "Pipeline", name = "map", runtime_target = "rsscript_runtime::pipeline_map", lowering = "special" },
   { namespace = "Pipeline", name = "try_map", vm_id = "PipelineTryMap", runtime_target = "rsscript_runtime::pipeline_try_map", lowering = "direct" },
   { namespace = "Receiver", name = "close", vm_id = "ReceiverClose", runtime_target = "rsscript_runtime::receiver_close", lowering = "direct" },
   { namespace = "Receiver", name = "into_stream", vm_id = "ReceiverIntoStream", runtime_target = "rsscript_runtime::receiver_into_stream", lowering = "direct" },
@@ -822,4 +822,11 @@ binding = [
   { namespace = "Weak", name = "from", vm_id = "WeakFrom", lowering = "direct" },
   { namespace = "Weak", name = "upgrade", vm_id = "WeakUpgrade", lowering = "direct" },
   { namespace = "Yaml", name = "parse", vm_id = "YamlParse", runtime_target = "rsscript_runtime::yaml_parse", lowering = "direct" },
+
+  # Appended, not filed alphabetically, on purpose. A `BuiltinId` is the index
+  # of a binding in this table filtered to `lowering = "direct"` and read in
+  # file order, so a new direct binding renumbers every direct binding after
+  # it. At the end it renumbers none. See ADR 0239.
+  { namespace = "Pipeline", name = "filter", vm_id = "PipelineFilter", runtime_target = "rsscript_runtime::pipeline_filter", lowering = "direct" },
+  { namespace = "Pipeline", name = "map", vm_id = "PipelineMap", runtime_target = "rsscript_runtime::pipeline_map", lowering = "direct" },
 ]

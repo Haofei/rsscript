@@ -1,0 +1,10 @@
+// `List.sort` is the one `special` list combinator that takes no callback: an
+// `Ord`-bounded mutation of a list place. Its register-VM opcode already
+// existed and the MIR lowerer had no case for it, so it checked clean and then
+// died in the backend like the callback-taking combinators beside it.
+
+fn main() -> Int {
+    let mut values: fresh List<Int> = [3, 1, 2]
+    List.sort(list: mut values)
+    return List.get(list: values, index: 0) * 100 + List.get(list: values, index: 2)
+}

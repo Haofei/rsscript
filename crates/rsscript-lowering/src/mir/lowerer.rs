@@ -1119,6 +1119,13 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                     compare,
                 });
             }
+            "sort" if signature.namespace.as_deref() == Some("List") => {
+                if args.len() != 1 {
+                    return self.unsupported("List.sort with invalid checked call shape");
+                }
+                let list = self.lower_mutable_builtin_place(&args[0].value)?;
+                self.emit(MirInstruction::ListSort { destination, list });
+            }
             "sort_with" if signature.namespace.as_deref() == Some("List") => {
                 if args.len() != 2 {
                     return self.unsupported("List.sort_with with invalid checked call shape");

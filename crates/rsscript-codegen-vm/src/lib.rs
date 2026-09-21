@@ -496,6 +496,13 @@ fn lower_instruction(
                 ("compare", json!(value_reg(function, *compare))),
             ],
         )),
+        MirInstruction::ListSort { destination, list } => code.push(instr(
+            "ListSort",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("list", json!(place_reg(*list))),
+            ],
+        )),
         MirInstruction::ListSortWith {
             destination,
             list,
