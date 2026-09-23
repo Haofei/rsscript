@@ -603,24 +603,44 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
         arms: &[checked::HirMatchArm],
     ) -> Result<(), MirLoweringError> {
         let value = self.lower_expression(value)?;
+        self.lower_match_arms(
+            value,
+            arms,
+            "non-literal checked HIR match pattern",
+            |this, body| this.lower_checked_block(body),
+        )
+    }
+
+    /// Lower a `match`'s arms as a chain of tests out of the current block,
+    /// leaving the current block at the join every arm body falls into.
+    ///
+    /// Each arm tests its pattern; on a match it writes the pattern's
+    /// bindings, then evaluates its guard if it has one; on a failed test or a
+    /// false guard control reaches the next arm's test. Arms are tried in
+    /// written order, and the first whose pattern matches and whose guard
+    /// holds runs. The checker has proven the arms exhaustive (counting only
+    /// unguarded ones), so falling off the last arm is unreachable.
+    ///
+    /// Shared by statement `match`, expression `match`, and a `match` in an
+    /// expression arm's value position; they differ only in how an arm body is
+    /// lowered and in the refusal wording.
+    fn lower_match_arms(
+        &mut self,
+        value: ValueId,
+        arms: &[checked::HirMatchArm],
+        unsupported: &'static str,
+        mut lower_body: impl FnMut(&mut Self, &checked::HirBlock) -> Result<(), MirLoweringError>,
+    ) -> Result<(), MirLoweringError> {
         let join = self.new_block();
         for arm in arms {
-            if arm.guard.is_some() {
-                return self.unsupported("checked HIR match guard");
-            }
             let arm_block = self.new_block();
             let next = self.new_block();
-            self.lower_pattern_edge(
-                value,
-                &arm.pattern,
-                arm_block,
-                next,
-                "non-literal checked HIR match pattern",
-            )?;
+            self.lower_pattern_edge(value, &arm.pattern, arm_block, next, unsupported)?;
 
             self.current = arm_block;
             self.bind_pattern(value, &arm.pattern)?;
-            self.lower_checked_block(&arm.body)?;
+            self.lower_arm_guard(arm.guard.as_ref(), next)?;
+            lower_body(self, &arm.body)?;
             if self.current_block().terminator.is_none() {
                 self.terminate(MirTerminator::Jump(join));
             }
@@ -638,37 +658,46 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
     ) -> Result<ValueId, MirLoweringError> {
         let value = self.lower_expression(value)?;
         let result_place = self.place(&format!("__rss_mir_match_result_{}", self.next_value));
-        let join = self.new_block();
-        for arm in arms {
-            if arm.guard.is_some() {
-                return self.unsupported("checked HIR match expression guard");
-            }
-            let arm_block = self.new_block();
-            let next = self.new_block();
-            self.lower_pattern_edge(
-                value,
-                &arm.pattern,
-                arm_block,
-                next,
-                "non-literal checked HIR match expression pattern",
-            )?;
-
-            self.current = arm_block;
-            self.bind_pattern(value, &arm.pattern)?;
-            self.lower_match_expression_arm(&arm.body, result_place)?;
-            if self.current_block().terminator.is_none() {
-                self.terminate(MirTerminator::Jump(join));
-            }
-            self.current = next;
-        }
-        self.terminate(MirTerminator::Unreachable);
-        self.current = join;
+        self.lower_match_arms(
+            value,
+            arms,
+            "non-literal checked HIR match expression pattern",
+            |this, body| this.lower_match_expression_arm(body, result_place),
+        )?;
         let destination = self.value();
         self.emit(MirInstruction::ReadPlace {
             destination,
             place: result_place,
         });
         Ok(destination)
+    }
+
+    /// Evaluate an arm's guard, if it has one, after the arm's pattern has
+    /// matched and its bindings are written.
+    ///
+    /// A false guard sends control to `next` — the following arm's test —
+    /// exactly as a failed pattern test does, so a guarded arm behaves as if
+    /// its pattern had not matched. The checker has already rejected guards
+    /// that mutate, so evaluating one and then falling through leaves nothing
+    /// to undo; the bindings it wrote are dead on that path. On a true guard
+    /// the current block becomes the one the arm's body is lowered into.
+    fn lower_arm_guard(
+        &mut self,
+        guard: Option<&checked::HirExpr>,
+        next: BlockId,
+    ) -> Result<(), MirLoweringError> {
+        let Some(guard) = guard else {
+            return Ok(());
+        };
+        let condition = self.lower_expression(guard)?;
+        let body = self.new_block();
+        self.terminate(MirTerminator::Branch {
+            condition,
+            then_target: body,
+            else_target: next,
+        });
+        self.current = body;
+        Ok(())
     }
 
     /// Emit one arm's dispatch edge out of the current block: control reaches
@@ -1661,31 +1690,12 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
             }
             checked::HirStmt::Match { value, arms, .. } => {
                 let value = self.lower_expression(value)?;
-                let join = self.new_block();
-                for arm in arms {
-                    if arm.guard.is_some() {
-                        return self.unsupported("checked HIR match expression guard");
-                    }
-                    let arm_block = self.new_block();
-                    let next = self.new_block();
-                    self.lower_pattern_edge(
-                        value,
-                        &arm.pattern,
-                        arm_block,
-                        next,
-                        "non-literal checked HIR match expression pattern",
-                    )?;
-                    self.current = arm_block;
-                    self.bind_pattern(value, &arm.pattern)?;
-                    self.lower_match_expression_arm(&arm.body, result_place)?;
-                    if self.current_block().terminator.is_none() {
-                        self.terminate(MirTerminator::Jump(join));
-                    }
-                    self.current = next;
-                }
-                self.terminate(MirTerminator::Unreachable);
-                self.current = join;
-                Ok(())
+                self.lower_match_arms(
+                    value,
+                    arms,
+                    "non-literal checked HIR match expression pattern",
+                    |this, body| this.lower_match_expression_arm(body, result_place),
+                )
             }
             _ => self.unsupported("checked HIR match expression arm without value"),
         }

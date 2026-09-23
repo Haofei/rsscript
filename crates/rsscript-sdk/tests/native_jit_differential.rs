@@ -114,6 +114,13 @@ const CASES: &[(&str, &str)] = &[
         "list-pattern-loop.rss",
         "fn classify(xs: read List<Int>) -> Int { match read xs { [] => { return 0 } [0, _] => { return 1 } [a, b] => { return a + b } _ => { return 9 } } } fn main() -> Int { let pair: List<Int> = [3, 4]; let zero: List<Int> = [0, 4]; let long: List<Int> = [1, 2, 3]; let mut i = 0; let mut total = 0; while i < 5000 { total = total + classify(xs: read pair) + classify(xs: read zero) + classify(xs: read long); i = i + 1 }; return total }",
     ),
+    // A guarded `match` arm lowers to its pattern's tests followed by the
+    // guard's compare and a plain `Branch` whose false edge is the next arm's
+    // test, so a false guard's fall-through is the only new control shape.
+    (
+        "guarded-match-loop.rss",
+        "fn classify(xs: read List<Int>) -> Int { match read xs { [a, b] if a > b => { return a - b } [a, b] => { return a + b } [first, ..] if first == 0 => { return 7 } _ => { return 9 } } } fn scale(n: Int) -> Int { match n { 0 => { return 1 } _ if n % 3 == 0 => { return 3 } _ => { return n } } } fn main() -> Int { let desc: List<Int> = [9, 4]; let asc: List<Int> = [1, 2]; let zero: List<Int> = [0, 1, 2]; let long: List<Int> = [5, 1, 2]; let mut i = 0; let mut total = 0; while i < 5000 { total = total + classify(xs: read desc) + classify(xs: read asc) + classify(xs: read zero) + classify(xs: read long) + scale(n: i % 5); i = i + 1 }; return total }",
+    ),
     (
         "native-map-match.rss",
         include_str!("../../../benchmarks/vm-jit/kernels/native_map_get_match_loop.rss"),
@@ -310,6 +317,20 @@ fn native_engine_matches_the_verified_interpreter_corpus() {
                     .get("await")
                     .is_some_and(|count| *count >= 1),
                 "await must remain a VM-owned barrier"
+            );
+        }
+        if *file == "guarded-match-loop.rss" {
+            // `main`, `classify`, and `scale` each compile: a guarded arm is a
+            // compare and a `Branch`, both inside the native subset, so the
+            // guard runs in generated code rather than forcing a barrier.
+            assert!(
+                native_telemetry(&native).compiled >= 3 && osr_entries > 0,
+                "guarded match arms must reach generated code; compiled={}, osr={osr_entries}, barriers={native_barrier_counts:?}",
+                native_telemetry(&native).compiled
+            );
+            assert!(
+                !native_barrier_counts.contains_key("static_call"),
+                "calls into guarded matches must not be barriers: {native_barrier_counts:?}"
             );
         }
         cases_with_native_entry +=

@@ -1,0 +1,65 @@
+// A `match` guard runs after its arm's pattern matches and its bindings are
+// bound; a false guard continues to the next arm's test. Guarded arms do not
+// count toward exhaustiveness, so each match below ends in an unguarded arm.
+sum Shape {
+    Circle(radius: Int)
+    Rectangle(width: Int, height: Int)
+}
+
+struct Point {
+    x: Int
+    y: Int
+}
+
+fn literal(n: Int, big: Bool) -> String {
+    match n {
+        0 if big => { return "zero-big" }
+        0 => { return "zero" }
+        _ => { return "other" }
+    }
+}
+
+fn variant(shape: Shape) -> Int {
+    match read shape {
+        Rectangle(w, h) if read w == read h => { return read w }
+        Rectangle(w, h) => { return read w * read h }
+        Circle(r) => { return read r }
+    }
+}
+
+fn option(value: Option<Int>) -> Int {
+    match value {
+        Some(n) if n < 0 => { return 0 - n }
+        Some(n) => { return n }
+        None => { return 0 }
+    }
+}
+
+fn list(xs: read List<Int>) -> Int {
+    match read xs {
+        [first, ..rest] if List.len(list: rest) > 1 => { return first }
+        _ => { return 0 }
+    }
+}
+
+fn point(p: read Point) -> String {
+    match read p {
+        Point { x, y } if read x == 0 && read y == 0 => { return "origin" }
+        Point { x, .. } if read x == 0 => { return "y-axis" }
+        _ => { return "elsewhere" }
+    }
+}
+
+fn order(p: (Int, Int)) -> Int {
+    return match read p {
+        (a, b) if a > b => { a - b }
+        (a, b) => { b - a }
+    }
+}
+
+fn main() -> Unit {
+    let total = variant(shape: Rectangle(width: 3, height: 3)) + option(value: Some(0 - 4)) + list(xs: read [1, 2, 3]) + order(p: (1, 8))
+    Output.write(message: literal(n: 0, big: false))
+    Output.write(message: point(p: read Point(x: 0, y: 3)))
+    Output.write(message: String.from_int(value: total))
+}

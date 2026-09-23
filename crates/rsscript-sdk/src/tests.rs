@@ -3208,6 +3208,162 @@ fn main() -> fresh String {
     );
 }
 
+/// A `match` guard runs after its arm's pattern has matched and its bindings
+/// are bound, and a false guard continues to the next arm's test exactly as if
+/// the pattern had not matched.
+///
+/// This used to check clean and then fail to build with `checked HIR match
+/// guard`. It is the smallest shape: the guard reads the struct pattern's
+/// binding and selects the arm.
+#[test]
+fn a_match_guard_reads_its_arm_binding() {
+    let report = run_to_completion(
+        "main.rss",
+        "struct P {\n    x: Int\n}\n\nfn pick(p: P) -> Int {\n    match p {\n        P { x } if x > 3 => { return x }\n        _ => { return 0 }\n    }\n}\n\nfn main() -> Int { return pick(p: P(x: 5)) * 10 + pick(p: P(x: 2)) }",
+    );
+
+    assert_eq!(report.termination_reason(), TerminationReason::Completed);
+    assert_eq!(
+        report.wire_value(),
+        Some(&provider::WireValue::Int { value: 50 }),
+        "the guard holds for x = 5 and fails over to `_` for x = 2"
+    );
+}
+
+/// Guards on every lowerable pattern form — literal, sum variant, `Option`,
+/// tuple, list, and struct — in statement and expression `match`.
+///
+/// Each function below puts a guarded arm ahead of an arm the same value also
+/// matches, so a false guard is observable: control has to fall through to the
+/// later arm instead of stopping at the guarded one.
+#[test]
+fn match_guards_lower_and_execute() {
+    const SOURCE: &str = r#"
+sum Shape {
+    Circle(radius: Int)
+    Rectangle(width: Int, height: Int)
+}
+
+struct Point {
+    x: Int
+    y: Int
+}
+
+fn literal(n: Int, big: Bool) -> fresh String {
+    match n {
+        0 if big => { return "zero-big" }
+        0 => { return "zero" }
+        _ => { return "other" }
+    }
+}
+
+fn variant(shape: Shape) -> fresh String {
+    match read shape {
+        Circle(r) if read r > 10 => { return "big-circle" }
+        Rectangle(w, h) if read w == read h => { return $"square:{String.from_int(value: read w)}" }
+        Circle(r) => { return $"circle:{String.from_int(value: read r)}" }
+        Rectangle(w, h) => { return $"rect:{String.from_int(value: read w * read h)}" }
+    }
+}
+
+fn option(value: Option<Int>) -> Int {
+    match value {
+        Some(n) if n < 0 => { return 0 - n }
+        Some(n) => { return n }
+        None => { return 0 }
+    }
+}
+
+fn tuple(p: (Int, Int)) -> fresh String {
+    match read p {
+        (a, b) if a > b => { return "desc" }
+        (a, b) if a == b => { return "flat" }
+        _ => { return "asc" }
+    }
+}
+
+fn list(xs: read List<Int>) -> fresh String {
+    match read xs {
+        [first, ..rest] if List.len(list: rest) > 1 => { return $"long:{String.from_int(value: first)}" }
+        [first, ..] => { return $"short:{String.from_int(value: first)}" }
+        [] => { return "empty" }
+    }
+}
+
+fn point(p: read Point) -> fresh String {
+    match read p {
+        Point { x, y } if read x == 0 && read y == 0 => { return "origin" }
+        Point { x, .. } if read x == 0 => { return "y-axis" }
+        Point { x, y } => { return $"{String.from_int(value: read x)},{String.from_int(value: read y)}" }
+    }
+}
+
+fn sign(n: Int) -> fresh String {
+    return match n {
+        0 => { "zero" }
+        _ if n < 0 => { "negative" }
+        _ => { "positive" }
+    }
+}
+
+fn order(p: (Int, Int)) -> Int {
+    return match read p {
+        (a, b) if a > b => { a - b }
+        (a, b) => { b - a }
+    }
+}
+
+fn main() -> fresh String {
+    let empty: List<Int> = []
+    let parts = [
+        literal(n: 0, big: true),
+        literal(n: 0, big: false),
+        literal(n: 3, big: true),
+        variant(shape: Circle(radius: 11)),
+        variant(shape: Circle(radius: 2)),
+        variant(shape: Rectangle(width: 3, height: 3)),
+        variant(shape: Rectangle(width: 2, height: 5)),
+        String.from_int(value: option(value: Some(0 - 4))),
+        String.from_int(value: option(value: Some(6))),
+        String.from_int(value: option(value: None)),
+        tuple(p: (3, 1)),
+        tuple(p: (2, 2)),
+        tuple(p: (1, 2)),
+        list(xs: read [1, 2, 3]),
+        list(xs: read [4, 5]),
+        list(xs: read empty),
+        point(p: read Point(x: 0, y: 0)),
+        point(p: read Point(x: 0, y: 3)),
+        point(p: read Point(x: 1, y: 2)),
+        sign(n: 0),
+        sign(n: 0 - 2),
+        sign(n: 9),
+        String.from_int(value: order(p: (9, 4))),
+        String.from_int(value: order(p: (1, 8))),
+    ]
+    return String.join(parts: read parts, separator: "|")
+}
+"#;
+
+    let built = Compiler
+        .compile("match-guards.rss", SOURCE)
+        .expect("guarded match arms compile");
+    let admitted = admitted(built);
+    let report = Runtime::default()
+        .link(&admitted)
+        .expect("link guarded match program")
+        .execute(ExecutionRequest::default());
+
+    assert_eq!(report.termination_reason(), TerminationReason::Completed);
+    assert_eq!(
+        report.value(),
+        Some(
+            "zero-big|zero|other|big-circle|circle:2|square:3|rect:10|4|6|0|desc|flat|asc|long:1|short:4|empty|origin|y-axis|1,2|zero|negative|positive|5|7"
+        ),
+        "a false guard falls through to the next arm; a true one selects its own"
+    );
+}
+
 /// `RS0307` on a literal carries the rewrite, not only advice.
 ///
 /// The measured regression was a candidate following the card's "manage first"
