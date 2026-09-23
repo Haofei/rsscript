@@ -17,13 +17,21 @@ Three conventions are used throughout.
   (`crates/rsscript-semantics/src/signatures.rs`, `RS0002`). Paths are relative
   to the repository root.
 * **Examples.** Every fenced `rsscript` block in this document is a complete,
-  self-contained file that was run through
-  `cargo run -q -p rsscript-cli --bin rss -- check <file>` while writing this
-  reference. Blocks labelled **Accepted** exit 0; blocks labelled **Rejected**
-  emit exactly the cited code. A few sections need a companion interface file;
-  those are introduced by an `rsscript-interface` block and are checked with
-  `rss check --interface <file>.rssi <file>.rss`. Two blocks are labelled
-  `rsscript-lint` and are checked with `rss check --lint`.
+  self-contained file, checked as `rss check <file>` checks one. The paragraph
+  before each block carries its label: a block labelled **Accepted** checks
+  with no diagnostic at all; a block labelled **Rejected — `CODE`** emits `CODE`
+  as an error, and may emit other codes as well (a rejected program often
+  breaks a second rule too); a block labelled **Warning — `CODE`** emits `CODE`
+  as a warning and no error. A section that needs a companion interface
+  introduces it with an `rsscript-interface` block, which applies to every
+  later example in the same `##` section, as
+  `rss check --interface <file>.rssi <file>.rss` would. Two blocks are fenced
+  `rsscript-lint` and are checked with `rss check --lint`. Fragments that are
+  not complete files use a plain fence.
+  `crates/rsscript-sdk/tests/spec_examples.rs` extracts every labelled example
+  from this document and fails if one no longer behaves as labelled, or if an
+  `rsscript` block has no label. A label is a claim about the checker; an
+  accepted example that does not yet build is listed in §12.2.
 * **"Unspecified".** Where behaviour could not be confirmed from the
   implementation or from a passing test, this document says *unspecified*
   rather than guessing. Those statements are collected in §12.
@@ -61,7 +69,7 @@ The lexer (`crates/rsscript-syntax/src/lexer.rs`) produces the token kinds
 | Integer literal | one or more ASCII digits. No sign, no `_` separators, no hex/octal/binary prefix. |
 | Float literal | digits `.` digits. A trailing dot (`5.`) and a second dot (`1.2.3`) are deliberately *not* lexed as one number; the remainder is re-lexed and the parser reports it. |
 | String literal | `"…"` with `\` escapes. An unterminated string becomes `Unknown('"')`, so it surfaces as unsupported syntax instead of silently swallowing the file. |
-| Interpolated string | `$"… {expr} …"`; `{{` and `}}` are literal braces. |
+| Interpolated string | `$"… {expr} …"`; `{{` and `}}` are literal braces. See below. |
 | Multi-line string | `"""…"""`. |
 | Char literal | `'c'`, one `\` escape honoured, terminated by `'`, a newline, or EOF. Exactly one Unicode scalar is required (`RS0038`). |
 
@@ -76,10 +84,47 @@ struct take weak while with`. `await` and `native` are contextual. `true`,
 `false`, `Unit`, `None`, `Ok`, `Err`, `Some` are built-in constants and
 constructors, not keywords.
 
-Note the tables do not list every word the parser gives meaning to: `sum`,
-`protocol`, `impl`, `type`, `const`, `opaque`, `derives`, `retains`, `noescape`,
-`owned`, `captures`, `task_group`, `select`, `spawn`, `use`, `module` are all
-recognised by the parser as ordinary identifiers in keyword position.
+A second set of words is left as plain identifiers by the lexer and matched as
+keywords by the parser in specific positions: `sum`, `protocol`, `impl`,
+`type`, `const`, `opaque`, `module`, `use`, `view`, `derives`, `retains`,
+`captures`, `noescape`, `owned`, `task_group`, `select`, `spawn`
+(`rsscript-syntax::parser::PARSER_KEYWORDS`). `docs/generated/grammar.md` lists
+them under "Parser-level words", generated from that table; `keywords.md` lists
+the lexer's reserved and contextual words only. `spawn` is recognised only to be
+rejected (`RS0015`, §9.1), and `view` is the scoped-binding sugar of §8.3.
+
+**Interpolated strings.** The parser desugars `$"{name} scored {total}"` to
+`String.format(template: "{} scored {}", args: [name, total])`
+(`parser/expr.rs::parse_interpolated_string_expr`). Each `{expr}` is an
+arbitrary expression, string literals included, and `{{`/`}}` are literal
+braces. Because `args` is a `List<String>`, **every interpolated item must be a
+`String`**: an `Int` item is `RS0207` ("list literal item has type `Int`,
+expected `String`"); convert it first with `Int.to_string(value: …)`.
+`rss fmt` prints an interpolated string back as written, not as the
+`String.format` call it desugars to (ADR 0243); a hand-written `String.format`
+call stays a call.
+
+**Accepted**
+
+```rsscript
+fn main() -> Unit {
+    let name = "Ada"
+    let total = 3
+    let line = $"{name} scored {Int.to_string(value: total)} {{points}}"
+    Output.write(message: line)
+    return Unit
+}
+```
+
+**Rejected — `RS0207`** — an interpolated item must be a `String`
+
+```rsscript
+fn main() -> Unit {
+    let total = 3
+    Output.write(message: $"total: {total}")
+    return Unit
+}
+```
 
 ### 1.2 Literals and their static types
 
@@ -152,10 +197,11 @@ in an `.rssi` file is an **external symbol**: the front end records its
 signature and resolves calls against it, and binding metadata (outside the
 language) maps the symbol to a provider.
 
-Many fixtures under `crates/rsscript-sdk/tests/fixtures/` use bodyless `.rss`
-declarations as a shorthand for "assume this API exists"; those fixtures
-therefore emit `RS0015` in addition to the diagnostic they are testing. Do not
-copy that shape into real source.
+To assume an API exists, supply it as an interface. The fixtures under
+`crates/rsscript-sdk/tests/fixtures/` do so with an `// interface:` companion
+`.rssi` (`tests/support/fixture_support.rs`), and the examples in this document
+with an `rsscript-interface` block (§8.2); none relies on a bodyless `.rss`
+declaration.
 
 **Rejected — `RS0015`**
 
@@ -297,8 +343,8 @@ Additional facts of the pass:
 
 * `main` is exempt. A function named `main` keeps its global symbol even inside
   a module, so the entry point is always reachable.
-* Constants are upper-cased when mangled (`a_b__LIMIT`), matching the Rust
-  backend's `SCREAMING_SNAKE_CASE` const lowering.
+* Constants are upper-cased when mangled (`a_b__LIMIT`), the same spelling the
+  type-associated constant desugar produces (§1.8).
 * A **bodyless** (external) function in a module keeps its source-level dotted
   identity `a.b.name` instead of the mangled symbol, so provider binding
   metadata sees a stable platform-neutral name.
@@ -322,18 +368,19 @@ Additional facts of the pass:
 `pub` marks a declaration public. Public-ness is recorded on functions, types,
 sum types, type aliases, and constants (`rsscript-syntax/src/ast.rs`).
 
-Within one checked program, `pub` has exactly one *semantic* consequence today:
+`pub` has two semantic consequences inside a checked program. Across modules
+it is the privacy boundary: a cross-module reference to a non-`pub`
+declaration, whether through `use` or a module-qualified path, is rejected with
+`RS0019` (§12.1.1), and `use a.b.*` binds only the module's `pub` names;
+declarations supplied by an `.rssi`, the prelude interfaces, and `main` are
+exempt. At a call site it decides whether arguments may be positional:
 
 > Positional (unnamed) arguments are allowed only for a **private user
 > function** or receiver-call shorthand. A call to a `pub` function must name
 > every argument (`checks/calls.rs`, `RS0201`).
 
 It also governs what appears in a package's `.rssi` public contract, which is
-checked against the implementation by `RS1301` at package granularity. A
-cross-module reference to a non-`pub` declaration, whether through `use` or a
-module-qualified path, is rejected with `RS0019` (§12.1.1); `use a.b.*` binds
-only the module's `pub` names. Declarations supplied by an `.rssi`, the prelude
-interfaces, and `main` are exempt.
+checked against the implementation by `RS1301` at package granularity.
 
 Protocols carry no visibility at all and are not module-scoped, so neither `pub`
 nor `RS0019` applies to a protocol name, and module mangling leaves it alone
@@ -829,10 +876,12 @@ one:
 > instance.
 
 What leaves a construction unprovable is an argument with no inferred type, and
-that set is small: a bare `None` (`Option<?>`), an empty `[]`, an unannotated
-closure, whose parameter types are contextual and not written anywhere in the
-AST, and a value whose own binding was never given one. Everything an operand or
-a declared signature determines is inferred — §3 lists the forms.
+that set is small: a bare `None` (`Option<?>`), an empty `[]`, and a value whose
+own binding was never given one. Everything an operand or a declared signature
+determines is inferred — §3 lists the forms. An inline closure *argument* is not
+in the set: in argument position it proves a `Fn` shape of its arity, with any
+position it cannot prove recorded as unknown rather than guessed
+(`hir/infer.rs::infer_arg_expr_type`, ADR 0237).
 
 `desugar.rs::tuple_type_param` names element `i`'s type parameter `__rss_T{i}`.
 The name is built from the index, so it is unique at every arity and always an
@@ -918,7 +967,7 @@ through `Map`/`Set` element types. A failure is `RS0211`. The main rules:
 
 | Derive | Rejected field kinds |
 | --- | --- |
-| `Eq`, `Ord`, `Hash` | `Float*` fields; `handle`/`weak` fields (they lower to `Managed<T>`, which implements only `Clone`/`Debug`); fields whose own type does not derive the same trait |
+| `Eq`, `Ord`, `Hash` | `Float*` fields; `handle`/`weak` fields (a managed reference can only be copied and debug-printed, not compared, ordered, or hashed); fields whose own type does not derive the same trait |
 | `Ord`, `Hash` | additionally `Map`/`Set` fields |
 | `Eq` on a `Map`/`Set` field | requires `Eq + Hash` keys/elements |
 | `JsonEncode`, `JsonDecode` | fields whose type does not derive the same |
@@ -1027,7 +1076,7 @@ fn bad(right: Point) -> Unit {
 A field access must resolve against the RSScript type known for the base
 expression (`RS0025`). A value identifier must resolve to a parameter, a local
 binding, a `with`-bound resource, or a pattern binding (`RS0026`). Both are
-reported by the front end rather than deferred to generated Rust.
+reported by the checker, before the program is built.
 
 **Rejected — `RS0025`**
 
@@ -1108,10 +1157,12 @@ checks *skip* rather than report.
 | `read e` / `mut e` / `take e` / `manage e` | the type of `e` |
 | `e?` | the payload the operator produces: the ok type of a `Result<T, E>`, or the value type of an `Option<T>` (§6.10) |
 | `await e` | the `Task` payload of `e` if it has one, else the type of `e` |
-| `spawn e` | `Task<typeof e>` |
 | `match e { … }` | the type its arms agree on (see below) |
 | `if c { … } else { … }` | the same rule: an `if` expression is a `match` over `true`/`false` (§6.2) |
-| closure | *not inferred* (`None`) — see §3.5 |
+| closure as a value | *not inferred* (`None`): `let f = \|x\| { … }` gives `f` no type — see "What is left untyped" below |
+| closure as a callback argument | in a `noescape Fn(P…) -> R` parameter position, each closure parameter takes the contract's type (with the substitutions already proved from earlier arguments applied), and the body's inferred result binds `R`, so `List.map(list: xs, mapper: \|x\| { return x * 2 })` over a `List<Int>` is a `List<Int>` (`closure_body_value_types`, ADR 0237); a result the body does not prove leaves `R` unbound rather than defaulted |
+
+`spawn e` has no type: `spawn` is reserved and rejected as `RS0015` (§9.1).
 
 A block used as a value takes its type from its last statement, and that
 statement may itself branch: a block ending in an `if` or a `match` *statement*
@@ -1144,7 +1195,7 @@ a case:
 
 | Form | Why |
 | --- | --- |
-| a closure | its parameter types are contextual and are not written anywhere in the AST: `Expr::Closure` carries parameter *names* only. Typing it from its body would turn an ordinary explicit closure into a permanently `noescape` value (§3.5) |
+| a closure used as a value (`let f = \|x\| { … }`) | its parameter types are contextual and are not written anywhere in the AST: `Expr::Closure` carries parameter *names* only. Typing it from its body would turn an ordinary explicit closure into a permanently `noescape` value. A callback argument is typed from its contract instead (the table above); a value binding needs an annotation (`let f: owned Fn(Int) -> Int = …`) or `local` to be callable (§5.9) |
 | a bare `None` | its type is `Option<?>`; the open position proves nothing |
 | an identifier whose own binding was never typed | inference is a single bottom-up pass with no constraint propagation back from later uses (§3.2, §12.2) |
 | an unresolved call, field, or index | the callee, field, or container is already `RS0206`/`RS0025`/a non-container, and a derived type would add a second error |
@@ -1170,14 +1221,40 @@ fn main() -> Unit {
 }
 ```
 
+A callback closure takes its parameter types from the contract and proves the
+call's result type from its body:
+
+**Accepted**
+
+```rsscript
+fn main() -> Unit {
+    let xs: List<Int> = [1, 2, 3]
+    let doubled = List.map(list: xs, mapper: |x| { return x * 2 })
+    let same: List<Int> = doubled
+    Output.write(message: Int.to_string(value: List.len(list: same)))
+    return Unit
+}
+```
+
+**Rejected — `RS0207`** — the proved result is `List<Int>`, not `List<String>`
+
+```rsscript
+fn main() -> Unit {
+    let xs: List<Int> = [1, 2, 3]
+    let doubled = List.map(list: xs, mapper: |x| { return x * 2 })
+    let wrong: List<String> = doubled
+    return Unit
+}
+```
+
 ### 3.3 When a binding annotation is required
 
 Because `Ok`, `Err`, `None`, and an empty list literal `[]` each leave one
 generic position open, a `let` bound to a bare one of them is only well-typed if
 something later constrains the open position. If the binding is never used,
-nothing can, and the program would not lower. The checker reports that in
-RSScript instead of letting it surface as a backend "type annotations needed"
-error: `RS0034` (`ownership.rs::uninferable_binding_type_diagnostic`, applied by
+nothing can, and every binding's type must be settled before the program is
+built. The checker reports that against the source: `RS0034`
+(`ownership.rs::uninferable_binding_type_diagnostic`, applied by
 `checks/body/binding.rs::open_generic_initializer`). `Some(x)` and a non-empty
 `[x, …]` are fully determined by their contents and are excluded.
 
@@ -1248,7 +1325,9 @@ each call site from four sources, in this order, first writer wins:
    type is structurally matched against the first parameter's declared type.
 4. **Argument types** — each named (or, for a positional-allowed call,
    positional) argument's inferred type is structurally matched against its
-   parameter's declared type, at any nesting depth.
+   parameter's declared type, at any nesting depth. An inline closure passed to
+   a `noescape Fn(...) -> R` parameter contributes only through its body's
+   inferred result, matched against `R` (§3.2).
 
 `collect_substitutions` walks the declared type and the actual type in parallel:
 a bare generic name binds to the actual type; matching named types of equal
@@ -1400,10 +1479,11 @@ The pieces, in the order the parser expects them:
 * An explicit return type, optionally `fresh T` (§5.8).
 * Zero or more `retains(param)` clauses (§5.7).
 * A body — required in `.rss`, forbidden in `.rssi` (§1.3).
-* An optional `#lower_name("rust_ident")` attribute immediately above the
-  declaration pins the generated backend symbol. It must be a valid Rust
-  identifier and must not collide with another declaration's lowered name
-  (`RS0035`).
+* An optional `#lower_name("ident")` attribute immediately above the
+  declaration pins its lowered symbol name. The pin must be a plain identifier
+  (ASCII letters, digits, and underscores, not starting with a digit, and not a
+  reserved word such as `fn`, `match`, or `self`) and must not collide with
+  another declaration's lowered name (`RS0035`).
 
 **Accepted**
 
@@ -1768,7 +1848,7 @@ closure:
 ```
 List.filter(list: read xs, predicate: is_pos)
 // becomes
-List.filter(list: read xs, predicate: (x) { return is_pos(x: read x) })
+List.filter(list: read xs, predicate: |x| { return is_pos(x: read x) })
 ```
 
 The forwarding closure's parameters and per-argument effects are copied from the
@@ -1871,7 +1951,7 @@ Every value in a function body is in one of two modes.
   graph. It may be mutated, consumed with `take`, and promoted to managed with
   `manage`, but it may not be aliased or retained.
 
-`let mut name = expr` additionally makes the binding **reassignable** (§6.6);
+`let mut name = expr` additionally makes the binding **reassignable** (§6.11);
 mutability of the binding is orthogonal to managed-vs-local.
 
 The three transitions:
@@ -2462,6 +2542,32 @@ A closure's **kind** comes from how it is bound or passed, not from its syntax:
 | local closure | `local f = \|…\| { … }` | called directly; passed to a `noescape Fn()` parameter |
 | noescape callback | a parameter declared `noescape Fn(...)` | called directly; forwarded to another resolved `noescape Fn()` parameter |
 
+A managed closure bound by an unannotated `let` has no type (§3.2), so calling
+it directly — `let f = || { … }` and then `f()` — is `RS0206` ("call to `f` does
+not resolve"). Annotate the binding (`let f: owned Fn(Int) -> Int = |x| { … }`),
+bind it with `local`, or pass it straight to the parameter that calls it. This
+is a gap rather than a design decision (§12.2).
+
+**Rejected — `RS0206`**
+
+```rsscript
+fn main() -> Unit {
+    let greet = || { Output.write(message: "hi") }
+    greet()
+    return Unit
+}
+```
+
+**Accepted** — the annotated binding is callable
+
+```rsscript
+fn main() -> Unit {
+    let bump: owned Fn(Int) -> Int = |x| { return x + 1 }
+    Output.write(message: Int.to_string(value: bump(1)))
+    return Unit
+}
+```
+
 The four capture/escape rules
 (`checks/body/closure_captures.rs`, `checks/calls/closure_contracts.rs`,
 `closure_escape.rs`, `retained_closure_flow.rs`):
@@ -2811,16 +2917,47 @@ fn main() -> Unit {
 
 | Pattern | Syntax | Notes |
 | --- | --- | --- |
-| binding | `name` | parsed, but no scrutinee type accepts it — `RS0209` (§12.2); `_` is the only irrefutable arm |
+| binding | `name` | binds the matched value; irrefutable. A whole arm that is one bare name follows the resolution rule below |
 | wildcard | `_` | irrefutable |
 | variant | `None`, `Some(v)`, `Ok(e)`, `Circle(r)`, `Rectangle(w, h)` | positional sub-patterns bind declared fields in declared order |
 | struct | `Point { x, y }`, `Point { x, .. }`, `Point { x: inner_pattern }` | named fields; `..` allows omitting the rest |
 | literal | `0`, `"text"`, `'c'`, `true` | `Int`, `String`, `Char`, `Bool` only |
 | list | `[]`, `[a, b]`, `[first, ..rest]`, `[..init, last]`, `[a, ..mid, z]` | a rest may be ignored (`..`) or bound (`..name`) |
 
-Arms may carry a guard: `pattern if cond => { … }`. A guarded arm does **not**
-count toward exhaustiveness, and a mutating effect inside a guard is rejected
-(`match_guard_mutation_diagnostic`).
+**A bare name as a whole arm.** The parser cannot tell `North =>` from
+`other =>`: both are one name with no payload, and `name()` with an empty
+payload is the same node. HIR construction resolves such an arm
+(`hir/lower/signatures.rs::resolve_bare_arm_pattern`, ADR 0242), in this
+order:
+
+1. **Declared case.** If the name is a declared case — the builtin `None`,
+   `Some`, `Ok`, `Err`, or any `sum` variant, with or without fields, whatever
+   its capitalization — the arm is a case pattern. This holds whatever the
+   scrutinee's type, so a case of the wrong family is still `RS0209`
+   (`None =>` over a `String` does not bind).
+2. **Binding.** Otherwise, if the name does not start with an uppercase letter,
+   the arm binds the whole scrutinee. The binding has the scrutinee's type, is
+   in scope in the arm's guard and body, and is irrefutable: an unguarded
+   binding arm makes the match exhaustive exactly as `_` does (§6.7). It may
+   carry a guard.
+3. **Unknown case.** Otherwise — a capitalized name that is no declared case,
+   such as a misspelled `Nroth` or a constant-looking `MAX` — the arm stays a
+   case pattern and is `RS0209`, so a typo cannot silently become a catch-all.
+
+Inside a payload, field, tuple, or list position the parser still decides by
+capitalization alone: `Some(v)` binds `v`, `Some(None)` tests a case. The
+binding arm does not widen the scrutinee types of §6.6: `match x { y => … }`
+over a `Float` is still `RS0209`. There is no unreachable-arm diagnostic, so
+arms written after an unguarded binding arm (or `_`) are accepted and never run.
+
+**Guards.** Any arm may carry a guard: `pattern if cond => { … }`. Arms are
+tried in written order. For each arm the pattern is tested, its bindings are
+written, and then the guard is evaluated with those bindings in scope; a
+`false` guard continues to the next arm's pattern test exactly as a failed
+pattern does, and the first arm whose pattern matches and whose guard is `true`
+runs (ADR 0241). A guarded arm does **not** count toward exhaustiveness, and a
+mutating effect inside a guard is rejected (`match_guard_mutation_diagnostic`),
+so evaluating a guard and falling through leaves no state to undo.
 
 Variant pattern arity is checked: a bare `V` matches a payload-free variant, but
 once a parenthesised payload is written its arity must equal the variant's
@@ -2832,24 +2969,38 @@ pattern `__Tuple2 { item0: 0, item1: name }` over the synthetic tuple struct
 (§2.9, `parser/pattern.rs`), so everything §6.5 says about struct-pattern field
 effects applies to it unchanged.
 
-**What lowers.** Lowering accepts a subset of the pattern forms above, and a
-pattern outside it is a build error rather than a check error:
+**What lowers.** The project rule is that a program the checker accepts builds:
+a checked `match` lowers to MIR, verifies, and runs, with no pattern left for
+the build to refuse. Lowering (`lowerer_calls.rs::lower_pattern_edge`) accepts
+these forms, in statement `match`, expression `match`, and a `match` in an
+expression arm's value position alike, with or without a guard:
 
 | Form | Lowers |
 | --- | --- |
+| binding, whole-scrutinee or nested | yes |
 | wildcard | yes |
 | literal | yes |
 | variant — `Ok`/`Err`, `Some`/`None`, declared sum variants | yes, with any lowerable sub-pattern per declared field |
 | struct pattern naming a declared sum variant (`Circle { radius }`) | yes: the same subset as the positional spelling, and `..` omits the rest |
+| struct pattern over a declared `struct` type (`Point { x: 0, y }`) | yes: each field may be any lowerable sub-pattern, and `..` omits the rest |
 | tuple (`__TupleN` struct pattern) | yes: each element may bind, be `_`, be a literal, or be a nested tuple pattern of the same |
-| every other struct pattern | no |
 | list | yes: each element may bind, be `_`, or be a literal; the rest may be ignored or bound |
-| guard on any arm | no |
+| guard on any arm | yes |
 
-A tuple has one shape, so there is no tag to test: only a literal element is
-refutable, and the refutable elements become a short-circuiting branch ladder
-(`lowerer_calls.rs::lower_tuple_pattern_edge`). Nested tuple patterns recurse
-through both the test and the binding half.
+The checker accepts a few pattern shapes this table does not cover, and those
+programs check clean and then fail `rss build` — a violation of the rule above,
+recorded in §12.2 rather than a second rule: a struct pattern over a `class`
+type, a field pattern with an explicit effect (`Point { x: mut a }` under
+`match mut`), a variant, struct, or list pattern as a tuple element, and a
+variant, tuple, struct, or list pattern as a list element.
+
+A struct type has one shape, so a struct pattern tests no tag: only its
+refutable field sub-patterns are tested, as a short-circuiting branch ladder,
+and a pattern of bindings alone is an unconditional edge
+(`lowerer_calls.rs::lower_struct_pattern_edge`). A tuple is the same case: only
+a literal element is refutable, and the refutable elements become a branch
+ladder (`lowerer_calls.rs::lower_tuple_pattern_edge`). Nested tuple patterns
+recurse through both the test and the binding half.
 
 A list pattern is refutable in its length before it is refutable in any
 element: a fixed-length pattern requires an exact length and a pattern with a
@@ -2924,6 +3075,95 @@ fn main() -> Unit {
 }
 ```
 
+**Accepted** — binding arms, a guard on a binding arm, and a declared nullary
+case beside them
+
+```rsscript
+sum Direction {
+    North
+    South
+}
+
+fn step(n: Int) -> Int {
+    let next = match n {
+        0 => { 1 }
+        big if big > 100 => { 100 }
+        other => { other + 1 }
+    }
+    return next
+}
+
+fn heading(direction: Direction) -> String {
+    match direction {
+        North => { return "up" }
+        rest => { return "elsewhere" }
+    }
+}
+
+fn main() -> Unit {
+    Output.write(message: Int.to_string(value: step(n: 5)))
+    Output.write(message: heading(direction: South))
+    return Unit
+}
+```
+
+**Accepted** — a struct pattern over a struct type, with a guard that falls
+through to the next arm
+
+```rsscript
+struct Point {
+    x: Int,
+    y: Int
+}
+
+fn describe(point: Point) -> Int {
+    match point {
+        Point { x: 0, y } if y > 10 => { return y }
+        Point { x: 0, .. } => { return 0 }
+        whole => { return whole.x }
+    }
+}
+
+fn main() -> Unit {
+    Output.write(message: Int.to_string(value: describe(point: Point(x: 0, y: 3))))
+    return Unit
+}
+```
+
+**Rejected — `RS0209`** — `None` is a declared case, so it does not bind a
+`String`
+
+```rsscript
+fn classify(text: String) -> Int {
+    match text {
+        None => { return 1 }
+        _ => { return 0 }
+    }
+}
+```
+
+**Rejected — `RS0209`** — a capitalized name that is no declared case stays a
+case pattern
+
+```rsscript
+fn classify(n: Int) -> Int {
+    match n {
+        Nroth => { return 1 }
+        _ => { return 0 }
+    }
+}
+```
+
+**Rejected — `RS0021`** — a guarded binding arm does not close the match
+
+```rsscript
+fn classify(n: Int) -> Int {
+    match n {
+        positive if positive > 0 => { return 1 }
+    }
+}
+```
+
 **Rejected — `RS0037`**
 
 ```rsscript
@@ -2973,6 +3213,8 @@ Field effects are monotonic: a field may never request more authority than the
 scrutinee provides. So `match point { Point { x: mut a } => … }` is `RS0310` —
 the scrutinee defaulted to `read` — and writing `match mut point` makes it legal
 (`crates/rsscript-semantics/src/checks/body/semantics.rs::check_pattern_field_effects`).
+Legal to the checker only: a field pattern with an explicit effect does not yet
+lower, so that program fails `rss build` (§6.4, §12.2).
 
 **Accepted** — the two pattern forms behave the same way
 
@@ -3019,7 +3261,8 @@ fn bump(point: mut Point) -> Int {
 * the scalars `Int`, `String`, `Char`, `Bool` (literal dispatch);
 * any declared sum, struct, or class type.
 
-Everything else — including `Float` — is `RS0209`. A literal pattern whose
+Everything else — including `Float` — is `RS0209`, whatever the arms are: a
+binding arm or `_` does not make an unsupported scrutinee matchable. A literal pattern whose
 literal type differs from the scrutinee type is also `RS0209`, and a variant
 name outside the scrutinee's variant family is `RS0209`
 (`match_variant_family_diagnostic`).
@@ -3049,7 +3292,7 @@ The algorithm, per scrutinee type:
 
 | Scrutinee | Covered when |
 | --- | --- |
-| any | some arm is a wildcard or a plain binding |
+| any | some unguarded arm is `_` or a binding arm (§6.4) |
 | `Bool` | both `true` and `false` literal patterns appear |
 | `Option<T>` | a `None` pattern appears, **and** either a `Some` with an irrefutable payload (`Some(x)` with no sub-pattern list, i.e. `bindings.is_empty()`) or the collected `Some` sub-patterns cover `T` |
 | `Result<T, E>` | the same, for `Ok` over `T` and `Err` over `E` |
@@ -3327,7 +3570,8 @@ rule is:
 
 The consequence is that every read `RS0017` reports is unassigned on *every*
 path: branch merging produces no false positives, at the cost of missing reads
-that are unassigned on only some paths.
+that are unassigned on only some paths. Those missed reads are not harmless:
+the build's Artifact verifier does check every path, and rejects them.
 
 **Rejected — `RS0017`**
 
@@ -3339,7 +3583,7 @@ fn main() -> Unit {
 }
 ```
 
-**Accepted** — one assigning path is enough
+**Accepted** — assigned on both paths
 
 ```rsscript
 fn main() -> Unit {
@@ -3354,6 +3598,12 @@ fn main() -> Unit {
     return Unit
 }
 ```
+
+Deleting the `else` branch leaves the program accepted by the checker, because
+one assigning path is enough for this analysis, but `rss build` then fails:
+Artifact verification rejects the read of a register that is uninitialized on
+the path where `c` is false. That is a violation of the rule that a checked
+program builds, recorded in §12.2.
 
 ---
 
@@ -3746,6 +3996,21 @@ fn copy(path: String) -> Result<Unit, IOError> {
 }
 ```
 
+`view name = producer` is statement sugar for the same scope: the parser
+rewrites it to `with producer as name { … }` whose body is the rest of the
+enclosing block (`parser/stmt.rs::is_view_binding`), so the resource is
+released when that block ends, and every `with` rule applies to it.
+
+**Accepted**
+
+```rsscript
+fn copy(path: String) -> Unit {
+    view file = File.open(path: path)
+    File.write(file: mut file, data: "x")
+    return Unit
+}
+```
+
 ### 8.4 Escape rules
 
 `crates/rsscript-semantics/src/resource_flow.rs` computes escape facts over HIR.
@@ -3855,7 +4120,21 @@ contain a `task_group` whose body awaits.
 
 RSScript exposes no `Future` or `Task` value in source. `await` consumes a
 direct async call or a task-group handle; there is nothing else to await.
-`spawn` is reserved but not executable (`RS0015`).
+`spawn` is reserved but not executable (`RS0015`); a child task is an
+`async let` in a `task_group` (§9.3).
+
+**Rejected — `RS0015`** — `spawn`
+
+```rsscript
+async fn work() -> Int {
+    return 1
+}
+
+async fn run() -> Unit {
+    let task = spawn work()
+    return Unit
+}
+```
 
 **Accepted**
 
@@ -4087,7 +4366,10 @@ arm index** — the one written first. `resolve_wait` picks it with
 `handles.iter().enumerate().find(|(_, h)| … done.is_some())`, which scans the arm
 handles in declaration order, so the choice is deterministic and does not depend
 on completion timing, task ids, or hashing. The winning arm's index is what the
-`select` writes to its winner register.
+`select` writes to its winner register. Pinned by the scheduler module test
+`scheduler.rs::a_select_with_several_finished_arms_picks_the_earliest_written_one`
+and, end to end, by
+`crates/rsscript-sdk/src/tests.rs::select_tie_breaking_picks_the_first_written_ready_arm`.
 
 Being deterministic is not the same as being a priority: an arm that is *not*
 ready never wins over one that is. Source order only decides between arms that
@@ -4386,7 +4668,7 @@ Guaranteed (`docs/spec/RSScript_v0.7_Spec.md` §11,
   clock.
 * **`select` tie-breaking is by source order.** Among arms that have finished at
   the moment the `select` resolves, the earliest-written arm wins (§9.4). This
-  is a guarantee, not an implementation accident.
+  is a guarantee, not an implementation accident, and it is pinned by tests.
 * **Execution is single-threaded and cooperative.** `run_scheduler` drives one
   task at a time from a FIFO ready queue (`VecDeque`, `push_back`/`pop_front`);
   a task runs until it suspends or completes. A newly created task is pushed to
@@ -4587,7 +4869,7 @@ explanations).
 | `RS0003` | missing parameter type | §3.1 |
 | `RS0005` | duplicate declaration | §1.9 |
 | `RS0007` | invalid retained parameter | §5.7 |
-| `RS0015` | unsupported syntax | §1.3, §1.4, §1.7, §1.8, §1.10, §2.3, §2.6, §2.12, §7.1, §9.3 |
+| `RS0015` | unsupported syntax | §1.3, §1.4, §1.7, §1.8, §1.10, §2.3, §2.6, §2.12, §7.1, §9.1, §9.3 |
 | `RS0018` | unresolved import | §1.4 |
 | `RS0019` | using a non-`pub` declaration from another module | §1.6 |
 | `RS0028` | invalid `self` parameter | §4.3, §7.1 |
@@ -4627,8 +4909,8 @@ explanations).
 | `RS0203` | unknown named argument | §4.4 |
 | `RS0204` | missing required argument | §4.4 |
 | `RS0205` | duplicate named argument | §4.4 |
-| `RS0206` | unknown callee | §4.2, §10.1 |
-| `RS0207` | argument / initializer / callback-shape type mismatch | §3.3, §4.10, §5.10 |
+| `RS0206` | unknown callee | §4.2, §5.9, §10.1 |
+| `RS0207` | argument / initializer / callback-shape / interpolated-item type mismatch | §1.1, §3.2, §3.3, §4.10, §5.10 |
 | `RS0208` | return type mismatch (including fall-through) | §4.7 |
 | `RS0032` | protocol bound not satisfied | §3.5, §7.3, §7.4 |
 
@@ -4640,9 +4922,9 @@ explanations).
 | `RS0016` | `break`/`continue` outside a loop | §6.3 |
 | `RS0017` | binding read before it is assigned | §6.12 |
 | `RS0020` | `let … else` block does not diverge | §6.9 |
-| `RS0021` | non-exhaustive match | §6.7 |
+| `RS0021` | non-exhaustive match | §6.4, §6.7 |
 | `RS0037` | variant pattern arity mismatch | §6.4 |
-| `RS0209` | control-flow type mismatch (condition, iterable, scrutinee, literal pattern, variant family, match-arm type) | §6.2, §6.3, §6.6, §6.8 |
+| `RS0209` | control-flow type mismatch (condition, iterable, scrutinee, literal pattern, variant family, unknown bare case, match-arm type) | §6.2, §6.3, §6.4, §6.6, §6.8 |
 | `RS0311` | invalid assignment | §6.11 |
 | `RS0312` | assignment target deferred | §6.11 |
 | `RS0313` | assignment type mismatch | §6.11 |
@@ -4700,16 +4982,15 @@ explanations).
 
 ### 11.8 Outside the language front end
 
-These codes exist in the registry but are produced by the backend, the runtime,
-or the package manager, not by the language rules described here.
+These codes exist in the registry but are produced by the runtime or the
+package manager, or by nothing at all, not by the language rules described here.
 
 | Code | Origin |
 | --- | --- |
-| `RS1101` | a rustc diagnostic mapped back through source-map metadata |
-| `RS1102` | a rustc diagnostic whose generated-Rust location could not be mapped |
+| `RS1101`, `RS1102` | **retired**: the archived Rust backend used them for mapped and unmappable backend compiler diagnostics. Nothing emits them now; they stay reserved so they are not reused |
 | `RS1201` | a runtime managed-aliasing or resource conflict with a source span |
 | `PKG0101` `PKG0102` `PKG0501` `PKG0601` `PKG0901` | package manager: feature resolution, dependency sources, review policy, native binding metadata, provider declarations |
-| `RSR001`–`RSR020` | package review / API-diff codes (features, functions, params, returns, retention, types, boundaries, protocol impls, sums, consts, aliases) |
+| `RSR001`–`RSR011`, `RSR014`, `RSR016`, `RSR018`–`RSR020` | package review / API-diff codes (features, functions, params, returns, retention, types, boundaries, protocol impls, sums, consts, aliases) |
 
 ### 11.9 The published catalog is complete
 
@@ -4819,9 +5100,9 @@ host (§2.13).
 
 **`select` tie-breaking** (`reg_vm/scheduler.rs::resolve_wait`): the finished arm
 with the lowest arm index — the one written first — wins. Deterministic, and
-independent of completion timing, task ids, and hashing (§9.4). Read from the
-implementation; the scheduler's module tests cover cancellation but not yet this
-rule.
+independent of completion timing, task ids, and hashing (§9.4). Pinned by
+`scheduler.rs::a_select_with_several_finished_arms_picks_the_earliest_written_one`
+and `crates/rsscript-sdk/src/tests.rs::select_tie_breaking_picks_the_first_written_ready_arm`.
 
 **The `main` contract** (`reg_vm/scheduler.rs::run_program`,
 `reg_vm/executable.rs`). The checker still imposes no signature constraint on
@@ -4852,32 +5133,49 @@ explicit note and offers a `_` arm rather than implying a missing case
 
 These are findings for the maintainer, not features.
 
-Three gaps listed here in earlier drafts are closed and are now stated
-normatively where they belong, so a reader of an older draft can find what
-changed:
+Gaps listed here in earlier drafts that are closed, and now stated normatively
+where they belong, so a reader of an older draft can find what changed:
 
 * an `if` whose condition is a comparison, and a comparison or `&&`/`||` as a
   `match` scrutinee — the HIR binary node carries its inferred type (§3.2, §6.2);
 * a `protocol` declared inside a `module` — protocol names are global and are
   exempt from module mangling (§1.5, §7.1);
 * `RS0017` and `RS0020` inside a closure body — both walks descend into the
-  blocks an expression carries (§6.9, §6.12).
+  blocks an expression carries (§6.9, §6.12);
+* a `match` arm that binds the whole scrutinee — a bare name that is no declared
+  case and does not start with an uppercase letter binds (§6.4, ADR 0242);
+* guarded `match` arms (ADR 0241) and struct patterns over a `struct` type,
+  which the checker accepted and the build refused — both lower now (§6.4).
 
 What is left:
 
-* **A `match` arm cannot bind the whole scrutinee.** `ast.rs::MatchPattern`
-  has a `Binding` form and §6.4 lists it, but no scrutinee type accepts it:
-  `match n { other => … }` is `RS0209` ("match pattern `other` cannot match
-  scrutinee type `Int`"), plus `RS0026` for each use of the binding and `RS0021`
-  because nothing closed the match. `_` is the only irrefutable arm the checker
-  takes. The form is reachable from the parser and from
-  `match_pattern_binding_types`, which types it, so this is an unimplemented
-  case rather than a deliberate rejection.
+* **A few checked programs still fail `rss build`.** The project rule is that a
+  program the checker accepts builds, verifies, and runs. These shapes break it
+  today, and in each case the fix belongs in the implementation (lower the form,
+  or reject it at check time), not in this rule:
+  * pattern shapes the lowerer refuses (§6.4): a struct pattern over a `class`
+    type, a field pattern with an explicit effect (`Point { x: mut a }`), a
+    variant, struct, or list pattern as a tuple element, and a variant, tuple,
+    struct, or list pattern as a list element;
+  * a deferred `let` read after an assignment on only some paths (§6.12):
+    `RS0017` is optimistic about paths, and Artifact verification then rejects
+    the read of an uninitialized register.
+  * async code the lowerer does not cover yet: an `await` of a user `async fn`
+    call inside another `async fn` (the accepted examples in §9.1 and §9.7 fail
+    with "await of non-task checked HIR local"), `await for` over a stream
+    (§9.5, "async checked HIR for loop"), and the §9.5 channel round trip, which
+    lowers but fails Artifact verification ("typed call parameter disagrees with
+    its argument register").
+* **An unannotated `let` closure cannot be called.** `let f = || { … }` gives
+  `f` no type (§3.2), so `f()` is `RS0206` although the same closure bound with
+  `local`, or with an annotation, is callable (§5.9).
 * **A used binding with an open generic position is trusted.** `RS0034` fires
   only when the binding is never used (§3.3). `let xs = []` followed by pushes
   of mixed element types, or a bare `let v = Ok(1)` that is later returned, keeps
   the `?`/placeholder position and the dependent checks keep skipping it. There
   is no constraint propagation from later uses back to the binding (§3.2).
+* **No unreachable-arm diagnostic.** An arm written after an unguarded `_` or
+  binding arm is accepted and never runs (§6.4).
 
 ### 12.3 Surprises worth calling out
 
@@ -4897,14 +5195,6 @@ What is left:
   with many finite-domain fields becomes "not provably exhaustive" and needs an
   explicit `_`. The diagnostic now says when the cap is the reason (§12.1.1), so
   this is a surprise about the shape of the rule, not about a silent one (§6.7).
-
-### 12.4 Documentation drift found while writing this reference
-
-* `docs/generated/grammar.md` lists reserved keyword classes from the lexer
-  table only. Words the parser gives declaration meaning to — `sum`, `protocol`,
-  `impl`, `type`, `const`, `opaque`, `derives`, `retains`, `noescape`, `owned`,
-  `captures`, `task_group`, `select`, `spawn`, `use`, `module` — do not appear
-  there (§1.1).
 
 ---
 
