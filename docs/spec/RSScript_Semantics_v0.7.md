@@ -1605,18 +1605,26 @@ Arguments are named: `f(name: value)`. The rules live in
 `crates/rsscript-semantics/src/call_arguments.rs::call_argument_diagnostics`,
 with the "may this call use positions" decision in `checks/calls.rs`.
 
-An unnamed argument is `RS0201` **unless** one of three exemptions applies:
+An unnamed argument is `RS0201` **unless** one of four exemptions applies:
 
 | Exemption | Condition |
 | --- | --- |
-| private helper call | the callee resolves to a **user function** that is **not** `pub`; then arguments bind positionally to parameters in declared order |
+| same-name argument | in **any** call, a bare *identifier* whose name equals the name of a `read` parameter binds to that parameter by name, wherever it is written (`Int.to_string(value)` means `Int.to_string(value: value)`; `hir/lower/bodies.rs`, `call_binding.rs`) |
+| constructor field shorthand | in a **constructor** call, the same rule for every field: a bare identifier whose name matches a field name binds to that field (`Point(x)` means `Point(x: x)`) |
+| private helper call | the callee resolves to a **user function** that is **not** `pub`; any other unnamed argument binds positionally to the parameter in its position |
 | receiver-call shorthand | `x.m(a, b)` — the receiver slot is supplied by the syntax, and the remaining arguments may be positional |
-| constructor field shorthand | in a **constructor** call only, a bare *identifier* whose name matches a field name binds to that field (`Point(x)` means `Point(x: x)`) |
 
-Everything else — public functions, core/stdlib functions, interface functions,
-protocol calls, and any non-identifier expression in a constructor — must be
-named. The constructor shorthand is identifier-only: `Point(compute())` is
-`RS0201`.
+Everything else — an unnamed argument that is not a same-name identifier, in a
+call to a public function, a core/stdlib function, an interface function, a
+protocol method, or a constructor — must be named. Both shorthands are
+identifier-only: `Point(compute())` is `RS0201`, and so is `Int.to_string(n)`
+unless the variable is called `value`. A same-name argument binds by name even
+in a private helper call, so the checker binds `scale(factor, reading)`'s
+`reading` to the parameter `reading` although it is written second; a bare
+identifier that names no parameter falls back to its position there. (Run time
+does not yet honour this binding for an argument written out of declaration
+order; see §12.2.) A `mut` or `take` argument is never
+a bare identifier, so it is never a same-name argument.
 
 The remaining shape rules:
 
@@ -5090,8 +5098,10 @@ arguments by `evaluation_index`):
 Because labelled arguments may be written in any order, this is observable:
 `f(second: g(), first: h())` evaluates `g()` before `h()` even though `first` is
 declared first. The binding's `by_parameter` view is the ABI layout; its
-`evaluation_order` view is this language contract, and lowering consumes the
-latter.
+`evaluation_order` view is this language contract. Lowering should evaluate in
+the second order and place each value by the first; today it passes the values
+in evaluation order, which binds an out-of-order argument to the wrong
+parameter (§12.2).
 
 **`Int` overflow** (`reg_vm/value_ops.rs::eval_numeric_binary`): checked, not
 wrapping. `+`, `-`, `*`, `/`, `%` on `Int` trap on overflow with a language-level
@@ -5149,6 +5159,26 @@ where they belong, so a reader of an older draft can find what changed:
 
 What is left:
 
+* **Arguments reach the callee in evaluation order, not parameter order.**
+  §12.1.1 states the contract: a call's arguments are evaluated in the order
+  written and bound to parameters by name (`CallBinding` records both, as
+  `evaluation_index` and `parameter_index`). Lowering implements only the
+  first half. `lower_direct_call` (`crates/rsscript-lowering/src/mir/lowerer.rs`)
+  and the fixed-arity builtin cases sort the arguments by `evaluation_index`
+  and pass them in that order, and `MirInstruction::Call` carries no parameter
+  index to correct it. Every one of these checks clean, builds, and runs with
+  the wrong binding:
+  * `sub(right: 3, left: 10)` for `fn sub(left: Int, right: Int)` runs as
+    `sub(left: 3, right: 10)`, and a same-name argument written out of order
+    (`sub(right, left)`) is swapped the same way;
+  * `String.concat(right: "b", left: "a")` yields `"ba"`;
+  * an omitted defaulted parameter declared before a supplied one shifts the
+    later arguments: `fn sub(left: Int, middle: Int = 100, right: Int)` called
+    as `sub(left: 10, right: 3)` receives `middle = 3` and `right = 100`.
+
+  Record and sum-variant constructors place each argument by `parameter_index`
+  and are correct. The fix belongs in lowering: evaluate in `evaluation_index`
+  order, then place each value by `parameter_index`.
 * **A few checked programs still fail `rss build`.** The project rule is that a
   program the checker accepts builds, verifies, and runs. These shapes break it
   today, and in each case the fix belongs in the implementation (lower the form,
@@ -5195,6 +5225,104 @@ What is left:
   with many finite-domain fields becomes "not provably exhaustive" and needs an
   explicit `_`. The diagnostic now says when the cap is the reason (§12.1.1), so
   this is a surprise about the shape of the rule, not about a silent one (§6.7).
+
+---
+
+## 13. Canonical form (proposed)
+
+Status: **proposed**. This section awaits the maintainer's approval. No checker
+rule, `rss fmt` behaviour, lint, or `rss fix` mode enforces it yet, and the
+examples elsewhere in this document are not rewritten to it. Where it describes
+current behaviour, that behaviour was confirmed with `rss check` and `rss fmt` on
+a small program; where it proposes, it says so.
+
+RSScript programs are written mostly by models and read by reviewers, so the
+canonical form is chosen for the reader. The governing rule is **explicit
+unless too ugly**, applied in three steps:
+
+1. **Explicit by default.** Every fact a reader needs to understand a statement
+   — a type that is not visible, a data effect, the role of an argument, what a
+   closure captures — is written in the source, and the checker checks it.
+2. **Do not restate.** A fact may be omitted only when the same statement
+   already shows it (an argument that carries the generic type argument, a
+   literal or constructor that names its own type) or when it is a closed
+   default: a default with exactly one value, fixed by the language, that a
+   reader cannot get wrong (call-site `read`, the `Unit` a `-> Unit` function
+   returns).
+3. **If explicit is still ugly, prefer a shorter explicit form over
+   inference.** Interpolation instead of nested `String.concat`, and a
+   same-name argument `f(reading)` instead of `f(reading: reading)`, keep every
+   fact visible; dropping the fact and letting the checker infer it does not.
+
+Per construct, with what the checker and `rss fmt` do today:
+
+| Construct | Current behaviour | Proposed canonical form | Tooling that would produce it |
+| --- | --- | --- | --- |
+| generic arguments where no argument carries them | `List.new<Int>()`, `let xs: List<Int> = List.new()`, and a bare `List.new()` all check; an unannotated `List.new()` is trusted even when unused (it is not `RS0034`, unlike `[]`) | explicit at the call: `List.new<Int>()` (step 1) | `rss fix --explicit` from the type the checker proved; a lint for a type-argument-free call whose result type is open. Not `rss fmt`: it needs types |
+| generic arguments on later calls | `List.push(list: mut xs, value: 1)` and `List.push<Int>(…)` both check; `rss fmt` keeps whichever is written | omitted when an argument already carries them (step 2) | a lint for a redundant type argument, with a machine-applicable removal |
+| `let` annotations | optional everywhere except a bare `Ok`/`Err`/`None`/`[]` that is never used (`RS0034`); a written annotation is checked (`RS0207`) | omitted when the initializer is a literal or a constructor call (step 2); **required when it is a function call** (step 1). *Proposed; the checker accepts the omission today* | `rss fix --explicit` inserts the proved type; a lint flags the missing one. Open decision 1 |
+| parameter effects in declarations | `bag: Bag` and `bag: read Bag` are the same signature (§4.6); `rss fmt` keeps whichever is written | always written: `read`, `mut`, or `take` on every parameter that has a default effect (step 1) | `rss fmt` could insert it: the default is syntactic (`TypeRef::default_data_effect`) |
+| call-site `read` | optional; `rss fmt` removes it | omitted: it is a closed default, and the declaration states it (step 2) | `rss fmt`, **already** |
+| argument labels | required on `pub`, core, interface, and protocol calls, except a same-name `read` argument (row below); a private helper call and receiver-call shorthand accept positional arguments; `rss fmt` never adds or removes a label | a label on every argument, except a same-name argument (step 1) | `rss fix --explicit` from the resolved signature; a lint for positional arguments |
+| argument punning `f(reading)` for `f(reading: reading)` | **implemented** for constructor fields and for every `read` parameter of any call: a bare identifier whose name equals a parameter's binds to that parameter by name, in any position (`call_binding.rs`, `hir/lower/bodies.rs`). A bare identifier that names no parameter is `RS0201` on a `pub` call but binds **by position** on a private helper call, so `scale(other, reading)` passes `other` as the first parameter whatever it is called. (Run time currently passes every argument in written order, §12.2, so an out-of-order same-name argument is not yet bound by name when the program runs) | allowed **only** when the variable's name equals the parameter's name (step 3); any other argument is labelled. *Proposed: this removes positional binding from private helper calls, which is the part not implemented* | a checker change for the restriction; `rss fix --explicit` labels the rest. Open decision 2 |
+| closure captures | `\|x\| { … }` captures implicitly; `fn(x) captures(read base) { … }` declares the set, and `RS0805` checks it; the language card teaches `\|x\|` as the closure literal | `fn(x) captures(…)` whenever the closure captures anything; `\|x\|` only for a closure that captures nothing (step 1) | `rss fix --explicit` from the capture set the checker computes (`checks/body/closure_captures.rs`); a lint for implicit capture |
+| method calls | `Point.get(self: p)` and `p.get()` both check; receiver sugar desugars to the static call (§4.2); `rss fmt` keeps whichever is written | the namespaced call `Type.method(self: value, …)`, which §4.2 already calls canonical (step 1: the receiver's type is visible) | `rss fix --explicit`: it needs the inferred receiver type |
+| trailing `return Unit` | a `-> Unit` function may fall off its end (§4.7); `rss fmt` keeps a written `return Unit` and does not add one | omitted: a closed default (step 2) | `rss fmt` could remove it: it is syntactic |
+| building a string | nested `String.concat` and `$"…"` both check; `rss fmt` prints each as written (ADR 0243); the language card teaches interpolation | interpolation, each item a `String` (step 3) | a lint for nested `String.concat` with a machine-applicable rewrite; not `rss fmt`, which keeps a hand-written call |
+
+The program below is written in the proposed form throughout. It checks today,
+and `rss fmt` prints it unchanged:
+
+**Accepted**
+
+```rsscript
+struct Reading {
+    sensor: String
+    value: Int
+}
+
+fn Reading.scaled(reading: read Reading, factor: read Int) -> Int {
+    return reading.value * factor
+}
+
+fn describe(reading: read Reading, factor: read Int) -> fresh String {
+    let scaled: Int = Reading.scaled(reading, factor)
+    return $"{reading.sensor}: {Int.to_string(value: scaled)}"
+}
+
+fn main() -> Unit {
+    let reading = Reading(sensor: "north", value: 4)
+    let factor = 3
+    let mut offsets = List.new<Int>()
+    List.push(list: mut offsets, value: 1)
+    let base = 10
+    let shifted = List.map(
+        list: offsets,
+        mapper: fn(offset) captures(read base) {
+            return offset + base
+        },
+    )
+    Output.write(message: describe(reading, factor))
+    Output.write(message: Int.to_string(value: List.len(list: shifted)))
+}
+```
+
+### 13.1 Open decisions for the maintainer
+
+1. **`let` annotations on call results.** Should `let scaled = Reading.scaled(…)`
+   require `: Int`? For: a call is the one initializer whose type the statement
+   does not show, so step 1 asks for it, and the checker already verifies a
+   written annotation (`RS0207`). Against: it restates the callee's signature at
+   every call, and is noise for calls whose type is obvious from the name
+   (`List.len`). Enforcing it needs a new diagnostic or a lint; the checker
+   accepts the omission today.
+2. **Punning restricted to equal names.** Same-name punning already exists for
+   `read` parameters and constructor fields. Restricting unlabelled arguments to
+   it means private helper calls lose positional binding, which today accepts
+   `scale(factor, reading)` (bound by name) and `scale(other, reading)` (bound
+   by position) with no visible difference. The decision is whether that break
+   is worth it, and whether punning should extend to `mut`/`take` arguments,
+   which are not bare identifiers and so are never punned today.
 
 ---
 
