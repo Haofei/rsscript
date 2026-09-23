@@ -98,8 +98,13 @@ rejected (`RS0015`, §9.1), and `view` is the scoped-binding sugar of §8.3.
 (`parser/expr.rs::parse_interpolated_string_expr`). Each `{expr}` is an
 arbitrary expression, string literals included, and `{{`/`}}` are literal
 braces. Because `args` is a `List<String>`, **every interpolated item must be a
-`String`**: an `Int` item is `RS0207` ("list literal item has type `Int`,
-expected `String`"); convert it first with `Int.to_string(value: …)`.
+`String`**: an `Int` item is `RS0207` ("interpolated value has type `Int`, but
+must be a `String`"), reported at the item itself. An `Int`, `Float`, or `Bool`
+item carries a machine-applicable edit that wraps it in `String.from_int`,
+`String.from_float`, or `String.from_bool` (`checks/calls/type_compatibility.rs::check_interpolation_items`);
+`rss fix` applies it. An item's tokens are lexed on their own, and the parser
+moves their spans to the item's place in the file, so every diagnostic about an
+item points at it.
 `rss fmt` prints an interpolated string back as written, not as the
 `String.format` call it desugars to (ADR 0243); a hand-written `String.format`
 call stays a call.

@@ -322,11 +322,21 @@ fn parse_interpolated_string_parts(value: &str, span: &Span) -> (String, Vec<Exp
                     continue;
                 };
                 let expr_text = chars[expr_start..expr_end].iter().collect::<String>();
-                let expr_tokens = crate::lexer::lex_embedded_with_budget(
+                let mut expr_tokens = crate::lexer::lex_embedded_with_budget(
                     &span.file,
                     &expr_text,
                     current_parse_budget().expect("interpolation parsing has an active budget"),
                 );
+                // The item is lexed on its own, so its spans start at 1:1.
+                // Move them to where the item sits in the file, so every
+                // diagnostic about it points at it.
+                let (line, column) = interpolated_char_position(span, &chars, expr_start);
+                for token in &mut expr_tokens {
+                    if token.span.line == 1 {
+                        token.span.column += column - 1;
+                    }
+                    token.span.line += line - 1;
+                }
                 let token_end = expr_tokens
                     .iter()
                     .position(|token| matches!(token.kind, TokenKind::Eof))
@@ -356,6 +366,71 @@ fn parse_interpolated_string_parts(value: &str, span: &Span) -> (String, Vec<Exp
     }
 
     (template, items, malformed)
+}
+
+/// The source line and column of character `index` of an interpolated
+/// string's content, whose token (`span`) starts at the `$` of `$"`.
+fn interpolated_char_position(span: &Span, chars: &[char], index: usize) -> (usize, usize) {
+    let mut line = span.line;
+    let mut column = span.column + 2;
+    for ch in chars.iter().take(index) {
+        if *ch == '\n' {
+            line += 1;
+            column = 1;
+        } else {
+            column += 1;
+        }
+    }
+    (line, column)
+}
+
+/// The source span and text of each `{...}` item of the interpolated string
+/// token at `span` whose raw content is `value`, in order, without the item's
+/// surrounding whitespace; `None` for an item that is empty or spans lines.
+/// Items are found as the parser finds them, so when the string parsed without
+/// a malformed item, the `n`th entry is the `n`th item of the desugared `args`
+/// list.
+pub fn interpolation_item_spans(value: &str, span: &Span) -> Vec<Option<(Span, String)>> {
+    let chars: Vec<char> = value.chars().collect();
+    let mut spans = Vec::new();
+    let mut index = 0usize;
+    while index < chars.len() {
+        match chars[index] {
+            '\\' => index += 2,
+            '{' if chars.get(index + 1) == Some(&'{') => index += 2,
+            '}' if chars.get(index + 1) == Some(&'}') => index += 2,
+            '{' => {
+                let start = index + 1;
+                let Some(end) = find_interpolation_end(&chars, start) else {
+                    index += 1;
+                    continue;
+                };
+                let text = &chars[start..end];
+                let leading = text.iter().take_while(|ch| ch.is_whitespace()).count();
+                let trailing = text
+                    .iter()
+                    .rev()
+                    .take_while(|ch| ch.is_whitespace())
+                    .count();
+                let trimmed = &text[leading.min(text.len())..text.len() - trailing.min(text.len())];
+                spans.push((!trimmed.is_empty() && !trimmed.contains(&'\n')).then(|| {
+                    let (line, column) = interpolated_char_position(span, &chars, start + leading);
+                    (
+                        Span {
+                            file: span.file.clone(),
+                            line,
+                            column,
+                            length: trimmed.len(),
+                        },
+                        trimmed.iter().collect(),
+                    )
+                }));
+                index = end + 1;
+            }
+            _ => index += 1,
+        }
+    }
+    spans
 }
 
 fn find_interpolation_end(chars: &[char], start: usize) -> Option<usize> {

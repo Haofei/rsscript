@@ -250,6 +250,88 @@ pub(super) fn check_list_literal_item_expr(
     );
 }
 
+/// The call's span when it is the desugared form of an interpolated string.
+///
+/// The parser gives the `String.format` call, both of its arguments, and its
+/// template literal the interpolated token's own span (ADR 0243), which a
+/// hand-written `String.format(template: ..., args: [...])` cannot have.
+pub(super) fn interpolation_call_span<'a>(
+    callee: &Callee,
+    args: &[HirCallArg],
+    span: &'a Span,
+) -> Option<&'a Span> {
+    let is_format = matches!(
+        callee,
+        Callee::Qualified { namespace, name } if namespace == "String" && name == "format"
+    );
+    (is_format && args.len() == 2 && args.iter().all(|arg| arg.span == *span)).then_some(span)
+}
+
+/// Check each interpolated value of `$"..."` (the `args` list of the
+/// desugared `String.format` call) is a `String`, reporting one that is not at
+/// its own position with the conversion that fixes it.
+pub(super) fn check_interpolation_items(
+    analyzer: &mut Analyzer<'_>,
+    args_value: &HirExpr,
+    interpolation: &Span,
+) {
+    let mut value = args_value;
+    while let HirExpr::Effect { value: inner, .. } = value {
+        value = inner;
+    }
+    let HirExpr::ArrayLiteral { items, .. } = value else {
+        return;
+    };
+    // The items' full source spans and text, read from the interpolated token
+    // itself; an entry is `None` when the item spans lines.
+    let sources = analyzer
+        .tokens
+        .iter()
+        .find_map(|token| match &token.kind {
+            crate::syntax::lexer::TokenKind::InterpolatedString(raw)
+                if token.span.file == interpolation.file
+                    && token.span.line == interpolation.line
+                    && token.span.column == interpolation.column =>
+            {
+                Some(rsscript_syntax::interpolation_item_spans(raw, &token.span))
+            }
+            _ => None,
+        })
+        .filter(|sources| sources.len() == items.len())
+        .unwrap_or_default();
+    for (index, item) in items.iter().enumerate() {
+        let Some(actual) = hir_expr_type_name(item) else {
+            continue;
+        };
+        if has_unresolved_generic_fact(analyzer, actual) || argument_type_matches("String", actual)
+        {
+            continue;
+        }
+        let source = sources.get(index).cloned().flatten();
+        let span = source
+            .as_ref()
+            .map_or_else(|| hir_expr_span(item).clone(), |(span, _)| span.clone());
+        let conversion = match strip_fresh_type(actual) {
+            "Int" => Some("String.from_int"),
+            "Float" => Some("String.from_float"),
+            "Bool" => Some("String.from_bool"),
+            _ => None,
+        }
+        .and_then(|function| {
+            let (span, text) = source.as_ref()?;
+            Some((
+                function,
+                rsscript_diagnostics::FixEdit::replace(span, format!("{function}(value: {text})")),
+            ))
+        });
+        analyzer.diagnostics.push(
+            rsscript_semantics::interpolation_item_type_mismatch_diagnostic(
+                actual, span, conversion,
+            ),
+        );
+    }
+}
+
 pub(super) fn is_result_type_name(type_name: &str) -> bool {
     type_root_name(type_name) == "Result"
 }

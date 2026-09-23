@@ -1311,6 +1311,18 @@ fn check_call_args(
         call_span,
     );
 
+    // `$"..."` desugars to `String.format(args: [...])`; its items are checked
+    // as interpolated values, at their own positions, rather than as the items
+    // of a `List<String>` literal.
+    let mut argument_names = resolved_names.clone();
+    if let Some(interpolation) = interpolation_call_span(callee, args, call_span) {
+        for (arg, name) in args.iter().zip(argument_names.iter_mut()) {
+            if *name == Some("args") {
+                check_interpolation_items(analyzer, &arg.value, interpolation);
+                *name = None;
+            }
+        }
+    }
     check_argument_types(
         analyzer,
         function,
@@ -1318,7 +1330,7 @@ fn check_call_args(
         &call_name,
         signature,
         &type_param_substitutions,
-        &resolved_names,
+        &argument_names,
     );
     check_argument_escaping(
         analyzer,

@@ -1050,3 +1050,64 @@ sum Shape {
     };
     assert_eq!(hir.resolve_bare_arm_pattern(&with_payload), with_payload);
 }
+
+/// A non-`String` interpolated value is reported at the value itself, as an
+/// interpolation mismatch — not as a `List<String>` literal item at 1:1, which
+/// is what the desugared `String.format(args: [...])` made it look like. An
+/// `Int`, `Float`, or `Bool` value carries the edit that wraps it in its core
+/// conversion; any other type gets advice only.
+#[test]
+fn a_non_string_interpolated_value_is_reported_where_it_is_with_its_conversion() {
+    let source = "fn show(n: Int, ratio: Float, done: Bool, name: String, xs: List<Int>) -> fresh String {\n    return $\"{name}: {n} {  ratio  } {done} {xs}\"\n}\n";
+    let diagnostics = analyze_source("interpolation.rss", source);
+    let mismatches = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == code::ARGUMENT_TYPE_MISMATCH)
+        .collect::<Vec<_>>();
+    assert_eq!(mismatches.len(), 4, "{diagnostics:#?}");
+
+    let expected = [
+        ("Int", 23, 1, Some("String.from_int(value: n)")),
+        ("Float", 29, 5, Some("String.from_float(value: ratio)")),
+        ("Bool", 39, 4, Some("String.from_bool(value: done)")),
+        ("List<Int>", 46, 2, None),
+    ];
+    for (diagnostic, (actual, column, length, replacement)) in mismatches.iter().zip(expected) {
+        assert_eq!(
+            diagnostic.summary,
+            format!("interpolated value has type `{actual}`, but must be a `String`.")
+        );
+        assert_eq!(
+            (
+                diagnostic.span.line,
+                diagnostic.span.column,
+                diagnostic.span.length
+            ),
+            (2, column, length),
+            "{diagnostic:#?}"
+        );
+        let fix = diagnostic
+            .fixes
+            .iter()
+            .find(|fix| fix.kind == "convert_interpolated_value")
+            .expect("a conversion fix");
+        match replacement {
+            Some(replacement) => {
+                assert_eq!(fix.applicability, "machine-applicable");
+                let edit = fix
+                    .edit
+                    .as_ref()
+                    .expect("a machine-applicable fix has an edit");
+                assert_eq!(edit.replacement, replacement);
+                assert_eq!(
+                    (edit.span.line, edit.span.column, edit.span.length),
+                    (2, column, length)
+                );
+            }
+            None => {
+                assert_eq!(fix.applicability, "manual");
+                assert!(fix.edit.is_none());
+            }
+        }
+    }
+}

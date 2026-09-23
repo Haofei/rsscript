@@ -1,0 +1,9 @@
+// expect: RS0207
+
+// Each `{expr}` in `$"..."` must be a `String`. The mismatch is reported at the
+// value, with the `String.from_int(value: ...)` edit that fixes it.
+fn main() -> Unit {
+    let count = 3
+    Output.write(message: $"count: {count}")
+    return Unit
+}

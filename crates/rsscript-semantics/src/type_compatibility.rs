@@ -447,6 +447,41 @@ pub fn list_literal_item_type_mismatch_diagnostic(
     )
 }
 
+/// An interpolated value (`{expr}` in `$"..."`) that is not a `String`.
+///
+/// Interpolation desugars to `String.format(template: ..., args: [...])`, so
+/// the mismatch used to be reported as a `List<String>` literal item, at the
+/// position the item's separately lexed tokens claimed — line 1, column 1.
+/// `conversion` is the core function that turns the value into a `String` and
+/// the edit that wraps the item in it, when there is one.
+pub fn interpolation_item_type_mismatch_diagnostic(
+    actual: &str,
+    span: Span,
+    conversion: Option<(&str, FixEdit)>,
+) -> Diagnostic {
+    let diagnostic = Diagnostic::error(
+        code::ARGUMENT_TYPE_MISMATCH,
+        format!("interpolated value has type `{actual}`, but must be a `String`."),
+        span,
+        "interpolated value must be a `String`",
+    )
+    .with_cause(
+        "Each `{expr}` in `$\"...\"` must already be a `String`: interpolation joins strings and does not convert values.",
+    );
+    match conversion {
+        Some((function, edit)) => diagnostic.with_fix_edit(
+            "convert_interpolated_value",
+            format!("Convert it with `{function}(value: ...)` inside the braces."),
+            edit,
+        ),
+        None => diagnostic.with_fix(
+            "convert_interpolated_value",
+            format!("Convert the `{actual}` value to a `String` inside the braces."),
+            "manual",
+        ),
+    }
+}
+
 pub fn unknown_callee_diagnostic(call_name: &str, span: Span) -> Diagnostic {
     unknown_callee_diagnostic_with_suggestions(call_name, span, &[], None)
 }

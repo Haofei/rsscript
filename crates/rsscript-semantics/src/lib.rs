@@ -256,9 +256,10 @@ pub use type_compatibility::{
     argument_payload_type_mismatch_diagnostic, argument_type_mismatch_diagnostic,
     argument_type_mismatch_diagnostic_with_repair, binding_payload_type_mismatch_diagnostic,
     binding_type_mismatch_diagnostic, contains_unresolved_generic_type,
-    list_literal_item_type_mismatch_diagnostic, map_literal_entry_type_mismatch_diagnostic,
-    message_payload_not_transferable_diagnostic, type_compatible, type_contains_unresolved_generic,
-    unknown_callee_diagnostic, unknown_callee_diagnostic_with_suggestions,
+    interpolation_item_type_mismatch_diagnostic, list_literal_item_type_mismatch_diagnostic,
+    map_literal_entry_type_mismatch_diagnostic, message_payload_not_transferable_diagnostic,
+    type_compatible, type_contains_unresolved_generic, unknown_callee_diagnostic,
+    unknown_callee_diagnostic_with_suggestions,
 };
 pub use weak_fields::{is_weak_upgrade_call, weak_field_upgrade_diagnostic};
 

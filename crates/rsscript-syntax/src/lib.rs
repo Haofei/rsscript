@@ -27,7 +27,9 @@ pub use formatter::{
 };
 pub use function_value_desugar::desugar_function_values;
 pub use lint::lint_source;
-pub use parser::{PARSER_KEYWORDS, parse_source, parse_source_raw, parse_source_tokens};
+pub use parser::{
+    PARSER_KEYWORDS, interpolation_item_spans, parse_source, parse_source_raw, parse_source_tokens,
+};
 pub use prefix::{
     CallContext, CursorContext, ExpectedTerminal, FunctionContext, IdentifierRole, LiteralKind,
     PrefixParseResult, PrefixParseState, SyntaxSite, TerminalCompleteness, parse_source_prefix,

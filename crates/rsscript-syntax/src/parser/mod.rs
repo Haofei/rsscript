@@ -13,6 +13,7 @@ use crate::lexer::{KeywordCategory, Token, TokenKind, lex_with_budget};
 use crate::{FrontendBudget, FrontendBudgetLimits, ParseRecursionGuard, Span};
 
 mod expr;
+pub use expr::interpolation_item_spans;
 mod items;
 mod pattern;
 mod scan;
