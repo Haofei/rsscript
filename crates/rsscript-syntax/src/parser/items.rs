@@ -201,20 +201,36 @@ pub(super) fn parse_params(tokens: &[Token], start: usize, end: usize) -> Parsed
 pub(super) fn split_param_ranges(tokens: &[Token], start: usize, end: usize) -> Vec<ParamRange> {
     let mut ranges = Vec::new();
     let mut range_start = start;
-    let mut depth = 0usize;
+    // Open brackets, innermost last. A closer pops back to its own opener, so a
+    // `<` that turned out to be a comparison can never leave the list one level
+    // too deep: `f(flag: g(a: x < y), value: 5)` splits at the second comma.
+    let mut open: Vec<&str> = Vec::new();
     let mut pipe_depth = 0usize;
     for (index, token) in tokens.iter().enumerate().take(end).skip(start) {
-        if depth == 0 && token.symbol("|") {
+        if open.is_empty() && token.symbol("|") {
             pipe_depth = 1usize.saturating_sub(pipe_depth);
-        } else if pipe_depth == 0
-            && (token.symbol("(") || token.symbol("{") || token.symbol("[") || token.symbol("<"))
+        } else if pipe_depth > 0 {
+            continue;
+        } else if let Some(opener) = ["(", "{", "["]
+            .into_iter()
+            .find(|symbol| token.symbol(symbol))
         {
-            depth += 1;
-        } else if pipe_depth == 0
-            && (token.symbol(")") || token.symbol("}") || token.symbol("]") || token.symbol(">"))
+            open.push(opener);
+        } else if token.symbol("<") && is_angle_bracket(tokens, index, end) {
+            open.push("<");
+        } else if token.symbol(">") {
+            if open.last() == Some(&"<") {
+                open.pop();
+            }
+        } else if let Some(opener) = [(")", "("), ("}", "{"), ("]", "[")]
+            .iter()
+            .find(|(close, _)| token.symbol(close))
+            .map(|(_, opener)| *opener)
         {
-            depth = depth.saturating_sub(1);
-        } else if depth == 0 && pipe_depth == 0 && token.symbol(",") {
+            if let Some(position) = open.iter().rposition(|candidate| *candidate == opener) {
+                open.truncate(position);
+            }
+        } else if open.is_empty() && token.symbol(",") {
             if range_start < index {
                 ranges.push(ParamRange {
                     start: range_start,
@@ -239,6 +255,47 @@ pub(super) fn split_param_ranges(tokens: &[Token], start: usize, end: usize) -> 
         });
     }
     ranges
+}
+
+/// Whether the `<` at `open` opens a type-argument list (`Map<K, V>`,
+/// `List.new<Int>()`) rather than being a comparison (`x < y`).
+///
+/// It does when it follows a name and a matching `>` closes it before any
+/// bracket it is nested in closes, and what follows that `>` can follow a
+/// type: a call, a path, a separator, or another closer. A comparison has no
+/// such `>`, or has one followed by an operand (`a < b, c > d`).
+fn is_angle_bracket(tokens: &[Token], open: usize, end: usize) -> bool {
+    if open == 0 || ident_name(&tokens[open - 1]).is_none() {
+        return false;
+    }
+    let mut angles = 0usize;
+    let mut parens = 0usize;
+    for index in open..end {
+        let token = &tokens[index];
+        if token.symbol("(") || token.symbol("[") {
+            parens += 1;
+        } else if token.symbol(")") || token.symbol("]") {
+            let Some(depth) = parens.checked_sub(1) else {
+                return false;
+            };
+            parens = depth;
+        } else if token.symbol("{") || token.symbol("}") || token.symbol(";") || token.symbol("=") {
+            return false;
+        } else if parens == 0 && token.symbol("<") {
+            angles += 1;
+        } else if parens == 0 && token.symbol(">") {
+            angles -= 1;
+            if angles == 0 {
+                return tokens.get(index + 1).is_none_or(|next| {
+                    index + 1 >= end
+                        || ["(", ".", ",", ")", ">", "]", "?", "=", "{", "|"]
+                            .iter()
+                            .any(|symbol| next.symbol(symbol))
+                });
+            }
+        }
+    }
+    false
 }
 
 pub(super) fn parse_generic_params(

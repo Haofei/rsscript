@@ -22,7 +22,9 @@ mod parser;
 mod prefix;
 
 pub use async_await_hoist::hoist_async_awaits;
-pub use formatter::{format_declaration_signature, format_program, format_source};
+pub use formatter::{
+    format_declaration_signature, format_program, format_source, format_source_without_comments,
+};
 pub use function_value_desugar::desugar_function_values;
 pub use lint::lint_source;
 pub use parser::{PARSER_KEYWORDS, parse_source, parse_source_raw, parse_source_tokens};

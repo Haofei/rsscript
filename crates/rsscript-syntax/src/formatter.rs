@@ -6,134 +6,332 @@ use crate::ast::{
 };
 use crate::parse_source_raw;
 
+mod comments;
+
+use comments::{END, Pos, SourceComments, pos};
+
 const MAX_INLINE_LITERAL_LEN: usize = 88;
 const MAX_INLINE_SIGNATURE_LEN: usize = 100;
 
 type ReceiverCallSegment<'a> = (&'a str, &'a [CallArg]);
 type ReceiverCallSegments<'a> = (&'a Expr, Vec<ReceiverCallSegment<'a>>);
 
+/// Format a source file, keeping its `//` comments (see `formatter/comments.rs`).
 pub fn format_source(file: &str, source: &str) -> String {
+    let program = parse_source_raw(file, source);
+    let (tokens, comments) = crate::lexer::lex_with_comments(file, source);
+    let comments = SourceComments::new(&tokens, comments, &unit_starts(&program));
+    let mut formatter = Formatter::new(comments);
+    formatter.program(&program);
+    formatter.out
+}
+
+/// Format a source file into its canonical form *without* its comments.
+///
+/// This is a normal form, not a formatting of the file for people to read: two
+/// sources that differ only in comments and layout produce the same text. The
+/// package lock hashes interfaces through it, so a comment edit does not change
+/// an interface's reviewed hash.
+pub fn format_source_without_comments(file: &str, source: &str) -> String {
     format_program(&parse_source_raw(file, source))
 }
 
+/// Format an AST. An AST carries no comments, so none are printed.
 pub fn format_program(program: &Program) -> String {
-    let mut formatter = Formatter { out: String::new() };
+    let mut formatter = Formatter::new(SourceComments::default());
     formatter.program(program);
     formatter.out
 }
 
+/// The source positions of the top-level units the formatter prints one at a
+/// time: protocol declarations, items that are not protocol methods (those are
+/// printed inside their protocol), and protocol impls.
+fn unit_starts(program: &Program) -> Vec<Pos> {
+    program
+        .protocols
+        .iter()
+        .map(|protocol| pos(&protocol.span))
+        .chain(
+            program
+                .items
+                .iter()
+                .filter(|item| !item_is_protocol_method(item, program))
+                .map(|item| pos(item_span(item))),
+        )
+        .chain(
+            program
+                .protocol_impls
+                .iter()
+                .map(|protocol_impl| pos(&protocol_impl.span)),
+        )
+        .collect()
+}
+
+fn item_span(item: &Item) -> &Span {
+    match item {
+        Item::Module(decl) => &decl.span,
+        Item::Use(decl) => &decl.span,
+        Item::Type(decl) => &decl.span,
+        Item::SumType(decl) => &decl.span,
+        Item::TypeAlias(decl) => &decl.span,
+        Item::Const(decl) => &decl.span,
+        Item::Function(decl) => &decl.span,
+    }
+}
+
 struct Formatter {
     out: String,
+    comments: SourceComments,
+    /// The top-level unit being printed; only its comments are flushed.
+    owner: Option<usize>,
+    /// Byte offset of the output line that last received a trailing comment,
+    /// so a line never receives two.
+    trailing_line_start: Option<usize>,
 }
 
 impl Formatter {
     fn program(&mut self, program: &Program) {
         let mut wrote_item = false;
-        for protocol in &program.protocols {
-            if wrote_item {
-                self.out.push_str("\n\n");
-            }
-            self.protocol_decl(program, &protocol.name);
+        // `module` and `use` must come before every declaration, so they are
+        // printed before the protocols the formatter hoists.
+        let (header, body): (Vec<&Item>, Vec<&Item>) = program
+            .items
+            .iter()
+            .filter(|item| !item_is_protocol_method(item, program))
+            .partition(|item| matches!(item, Item::Module(_) | Item::Use(_)));
+        for item in header {
+            self.begin_unit(item_span(item), wrote_item);
+            self.item(item);
+            self.end_unit();
             wrote_item = true;
         }
 
-        for item in &program.items {
-            if item_is_protocol_method(item, program) {
-                continue;
-            }
-            if wrote_item {
-                self.out.push_str("\n\n");
-            }
-            match item {
-                Item::Type(ty) => self.type_decl(ty),
-                Item::SumType(sum) => {
-                    if sum.is_public {
-                        self.out.push_str("pub ");
-                    }
-                    self.out.push_str("sum ");
-                    self.out.push_str(&sum.name);
-                    if !sum.derives.is_empty() {
-                        self.out.push_str(" derives(");
-                        self.out.push_str(&sum.derives.join(", "));
-                        self.out.push(')');
-                    }
-                    self.out.push_str(" {\n");
-                    for variant in &sum.variants {
-                        self.out.push_str("    ");
-                        self.out.push_str(&variant.name);
-                        if !variant.fields.is_empty() {
-                            self.out.push('(');
-                            for (i, field) in variant.fields.iter().enumerate() {
-                                if i > 0 {
-                                    self.out.push_str(", ");
-                                }
-                                self.out.push_str(&field.name);
-                                self.out.push_str(": ");
-                                self.type_ref(&field.ty);
-                            }
-                            self.out.push(')');
-                        }
-                        self.out.push('\n');
-                    }
-                    self.out.push_str("}\n");
-                }
-                Item::TypeAlias(alias) => {
-                    if alias.is_public {
-                        self.out.push_str("pub ");
-                    }
-                    self.out.push_str("type ");
-                    self.out.push_str(&alias.name);
-                    self.generic_params(&alias.type_params);
-                    self.out.push_str(" = ");
-                    self.type_ref(&alias.target);
-                    self.out.push('\n');
-                }
-                Item::Const(decl) => {
-                    if decl.is_public {
-                        self.out.push_str("pub ");
-                    }
-                    self.out.push_str("const ");
-                    self.out.push_str(&decl.name);
-                    if let Some(ty) = &decl.type_annotation {
-                        self.out.push_str(": ");
-                        self.type_ref(ty);
-                    }
-                    self.out.push_str(" = ");
-                    self.expr(&decl.value, 0);
-                    self.out.push('\n');
-                }
-                Item::Function(function) => self.function_decl(function),
-                Item::Module(m) => {
-                    self.out.push_str("module ");
-                    self.out.push_str(&m.path.join("."));
-                    self.out.push('\n');
-                }
-                Item::Use(u) => {
-                    self.out.push_str("use ");
-                    self.out.push_str(&u.path.join("."));
-                    if u.glob {
-                        self.out.push_str(".*");
-                    } else if let Some(alias) = &u.alias {
-                        self.out.push_str(" as ");
-                        self.out.push_str(alias);
-                    }
-                    self.out.push('\n');
-                }
-            }
+        for protocol in &program.protocols {
+            self.begin_unit(&protocol.span, wrote_item);
+            self.protocol_decl(program, &protocol.name);
+            self.end_unit();
+            wrote_item = true;
+        }
+
+        for item in body {
+            self.begin_unit(item_span(item), wrote_item);
+            self.item(item);
+            self.end_unit();
             wrote_item = true;
         }
 
         for protocol_impl in &program.protocol_impls {
-            if wrote_item {
-                self.out.push_str("\n\n");
-            }
+            self.begin_unit(&protocol_impl.span, wrote_item);
             self.protocol_impl(protocol_impl);
+            self.end_unit();
             wrote_item = true;
         }
 
-        if !self.out.is_empty() && !self.out.ends_with('\n') {
+        // Comments after the last unit, and any a unit left behind.
+        self.owner = None;
+        self.flush_comments(END, 0);
+        debug_assert!(self.comments.is_empty(), "every comment is printed");
+        let content_end = self.out.trim_end_matches('\n').len();
+        self.out.truncate(content_end);
+        if !self.out.is_empty() {
             self.out.push('\n');
         }
+    }
+
+    fn item(&mut self, item: &Item) {
+        match item {
+            Item::Type(ty) => self.type_decl(ty),
+            Item::SumType(sum) => {
+                if sum.is_public {
+                    self.out.push_str("pub ");
+                }
+                self.out.push_str("sum ");
+                self.out.push_str(&sum.name);
+                if !sum.derives.is_empty() {
+                    self.out.push_str(" derives(");
+                    self.out.push_str(&sum.derives.join(", "));
+                    self.out.push(')');
+                }
+                self.out.push_str(" {\n");
+                for variant in &sum.variants {
+                    self.comments_before(&variant.span, 1);
+                    self.out.push_str("    ");
+                    self.out.push_str(&variant.name);
+                    if !variant.fields.is_empty() {
+                        self.out.push('(');
+                        for (i, field) in variant.fields.iter().enumerate() {
+                            if i > 0 {
+                                self.out.push_str(", ");
+                            }
+                            self.out.push_str(&field.name);
+                            self.out.push_str(": ");
+                            self.type_ref(&field.ty);
+                        }
+                        self.out.push(')');
+                    }
+                    self.out.push('\n');
+                }
+                if let Some(first) = sum.variants.first() {
+                    self.comments_before_closer(&first.span, 1);
+                }
+                self.out.push_str("}\n");
+            }
+            Item::TypeAlias(alias) => {
+                if alias.is_public {
+                    self.out.push_str("pub ");
+                }
+                self.out.push_str("type ");
+                self.out.push_str(&alias.name);
+                self.generic_params(&alias.type_params);
+                self.out.push_str(" = ");
+                self.type_ref(&alias.target);
+                self.out.push('\n');
+            }
+            Item::Const(decl) => {
+                if decl.is_public {
+                    self.out.push_str("pub ");
+                }
+                self.out.push_str("const ");
+                self.out.push_str(&decl.name);
+                if let Some(ty) = &decl.type_annotation {
+                    self.out.push_str(": ");
+                    self.type_ref(ty);
+                }
+                self.out.push_str(" = ");
+                self.expr(&decl.value, 0);
+                self.out.push('\n');
+            }
+            Item::Function(function) => self.function_decl(function),
+            Item::Module(m) => {
+                self.out.push_str("module ");
+                self.out.push_str(&m.path.join("."));
+                self.out.push('\n');
+            }
+            Item::Use(u) => {
+                self.out.push_str("use ");
+                self.out.push_str(&u.path.join("."));
+                if u.glob {
+                    self.out.push_str(".*");
+                } else if let Some(alias) = &u.alias {
+                    self.out.push_str(" as ");
+                    self.out.push_str(alias);
+                }
+                self.out.push('\n');
+            }
+        }
+    }
+
+    fn new(comments: SourceComments) -> Self {
+        Self {
+            out: String::new(),
+            comments,
+            owner: None,
+            trailing_line_start: None,
+        }
+    }
+
+    /// Start a top-level unit: separate it from the previous one, then print
+    /// the comments that lead it.
+    fn begin_unit(&mut self, span: &Span, separate: bool) {
+        if separate {
+            let content_end = self.out.trim_end_matches('\n').len();
+            self.out.truncate(content_end);
+            self.out.push_str("\n\n");
+        }
+        let start = pos(span);
+        self.owner = self.comments.unit_index(start);
+        self.flush_comments(start, 0);
+    }
+
+    /// Finish a top-level unit: print what is left of its comments — one
+    /// trailing its closing line, or one inside it that no nested position
+    /// claimed.
+    fn end_unit(&mut self) {
+        self.flush_comments(END, 0);
+    }
+
+    /// Print, at a line boundary, every pending comment written before
+    /// `before`: a trailing comment at the end of the previous output line, an
+    /// own-line comment on its own line at `indent`.
+    fn flush_comments(&mut self, before: Pos, indent: usize) {
+        for (text, trailing, blank_before) in self.comments.take_before(before, self.owner) {
+            if trailing && self.append_trailing_comment(&text) {
+                continue;
+            }
+            if !self.out.is_empty() && !self.out.ends_with('\n') {
+                self.out.push('\n');
+            }
+            if blank_before
+                && !self.out.is_empty()
+                && !self.out.ends_with("\n\n")
+                && !["{\n", "(\n", "[\n"]
+                    .iter()
+                    .any(|opener| self.out.ends_with(opener))
+            {
+                self.out.push('\n');
+            }
+            self.indent(indent);
+            self.out.push_str(&text);
+            self.out.push('\n');
+        }
+    }
+
+    /// Flush the comments written before `span`'s start.
+    fn comments_before(&mut self, span: &Span, indent: usize) {
+        self.flush_comments(pos(span), indent);
+    }
+
+    /// Flush the comments written before the bracket closing the list whose
+    /// first element starts at `first`: the ones after the last element.
+    fn comments_before_closer(&mut self, first: &Span, indent: usize) {
+        if let Some(close) = self.list_closer(first) {
+            self.flush_comments(close, indent);
+        }
+    }
+
+    /// The bracket that closes the list whose first element starts at `first`.
+    fn list_closer(&self, first: &Span) -> Option<Pos> {
+        let open = self.comments.opener_before(pos(first))?;
+        self.comments.closer(open)
+    }
+
+    /// Whether the bracketed list whose first element starts at `first`
+    /// contains a comment, which forces it onto one element per line.
+    fn list_has_comments(&self, first: &Span) -> bool {
+        self.comments
+            .opener_before(pos(first))
+            .and_then(|open| {
+                self.comments
+                    .closer(open)
+                    .map(|close| self.comments.any_between(open, close))
+            })
+            .unwrap_or(false)
+    }
+
+    /// Append a trailing comment to the last non-empty output line. Returns
+    /// `false` when that line already ends in a comment, which would swallow
+    /// this one into it on the next parse.
+    fn append_trailing_comment(&mut self, text: &str) -> bool {
+        let content_end = self.out.trim_end_matches('\n').len();
+        if content_end == 0 {
+            return false;
+        }
+        let line_start = self.out[..content_end]
+            .rfind('\n')
+            .map_or(0, |index| index + 1);
+        if self.trailing_line_start == Some(line_start)
+            || self.out[line_start..content_end]
+                .trim_start()
+                .starts_with("//")
+        {
+            return false;
+        }
+        let tail = self.out.split_off(content_end);
+        self.out.push(' ');
+        self.out.push_str(text);
+        self.out.push_str(&tail);
+        self.trailing_line_start = Some(line_start);
+        true
     }
 
     fn type_decl(&mut self, ty: &TypeDecl) {
@@ -158,9 +356,13 @@ impl Formatter {
 
         self.out.push_str(" {\n");
         for field in &ty.fields {
+            self.comments_before(&field.span, 1);
             self.indent(1);
             self.field_decl(field);
             self.out.push('\n');
+        }
+        if let Some(first) = ty.fields.first() {
+            self.comments_before_closer(&first.span, 1);
         }
         if let Some(drop_body) = &ty.drop_body {
             if !ty.fields.is_empty() {
@@ -184,9 +386,13 @@ impl Formatter {
             if index > 0 {
                 self.out.push('\n');
             }
+            self.comments_before(&method.span, 1);
             self.indent(1);
             self.protocol_method_decl(method);
             self.out.push('\n');
+        }
+        if let Some(first) = methods.first() {
+            self.comments_before_closer(&first.span, 1);
         }
         self.out.push('}');
     }
@@ -226,11 +432,15 @@ impl Formatter {
         self.out.push_str(&protocol_impl.type_name);
         self.out.push_str(" {\n");
         for mapping in &protocol_impl.mappings {
+            self.comments_before(&mapping.span, 1);
             self.indent(1);
             self.out.push_str(&mapping.method);
             self.out.push_str(" = ");
             self.out.push_str(&mapping.target);
             self.out.push('\n');
+        }
+        if let Some(first) = protocol_impl.mappings.first() {
+            self.comments_before_closer(&first.span, 1);
         }
         self.out.push('}');
     }
@@ -277,7 +487,7 @@ impl Formatter {
             self.indent(1);
             self.retains(&function.retained_params, 1);
         }
-        if function.body.statements.is_empty() {
+        if !function.has_body {
             return;
         }
         self.out.push_str(" {\n");
@@ -296,7 +506,10 @@ impl Formatter {
         let inline_params = format_params_text(params);
         let return_text = return_type_text(return_ty, returns_fresh);
         let inline = format!("{prefix}{inline_params}{return_text}");
-        if inline.len() <= MAX_INLINE_SIGNATURE_LEN || params.len() <= 1 {
+        let has_comments = params
+            .first()
+            .is_some_and(|first| self.list_has_comments(&first.span));
+        if !has_comments && (inline.len() <= MAX_INLINE_SIGNATURE_LEN || params.len() <= 1) {
             self.out.push_str(&inline);
             return;
         }
@@ -304,9 +517,13 @@ impl Formatter {
         self.out.push_str(prefix);
         self.out.push_str("(\n");
         for param in params {
+            self.comments_before(&param.span, indent + 1);
             self.indent(indent + 1);
             self.out.push_str(&format_param(param));
             self.out.push_str(",\n");
+        }
+        if let Some(first) = params.first() {
+            self.comments_before_closer(&first.span, indent + 1);
         }
         self.indent(indent);
         self.out.push(')');
@@ -315,9 +532,14 @@ impl Formatter {
 
     fn block(&mut self, block: &Block, indent: usize) {
         for statement in &block.statements {
+            self.comments_before(stmt_span(statement), indent);
             self.indent(indent);
             self.stmt(statement, indent);
             self.out.push('\n');
+        }
+        // The comments after the last statement, before the block's `}`.
+        if let Some(close) = self.comments.closer(pos(&block.span)) {
+            self.flush_comments(close, indent);
         }
     }
 
@@ -415,6 +637,7 @@ impl Formatter {
             Stmt::Select(stmt) => {
                 self.out.push_str("select {\n");
                 for arm in &stmt.arms {
+                    self.comments_before(&arm.span, indent + 1);
                     self.indent(indent + 1);
                     self.out.push_str(&arm.binding);
                     self.out.push_str(" = ");
@@ -423,6 +646,9 @@ impl Formatter {
                     self.block(&arm.body, indent + 2);
                     self.indent(indent + 1);
                     self.out.push_str("}\n");
+                }
+                if let Some(first) = stmt.arms.first() {
+                    self.comments_before_closer(&first.span, indent + 1);
                 }
                 self.indent(indent);
                 self.out.push('}');
@@ -437,6 +663,9 @@ impl Formatter {
                 self.out.push_str(" {\n");
                 for arm in &stmt.arms {
                     self.match_arm(arm, indent);
+                }
+                if let Some(first) = stmt.arms.first() {
+                    self.comments_before_closer(&first.span, indent + 1);
                 }
                 self.indent(indent);
                 self.out.push('}');
@@ -653,6 +882,9 @@ impl Formatter {
                 for arm in arms {
                     self.match_arm(arm, indent);
                 }
+                if let Some(first) = arms.first() {
+                    self.comments_before_closer(&first.span, indent + 1);
+                }
                 self.indent(indent);
                 self.out.push('}');
             }
@@ -665,18 +897,21 @@ impl Formatter {
             self.out.push_str("{}");
             return;
         }
-        if let Some(inline) = inline_object_literal(fields) {
+        let has_comments = self.list_has_comments(&fields[0].span);
+        if !has_comments && let Some(inline) = inline_object_literal(fields) {
             self.out.push_str(&inline);
             return;
         }
         self.out.push_str("{\n");
         for field in fields {
+            self.comments_before(&field.span, indent + 1);
             self.indent(indent + 1);
             self.string_literal(&field.name);
             self.out.push_str(": ");
             self.expr_at(&field.value, 0, indent + 1);
             self.out.push_str(",\n");
         }
+        self.comments_before_closer(&fields[0].span, indent + 1);
         self.indent(indent);
         self.out.push('}');
     }
@@ -686,18 +921,21 @@ impl Formatter {
             self.out.push_str("{}");
             return;
         }
-        if let Some(inline) = inline_map_literal(entries) {
+        let has_comments = self.list_has_comments(&entries[0].span);
+        if !has_comments && let Some(inline) = inline_map_literal(entries) {
             self.out.push_str(&inline);
             return;
         }
         self.out.push_str("{\n");
         for entry in entries {
+            self.comments_before(&entry.span, indent + 1);
             self.indent(indent + 1);
             self.expr_at(&entry.key, 0, indent + 1);
             self.out.push_str(" => ");
             self.expr_at(&entry.value, 0, indent + 1);
             self.out.push_str(",\n");
         }
+        self.comments_before_closer(&entries[0].span, indent + 1);
         self.indent(indent);
         self.out.push('}');
     }
@@ -707,16 +945,19 @@ impl Formatter {
             self.out.push_str("[]");
             return;
         }
-        if let Some(inline) = inline_array_literal(items) {
+        let has_comments = self.list_has_comments(items[0].span());
+        if !has_comments && let Some(inline) = inline_array_literal(items) {
             self.out.push_str(&inline);
             return;
         }
         self.out.push_str("[\n");
         for item in items {
+            self.comments_before(item.span(), indent + 1);
             self.indent(indent + 1);
             self.expr_at(item, 0, indent + 1);
             self.out.push_str(",\n");
         }
+        self.comments_before_closer(items[0].span(), indent + 1);
         self.indent(indent);
         self.out.push(']');
     }
@@ -751,14 +992,20 @@ impl Formatter {
     }
 
     fn call_expr(&mut self, callee: &Callee, args: &[CallArg], indent: usize) {
-        if let Some(inline) = inline_call_expr(callee, args)
+        // A comment inside the argument list keeps one argument per line, so
+        // it can stay beside the argument it was written next to.
+        let has_comments = args
+            .first()
+            .is_some_and(|first| self.list_has_comments(&first.span));
+        if !has_comments
+            && let Some(inline) = inline_call_expr(callee, args)
             && inline.len() <= MAX_INLINE_SIGNATURE_LEN
         {
             self.out.push_str(&inline);
             return;
         }
 
-        if args.len() <= 1 {
+        if args.len() <= 1 && !has_comments {
             self.callee_at(callee, indent);
             self.out.push('(');
             if let Some(arg) = args.first() {
@@ -771,9 +1018,13 @@ impl Formatter {
         self.callee_at(callee, indent);
         self.out.push_str("(\n");
         for arg in args {
+            self.comments_before(&arg.span, indent + 1);
             self.indent(indent + 1);
             self.call_arg(arg, indent + 1);
             self.out.push_str(",\n");
+        }
+        if let Some(first) = args.first() {
+            self.comments_before_closer(&first.span, indent + 1);
         }
         self.indent(indent);
         self.out.push(')');
@@ -835,6 +1086,7 @@ impl Formatter {
     }
 
     fn match_arm(&mut self, arm: &crate::ast::MatchArm, indent: usize) {
+        self.comments_before(&arm.span, indent + 1);
         self.indent(indent + 1);
         self.match_pattern(&arm.pattern);
         if let Some(guard) = &arm.guard {
@@ -1081,6 +1333,31 @@ impl Formatter {
     }
 }
 
+fn stmt_span(statement: &Stmt) -> &Span {
+    match statement {
+        Stmt::Let(stmt) => &stmt.span,
+        Stmt::Return(stmt) => &stmt.span,
+        Stmt::With(stmt) => &stmt.span,
+        Stmt::If(stmt) => &stmt.span,
+        Stmt::Loop(stmt) => &stmt.span,
+        Stmt::For(stmt) => &stmt.span,
+        Stmt::Match(stmt) => &stmt.span,
+        Stmt::TaskGroup(stmt) => &stmt.span,
+        Stmt::Select(stmt) => &stmt.span,
+        Stmt::LetElse(stmt) => &stmt.span,
+        Stmt::Assign(stmt) => &stmt.span,
+        Stmt::Expr(expr) => expr.span(),
+        Stmt::MalformedWith(span)
+        | Stmt::MalformedIf(span)
+        | Stmt::MalformedLoop(span)
+        | Stmt::MalformedFor(span)
+        | Stmt::MalformedMatch(span)
+        | Stmt::Break(span)
+        | Stmt::Continue(span)
+        | Stmt::Unknown(span) => span,
+    }
+}
+
 fn format_param(param: &Param) -> String {
     let effect = param
         .effect
@@ -1102,7 +1379,7 @@ fn format_param(param: &Param) -> String {
 /// Render a standalone expression to RSScript source (used for parameter
 /// defaults), reusing the buffer-based expression formatter.
 fn expr_text(expr: &Expr) -> String {
-    let mut formatter = Formatter { out: String::new() };
+    let mut formatter = Formatter::new(SourceComments::default());
     formatter.expr(expr, 0);
     formatter.out
 }
@@ -1181,7 +1458,7 @@ fn type_ref_contains_fresh(ty: &TypeRef) -> bool {
 }
 
 fn format_call_arg(arg: &CallArg) -> String {
-    let mut formatter = Formatter { out: String::new() };
+    let mut formatter = Formatter::new(SourceComments::default());
     if let Some(name) = &arg.name {
         formatter.out.push_str(name);
         formatter.out.push_str(": ");
@@ -2193,6 +2470,113 @@ impl Writer for BufferWriter {
             "fn f(name: String) -> fresh String {\n    return $\"a}}b{name}\"\n}\n",
             "a lone closing brace is printed as its canonical doubled escape"
         );
+    }
+
+    /// Assert `source` formats to exactly `expected`, and that `expected` is a
+    /// fixpoint — the formatter is idempotent with comments in it.
+    fn assert_formats_to(source: &str, expected: &str) {
+        let formatted = format_source("comments.rss", source);
+        assert_eq!(formatted, expected, "first format");
+        assert_eq!(
+            format_source("comments.rss", &formatted),
+            formatted,
+            "second format must be a fixpoint"
+        );
+    }
+
+    #[test]
+    fn keeps_comments_at_the_top_level_and_between_items() {
+        assert_formats_to(
+            "// File header.\n// Second header line.\n\n// Leads `a`.\nfn a() -> Int { return 1 }\n// Leads `b`, no blank line.\nfn b() -> Int { return 2 } // Trails `b`.\n\n\n// After everything.\n",
+            "// File header.\n// Second header line.\n\n// Leads `a`.\nfn a() -> Int {\n    return 1\n}\n\n// Leads `b`, no blank line.\nfn b() -> Int {\n    return 2\n} // Trails `b`.\n\n// After everything.\n",
+        );
+    }
+
+    #[test]
+    fn keeps_comments_inside_blocks_and_between_statements() {
+        assert_formats_to(
+            "fn f(a: Int) -> Int { // Trails the signature.\n    // Leads the first statement.\n    let x = a + 1 // Trails a statement.\n\n    // After a blank line.\n    if x > 2 {\n        // Inside a nested block.\n        return x\n        // Closes the nested block.\n    }\n    return 0\n    // Closes the body.\n}\n",
+            "fn f(a: Int) -> Int { // Trails the signature.\n    // Leads the first statement.\n    let x = a + 1 // Trails a statement.\n\n    // After a blank line.\n    if x > 2 {\n        // Inside a nested block.\n        return x\n        // Closes the nested block.\n    }\n    return 0\n    // Closes the body.\n}\n",
+        );
+    }
+
+    #[test]
+    fn keeps_comments_inside_argument_lists() {
+        // A comment in an argument list keeps it one argument per line, even
+        // when it would otherwise fit on one.
+        assert_formats_to(
+            "fn f() -> Int {\n    return add(\n        // Leads `left`.\n        left: 1, // Trails `left`.\n        right: 2\n        // After the last argument.\n    )\n}\n",
+            "fn f() -> Int {\n    return add(\n        // Leads `left`.\n        left: 1, // Trails `left`.\n        right: 2,\n        // After the last argument.\n    )\n}\n",
+        );
+        assert_formats_to(
+            "fn f() -> Int {\n    return one(value: 1) // Trails an inline call.\n}\n",
+            "fn f() -> Int {\n    return one(value: 1) // Trails an inline call.\n}\n",
+        );
+    }
+
+    #[test]
+    fn keeps_comments_between_match_and_select_arms() {
+        assert_formats_to(
+            "fn f(n: Int) -> Int {\n    match n {\n        // Leads the first arm.\n        0 => { return 1 } // Trails the first arm.\n        // Leads the wildcard.\n        _ => { return 2 }\n        // After the last arm.\n    }\n}\n",
+            "fn f(n: Int) -> Int {\n    match n {\n        // Leads the first arm.\n        0 => {\n            return 1\n        } // Trails the first arm.\n        // Leads the wildcard.\n        _ => {\n            return 2\n        }\n        // After the last arm.\n    }\n}\n",
+        );
+        assert_formats_to(
+            "async fn work() -> Int {\n    return 1\n}\n\nfn f() -> Int {\n    let mut out = 0\n    task_group {\n        select {\n            // Leads the arm.\n            value = await work() => {\n                out = value\n            }\n        }\n    }\n    return out\n}\n",
+            "async fn work() -> Int {\n    return 1\n}\n\nfn f() -> Int {\n    let mut out = 0\n    task_group {\n        select {\n            // Leads the arm.\n            value = await work() => {\n                out = value\n            }\n        }\n    }\n    return out\n}\n",
+        );
+    }
+
+    #[test]
+    fn keeps_comments_in_declarations() {
+        assert_formats_to(
+            "// Leads the struct.\nstruct Point {\n    // Leads `x`.\n    x: Int // Trails `x`.\n    y: Int\n    // After the fields.\n}\n\nsum Shape {\n    // Leads a variant.\n    Circle(radius: Int)\n    Square(side: Int) // Trails a variant.\n}\n",
+            "// Leads the struct.\nstruct Point {\n    // Leads `x`.\n    x: Int // Trails `x`.\n    y: Int\n    // After the fields.\n}\n\nsum Shape {\n    // Leads a variant.\n    Circle(radius: Int)\n    Square(side: Int) // Trails a variant.\n}\n",
+        );
+        assert_formats_to(
+            "fn scale(\n    // Leads a parameter.\n    value: Int, // Trails a parameter.\n    factor: Int,\n) -> Int {\n    return value * factor\n}\n",
+            "fn scale(\n    // Leads a parameter.\n    value: Int, // Trails a parameter.\n    factor: Int,\n) -> Int {\n    return value * factor\n}\n",
+        );
+    }
+
+    #[test]
+    fn keeps_comments_on_protocols_and_impls_printed_out_of_source_order() {
+        // The formatter prints protocols first and impls last; each comment
+        // travels with the declaration it was written against.
+        assert_formats_to(
+            "module shapes\n\n// Leads the struct.\nstruct Square {\n    side: Int\n}\n\n// Leads the protocol.\nprotocol Sized {\n    // Leads the method.\n    fn area(self: read Self) -> Int\n}\n\n// Leads the method body.\nfn Square.area(self: read Square) -> Int {\n    return self.side * self.side\n}\n\n// Leads the impl.\nimpl Sized for Square {\n    area = Square.area // Trails the mapping.\n}\n",
+            "module shapes\n\n// Leads the protocol.\nprotocol Sized {\n    // Leads the method.\n    fn area(self: read Self) -> Int\n}\n\n// Leads the struct.\nstruct Square {\n    side: Int\n}\n\n// Leads the method body.\nfn Square.area(self: read Square) -> Int {\n    return self.side * self.side\n}\n\n// Leads the impl.\nimpl Sized for Square {\n    area = Square.area // Trails the mapping.\n}\n",
+        );
+    }
+
+    #[test]
+    fn keeps_comments_in_list_literals_and_empty_bodies() {
+        assert_formats_to(
+            "fn f() -> Int {\n    let xs: List<Int> = [\n        1, // One.\n        2,\n    ]\n    return List.len(list: xs)\n}\n\nfn g() -> Unit {\n    // Nothing yet.\n}\n",
+            "fn f() -> Int {\n    let xs: List<Int> = [\n        1, // One.\n        2,\n    ]\n    return List.len(list: xs)\n}\n\nfn g() -> Unit {\n    // Nothing yet.\n}\n",
+        );
+    }
+
+    #[test]
+    fn a_comment_marker_inside_a_string_is_not_a_comment() {
+        assert_formats_to(
+            "fn f() -> String {\n    return \"http://example.com\" // A real one.\n}\n",
+            "fn f() -> String {\n    return \"http://example.com\" // A real one.\n}\n",
+        );
+    }
+
+    #[test]
+    fn a_comparison_inside_a_nested_argument_does_not_merge_arguments() {
+        // `split_param_ranges` counted the `<` of `x < y` as an open angle
+        // bracket, so the comma after `g(...)` was not a separator and the
+        // call failed to parse. The formatter's own multi-line output of a
+        // closure argument hit the same case.
+        let source =
+            "fn f(x: Int, y: Int) -> Int {\n    return pick(flag: g(flag: x < y), value: 5)\n}\n";
+        assert_formats_to(source, source);
+        let closure = "fn f(values: List<Int>, limit: Int) -> Int {\n    return count(\n        values: values,\n        predicate: |value| {\n            return value <= limit\n        },\n    )\n}\n";
+        assert_formats_to(closure, closure);
+        let generic = "fn f() -> Int {\n    let m = Map.new<String, List<Int>>()\n    return pick(flag: true, value: List.len(list: List.new<Int>()))\n}\n";
+        assert_formats_to(generic, generic);
     }
 
     #[test]

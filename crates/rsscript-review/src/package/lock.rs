@@ -5,7 +5,7 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-use rsscript_syntax::format_source;
+use rsscript_syntax::format_source_without_comments;
 
 use crate::package::dependency::{DependencyResolutionScope, resolve_dependency_graph};
 use crate::package::review::{NativeRustReviewFn, review_package_dir_captured_with_features};
@@ -517,7 +517,10 @@ fn append_sources_hash_input(input: &mut String, sources: &[PackageSource]) {
         input.push_str(&source.relative_path);
         input.push('\n');
         if source.kind == PackageReviewFileKind::Interface {
-            input.push_str(&format_source(&source.path, &source.contents));
+            input.push_str(&format_source_without_comments(
+                &source.path,
+                &source.contents,
+            ));
         } else {
             input.push_str(&source.contents);
         }

@@ -65,7 +65,7 @@ The lexer (`crates/rsscript-syntax/src/lexer.rs`) produces the token kinds
 | Lexical form | Rule |
 | --- | --- |
 | Identifier | starts with `_` or an ASCII letter; continues with `_` or ASCII alphanumerics. Non-ASCII identifiers are not accepted (`is_ident_start` / `is_ident_continue`). |
-| Line comment | `//` to end of line. There is no block-comment form. |
+| Line comment | `//` to end of line. There is no block-comment form. Comments carry no meaning, but `rss fmt` keeps every one: a comment written after code on its line stays at the end of the corresponding output line, and one on its own line stays on its own line before the next statement, argument, arm, field, or declaration (ADR 0245). A comment inside an argument or list literal keeps that list one element per line. |
 | Integer literal | one or more ASCII digits. No sign, no `_` separators, no hex/octal/binary prefix. |
 | Float literal | digits `.` digits. A trailing dot (`5.`) and a second dot (`1.2.3`) are deliberately *not* lexed as one number; the remainder is re-lexed and the parser reports it. |
 | String literal | `"…"` with `\` escapes. An unterminated string becomes `Unknown('"')`, so it surfaces as unsupported syntax instead of silently swallowing the file. |

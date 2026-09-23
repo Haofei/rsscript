@@ -52,6 +52,40 @@ impl Token {
     }
 }
 
+/// A `// ...` line comment, which the token stream otherwise drops.
+///
+/// `span` is the position of the leading `//`; `text` is the comment from
+/// that `//` to the end of its line, without the line break or trailing
+/// whitespace. Only the formatter reads comments: they carry no meaning.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LineComment {
+    pub span: Span,
+    pub text: String,
+}
+
+/// Lex `source` and also return its line comments, in source order.
+pub fn lex_with_comments(file: &str, source: &str) -> (Vec<Token>, Vec<LineComment>) {
+    let budget = FrontendBudget::new(
+        FrontendBudgetLimits::default(),
+        source_span(file, source.len()),
+    );
+    if !budget.consume_source_bytes(source.len()) {
+        return (vec![eof_token(file)], Vec::new());
+    }
+    let mut lexer = Lexer {
+        file,
+        chars: source.chars().collect(),
+        index: 0,
+        line: 1,
+        column: 1,
+        tokens: Vec::new(),
+        comments: Vec::new(),
+        budget,
+    };
+    lexer.run();
+    (lexer.tokens, lexer.comments)
+}
+
 pub fn lex(file: &str, source: &str) -> Vec<Token> {
     let budget = FrontendBudget::new(
         FrontendBudgetLimits::default(),
@@ -88,6 +122,7 @@ fn lex_with_budget_inner(
         line: 1,
         column: 1,
         tokens: Vec::new(),
+        comments: Vec::new(),
         budget,
     };
     lexer.run();
@@ -148,6 +183,7 @@ struct Lexer<'a> {
     line: usize,
     column: usize,
     tokens: Vec<Token>,
+    comments: Vec<LineComment>,
     budget: Rc<FrontendBudget>,
 }
 
@@ -392,12 +428,23 @@ impl Lexer<'_> {
     }
 
     fn bump_line_comment(&mut self) {
+        let span = self.span(0);
+        let mut text = String::new();
         while let Some(ch) = self.peek() {
             self.bump();
             if ch == '\n' {
                 break;
             }
+            text.push(ch);
         }
+        let text = text.trim_end().to_owned();
+        self.comments.push(LineComment {
+            span: Span {
+                length: text.chars().count(),
+                ..span
+            },
+            text,
+        });
     }
 
     fn push_one(&mut self) {
