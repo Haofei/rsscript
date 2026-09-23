@@ -15,6 +15,17 @@ adr_changed=false
 while IFS= read -r path; do
   [[ -z "${path}" ]] && continue
   case "${path}" in
+    # The Artifact/Provider compatibility corpus is the checked-in record of a
+    # contract, not an ordinary test: editing its expectations edits the
+    # contract, so it stays covered even though it lives under tests/.
+    crates/rsscript-sdk/tests/compatibility_corpus.rs|crates/rsscript-sdk/tests/corpus/compatibility/*)
+      contract_changed=true
+      ;;
+    # Every other integration test, fixture, and test-support file only
+    # exercises a contract. A contract change reaches one of these crates'
+    # src/, build.rs, Cargo.toml, or checked-in data, which stay covered below.
+    crates/*/tests/*)
+      ;;
     crates/rsscript-syntax/*|crates/rsscript-semantics/*|crates/rsscript-abi-model/*|crates/rsscript-mir/*|crates/rsscript-bytecode/*|crates/rsscript-provider-api/*|crates/rsscript-sdk/*)
       contract_changed=true
       ;;

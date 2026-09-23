@@ -4,7 +4,12 @@ An ADR is required whenever a change modifies an RSScript compatibility or
 security contract: language semantics, MIR, bytecode/Artifact formats, the
 Provider ABI, and the reviewed default SDK façade. `scripts/check-contract-adr.sh`
 enforces it in CI by requiring a `docs/architecture/adr/NNNN-short-title.md`
-addition or update whenever a contract-owning crate changes.
+addition or update whenever a contract-owning crate changes. A change confined
+to a crate's `tests/` directory exercises a contract without changing it and
+does not trip the gate; the one exception is the Artifact/Provider
+compatibility corpus (`crates/rsscript-sdk/tests/compatibility_corpus.rs` and
+`tests/corpus/compatibility/`), whose expectations are the contract's
+checked-in record.
 
 Use [`template.md`](template.md) and name records `NNNN-short-title.md` in
 monotonic numeric order. An ADR records the decision and migration boundary; it
