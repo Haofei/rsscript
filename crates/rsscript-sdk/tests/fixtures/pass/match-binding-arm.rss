@@ -1,0 +1,66 @@
+// A bare identifier arm binds the whole scrutinee: it is irrefutable, the
+// binding has the scrutinee's type, and it closes the match like `_`. A bare
+// name that is a declared case (`None`, `North`, the lowercase `red`) stays a
+// case pattern; declared cases resolve first.
+sum Direction {
+    North
+    South
+}
+
+sum Color {
+    red
+    green
+}
+
+fn describe(n: Int) -> String {
+    match n {
+        0 => { return "zero" }
+        small if small < 10 => { return "small" }
+        other => { return String.from_int(value: other) }
+    }
+}
+
+fn greet(name: String) -> String {
+    match name {
+        "" => { return "nobody" }
+        who => { return String.concat(left: "hello ", right: who) }
+    }
+}
+
+fn unwrap_or_zero(value: Option<Int>) -> Int {
+    match value {
+        None => { return 0 }
+        present => {
+            match present {
+                Some(n) => { return n }
+                None => { return 0 }
+            }
+        }
+    }
+}
+
+fn turn(d: Direction) -> Int {
+    return match d {
+        North => { 1 }
+        rest => {
+            match rest {
+                North => { 0 }
+                South => { 2 }
+            }
+        }
+    }
+}
+
+fn shade(c: Color) -> Int {
+    match c {
+        red => { return 1 }
+        green => { return 2 }
+    }
+}
+
+fn main() -> Unit {
+    Output.write(message: describe(n: 42))
+    Output.write(message: greet(name: "rss"))
+    let total = unwrap_or_zero(value: Some(4)) + turn(d: South) + shade(c: green)
+    Output.write(message: String.from_int(value: total))
+}

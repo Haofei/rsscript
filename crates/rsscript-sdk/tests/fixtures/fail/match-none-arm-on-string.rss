@@ -1,0 +1,11 @@
+// expect: RS0021 RS0209
+// `None` is a declared case, so a bare `None` arm stays a case pattern and is
+// checked against the scrutinee's type instead of binding it.
+
+fn main() -> Unit {
+    let s = "yes"
+    match s {
+        "no" => { return Unit }
+        None => { return Unit }
+    }
+}

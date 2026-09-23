@@ -701,14 +701,15 @@ pub(super) fn lower_hir_stmt(
                 .arms
                 .iter()
                 .map(|arm| {
+                    let pattern = hir.resolve_bare_arm_pattern(&arm.pattern);
                     let mut arm_types = value_types.clone();
                     for (binding, type_name) in
-                        match_pattern_binding_types(hir, &arm.pattern, value_type.as_ref())
+                        match_pattern_binding_types(hir, &pattern, value_type.as_ref())
                     {
                         arm_types.insert(binding, type_name);
                     }
                     HirMatchArm {
-                        pattern: arm.pattern.clone(),
+                        pattern,
                         guard: arm
                             .guard
                             .as_ref()
@@ -1002,9 +1003,10 @@ pub(super) fn lower_hir_expr(
             let lowered_arms = arms
                 .iter()
                 .map(|arm| {
+                    let pattern = hir.resolve_bare_arm_pattern(&arm.pattern);
                     let mut arm_types = value_types.clone();
                     for (binding, type_name) in
-                        match_pattern_binding_types(hir, &arm.pattern, value_type.as_ref())
+                        match_pattern_binding_types(hir, &pattern, value_type.as_ref())
                     {
                         arm_types.insert(binding, type_name);
                     }
@@ -1012,7 +1014,7 @@ pub(super) fn lower_hir_expr(
                         match_type = infer_closure_return_type(hir, &arm.body, &arm_types);
                     }
                     HirMatchArm {
-                        pattern: arm.pattern.clone(),
+                        pattern,
                         guard: arm
                             .guard
                             .as_ref()

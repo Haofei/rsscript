@@ -988,3 +988,65 @@ fn make_response() -> fresh Response {
         HirReturnProof::StructConstructor
     ));
 }
+
+/// A bare identifier arm resolves declared case first, then binding, and an
+/// unknown capitalized name stays a case pattern so a typo is diagnosed.
+#[test]
+fn a_bare_arm_name_resolves_declared_case_first_then_binding() {
+    let source = r#"
+sum Direction {
+    North
+    South
+}
+
+sum Color {
+    red
+    green
+}
+
+sum Shape {
+    Circle(radius: Int)
+}
+"#;
+    let program = parse_source("test.rss", source);
+    let hir = Hir::from_syntax(&program);
+    let span = rsscript_syntax::Span {
+        file: "test.rss".to_string(),
+        line: 1,
+        column: 1,
+        length: 1,
+    };
+    let bare = |name: &str| MatchPattern::Variant {
+        name: name.to_string(),
+        bindings: Vec::new(),
+        span: span.clone(),
+    };
+    let resolves_to_binding = |name: &str| {
+        matches!(
+            hir.resolve_bare_arm_pattern(&bare(name)),
+            MatchPattern::Binding { name: bound, .. } if bound == name
+        )
+    };
+
+    for binding in ["other", "value", "_rest"] {
+        assert!(resolves_to_binding(binding), "`{binding}` binds");
+    }
+    // Declared cases stay cases, including a lowercase one, a payload-carrying
+    // one written bare, and the builtin cases.
+    for case in [
+        "North", "South", "red", "green", "Circle", "None", "Some", "Ok", "Err",
+    ] {
+        assert_eq!(hir.resolve_bare_arm_pattern(&bare(case)), bare(case));
+    }
+    // An unknown capitalized name and a qualified name are never bindings.
+    for case in ["Nroth", "MAX", "ops.ADD"] {
+        assert_eq!(hir.resolve_bare_arm_pattern(&bare(case)), bare(case));
+    }
+    // A case pattern with a payload is left alone.
+    let with_payload = MatchPattern::Variant {
+        name: "other".to_string(),
+        bindings: vec![MatchPattern::Wildcard(span.clone())],
+        span: span.clone(),
+    };
+    assert_eq!(hir.resolve_bare_arm_pattern(&with_payload), with_payload);
+}

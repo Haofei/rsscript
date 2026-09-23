@@ -1,0 +1,17 @@
+// expect: RS0021 RS0209
+// A bare identifier arm that names a declared case stays a case pattern even
+// when the case belongs to another type: `North` is checked against `Int` and
+// rejected, not silently turned into a catch-all binding of the scrutinee.
+
+sum Direction {
+    North
+    South
+}
+
+fn main() -> Unit {
+    let n = 3
+    match n {
+        0 => { return Unit }
+        North => { return Unit }
+    }
+}

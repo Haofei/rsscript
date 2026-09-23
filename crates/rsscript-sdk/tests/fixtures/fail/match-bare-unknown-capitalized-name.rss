@@ -1,0 +1,17 @@
+// expect: RS0209
+// A bare capitalized arm that names no declared case is reported as an unknown
+// case, so a misspelled case cannot silently bind the whole scrutinee. Only a
+// name that does not start with an uppercase letter becomes a binding.
+
+sum Direction {
+    North
+    South
+}
+
+fn main() -> Unit {
+    let d = South
+    match d {
+        Nroth => { return Unit }
+        _ => { return Unit }
+    }
+}

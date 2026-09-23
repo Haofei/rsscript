@@ -228,8 +228,9 @@ pub(super) fn collect_body_facts_in_stmt(
             let value_type = infer_hir_expr_type(hir, &stmt.value, value_types);
             for arm in &stmt.arms {
                 let mut arm_types = value_types.clone();
+                let pattern = hir.resolve_bare_arm_pattern(&arm.pattern);
                 for (binding, type_name) in
-                    match_pattern_binding_types(hir, &arm.pattern, value_type.as_ref())
+                    match_pattern_binding_types(hir, &pattern, value_type.as_ref())
                 {
                     facts.bindings.push(HirBinding {
                         function_name: function_name.to_string(),

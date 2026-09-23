@@ -352,6 +352,50 @@ impl Hir {
                 .is_some_and(<[FieldInfo]>::is_empty)
     }
 
+    /// Resolve a `match` arm written as one bare identifier.
+    ///
+    /// The parser cannot tell `North =>` from `other =>`: both are one name, and
+    /// both arrive as a payload-free case pattern. Resolution is the one
+    /// expressions use (`is_nullary_enum_variant`), declared case first:
+    ///
+    /// 1. A name that is a declared case — the builtin `None`, `Some`, `Ok`,
+    ///    `Err`, or any `sum` case, with or without fields — stays a case
+    ///    pattern, whatever the scrutinee's type. A case of the wrong family is
+    ///    then reported against the scrutinee as before.
+    /// 2. Otherwise a name that does not start with an uppercase letter is a
+    ///    binding of the whole scrutinee: it is irrefutable, binds with the
+    ///    scrutinee's type, and counts as a catch-all.
+    /// 3. Otherwise — an unknown capitalized name such as a misspelled case —
+    ///    it stays a case pattern and is reported as an unknown case, so a typo
+    ///    cannot silently become a catch-all. This is the same capitalization
+    ///    rule a payload position (`Some(v)` against `Some(None)`) already uses.
+    ///
+    /// Only the arm's own top-level pattern is resolved here; sub-patterns are
+    /// already split into bindings and cases by the parser. A qualified name
+    /// (`ops.ADD`) always names a case.
+    pub fn resolve_bare_arm_pattern(&self, pattern: &MatchPattern) -> MatchPattern {
+        if let MatchPattern::Variant {
+            name,
+            bindings,
+            span,
+        } = pattern
+            && bindings.is_empty()
+            && !name.contains('.')
+            && !name.starts_with(char::is_uppercase)
+            && !self.is_declared_case_name(name)
+        {
+            return MatchPattern::Binding {
+                name: name.clone(),
+                span: span.clone(),
+            };
+        }
+        pattern.clone()
+    }
+
+    fn is_declared_case_name(&self, name: &str) -> bool {
+        matches!(name, "None" | "Some" | "Ok" | "Err") || self.sum_type_for_variant(name).is_some()
+    }
+
     /// All sum variants and their owner types, for provider-neutral executable
     /// projection. Backends must not infer this table from observed call sites.
     pub fn sum_variants(&self) -> impl Iterator<Item = (&str, &str, &[FieldInfo])> {

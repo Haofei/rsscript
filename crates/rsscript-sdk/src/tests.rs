@@ -3364,6 +3364,179 @@ fn main() -> fresh String {
     );
 }
 
+/// A bare identifier arm binds the whole scrutinee, for every scrutinee type.
+///
+/// `match n { 0 => { … } other => { return other } }` used to be rejected with
+/// RS0209, RS0026, and RS0021, because the parser reads a lone name as a
+/// payload-free case pattern and nothing resolved it further. A name that is
+/// not a declared case and does not start with an uppercase letter now binds
+/// the scrutinee with the scrutinee's type and closes the match like `_`; a
+/// declared case (`None`, `North`) stays a case pattern. The binding may carry
+/// a guard, and a false guard falls through like any other.
+#[test]
+fn bare_identifier_arms_bind_the_whole_scrutinee() {
+    const SOURCE: &str = r#"
+sum Direction {
+    North
+    South
+}
+
+sum Shape {
+    Circle(radius: Int)
+    Rectangle(width: Int, height: Int)
+}
+
+struct Point {
+    x: Int
+    y: Int
+}
+
+fn int_arm(n: Int) -> Int {
+    match n {
+        0 => { return 100 }
+        other => { return other }
+    }
+}
+
+fn guarded(n: Int) -> fresh String {
+    match n {
+        small if small < 10 => { return "small" }
+        big => { return String.from_int(value: big) }
+    }
+}
+
+fn text(s: String) -> fresh String {
+    match s {
+        "a" => { return "letter-a" }
+        other => { return String.concat(left: "got-", right: other) }
+    }
+}
+
+fn option(value: Option<Int>) -> Int {
+    match value {
+        None => { return 0 }
+        some_value => {
+            match some_value {
+                Some(n) => { return n }
+                None => { return 0 - 1 }
+            }
+        }
+    }
+}
+
+fn direction(d: Direction) -> Int {
+    match d {
+        North => { return 1 }
+        rest => {
+            match rest {
+                North => { return 0 }
+                South => { return 2 }
+            }
+        }
+    }
+}
+
+fn shape(s: Shape) -> Int {
+    match read s {
+        Circle(r) => { return read r }
+        whole => {
+            match read whole {
+                Rectangle(w, h) => { return read w * read h }
+                _ => { return 0 }
+            }
+        }
+    }
+}
+
+fn point(p: read Point) -> Int {
+    match read p {
+        Point { x: 0, .. } => { return 0 }
+        q => { return q.x + q.y }
+    }
+}
+
+fn pair(p: (Int, Int)) -> Int {
+    return match read p {
+        (0, _) => { 0 }
+        whole => { whole.item0 * whole.item1 }
+    }
+}
+
+fn list(xs: read List<Int>) -> Int {
+    match read xs {
+        [] => { return 0 }
+        all => { return List.len(list: all) }
+    }
+}
+
+fn sign(n: Int) -> fresh String {
+    return match n {
+        0 => { "zero" }
+        v if v < 0 => { "negative" }
+        _ => { "positive" }
+    }
+}
+
+fn main() -> fresh String {
+    let parts = [
+        String.from_int(value: int_arm(n: 0)),
+        String.from_int(value: int_arm(n: 7)),
+        guarded(n: 3),
+        guarded(n: 42),
+        text(s: "a"),
+        text(s: "b"),
+        String.from_int(value: option(value: None)),
+        String.from_int(value: option(value: Some(5))),
+        String.from_int(value: direction(d: North)),
+        String.from_int(value: direction(d: South)),
+        String.from_int(value: shape(s: Circle(radius: 4))),
+        String.from_int(value: shape(s: Rectangle(width: 2, height: 3))),
+        String.from_int(value: point(p: read Point(x: 0, y: 9))),
+        String.from_int(value: point(p: read Point(x: 2, y: 9))),
+        String.from_int(value: pair(p: (0, 5))),
+        String.from_int(value: pair(p: (3, 5))),
+        String.from_int(value: list(xs: read [4, 5, 6])),
+        sign(n: 0),
+        sign(n: 0 - 3),
+        sign(n: 3),
+    ]
+    return String.join(parts: read parts, separator: "|")
+}
+"#;
+
+    let built = Compiler
+        .compile("binding-arms.rss", SOURCE)
+        .expect("binding arms compile");
+    let admitted = admitted(built);
+    let report = Runtime::default()
+        .link(&admitted)
+        .expect("link binding arm program")
+        .execute(ExecutionRequest::default());
+
+    assert_eq!(report.termination_reason(), TerminationReason::Completed);
+    assert_eq!(
+        report.value(),
+        Some("100|7|small|42|letter-a|got-b|0|5|1|2|4|6|0|11|0|15|3|zero|negative|positive"),
+        "a binding arm receives the scrutinee; a declared case name still tests its case"
+    );
+}
+
+/// The smallest binding arm from the review: an `Int` scrutinee, a literal arm,
+/// and a catch-all that returns what it bound.
+#[test]
+fn a_binding_arm_returns_the_scrutinee() {
+    let report = run_to_completion(
+        "main.rss",
+        "fn pick(n: Int) -> Int {\n    match n {\n        0 => { return 100 }\n        other => { return other }\n    }\n}\n\nfn main() -> Int { return pick(n: 0) + pick(n: 7) }",
+    );
+
+    assert_eq!(report.termination_reason(), TerminationReason::Completed);
+    assert_eq!(
+        report.wire_value(),
+        Some(&provider::WireValue::Int { value: 107 })
+    );
+}
+
 /// `RS0307` on a literal carries the rewrite, not only advice.
 ///
 /// The measured regression was a candidate following the card's "manage first"
