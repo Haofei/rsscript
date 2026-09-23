@@ -251,7 +251,7 @@ pub fn binding_type_mismatch_diagnostic(
         "binding type mismatch",
     )
     .with_cause(
-        "Explicit `let` and `local` type annotations are source-level contracts and must match the initializer before Rust lowering.",
+        "Explicit `let` and `local` type annotations are source-level contracts, and the checker requires the initializer to match them.",
     )
     .with_fix(
         "match_binding_type",
@@ -273,7 +273,7 @@ pub fn binding_payload_type_mismatch_diagnostic(
         "binding type mismatch",
     )
     .with_cause(
-        "Result and Option binding initializers are checked against explicit binding payload types before Rust lowering.",
+        "Result and Option binding initializers are checked against explicit binding payload types before the program is built.",
     )
     .with_fix(
         "match_binding_payload_type",
@@ -296,7 +296,7 @@ pub fn argument_payload_type_mismatch_diagnostic(
         "argument type mismatch",
     )
     .with_cause(
-        "Result and Option argument constructors are checked against the resolved parameter payload before Rust lowering.",
+        "Result and Option argument constructors are checked against the resolved parameter payload before the program is built.",
     )
     .with_fix(
         "match_argument_payload_type",
@@ -416,7 +416,7 @@ pub fn map_literal_entry_type_mismatch_diagnostic(
         "map literal entry type mismatch",
     )
     .with_cause(format!(
-        "The {context} is typed as a `Map`, so every map literal {role} must match the corresponding `Map` type argument before Rust lowering."
+        "The {context} is typed as a `Map`, so every map literal {role} must match the corresponding `Map` type argument; the checker enforces this before the program is built."
     ))
     .with_fix(
         "match_map_literal_entry_type",
@@ -438,7 +438,7 @@ pub fn list_literal_item_type_mismatch_diagnostic(
         "list literal item type mismatch",
     )
     .with_cause(format!(
-        "The {context} is typed as a `List`, so every array literal item must match the `List` item type before Rust lowering."
+        "The {context} is typed as a `List`, so every array literal item must match the `List` item type; the checker enforces this before the program is built."
     ))
     .with_fix(
         "match_list_literal_item_type",

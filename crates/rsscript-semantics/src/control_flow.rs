@@ -1305,7 +1305,7 @@ fn return_mismatch(
     span: &rsscript_syntax::Span,
 ) -> Diagnostic {
     Diagnostic::error(code::RETURN_TYPE_MISMATCH, format!("return in `{}` has type `Unit`, expected `{expected}`.", function.name), span.clone(), "return type mismatch")
-        .with_cause("RSScript return types are part of the review contract and must be checked before Rust lowering.")
+        .with_cause("RSScript return types are part of the review contract, and the checker proves every returned value matches before the program is built.")
         .with_fix("match_return_type", format!("Return a value of type `{expected}` here."), "manual")
 }
 
@@ -1326,7 +1326,7 @@ fn fallthrough_diagnostic(function: &FunctionDecl, hir: &Hir) -> Option<Diagnost
     block_may_fall_through(body).then(|| {
         let expected = render_type_ref(return_ty);
         Diagnostic::error(code::RETURN_TYPE_MISMATCH, format!("return in `{}` has type `Unit`, expected `{expected}`.", function.name), function.span.clone(), "return type mismatch")
-            .with_cause("RSScript return types are part of the review contract and must be checked before Rust lowering.")
+            .with_cause("RSScript return types are part of the review contract, and the checker proves every returned value matches before the program is built.")
             .with_fix("match_return_type", format!("Return a value of type `{expected}` here."), "manual")
     })
 }

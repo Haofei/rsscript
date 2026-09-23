@@ -50,12 +50,12 @@ fn check_lowered_name_conflicts(analyzer: &mut Analyzer<'_>) {
         analyzer.diagnostics.push(
             Diagnostic::error(
                 code::LOWER_NAME_CONFLICT,
-                format!("`#lower_name(\"{pin}\")` is not a valid Rust identifier."),
+                format!("`#lower_name(\"{pin}\")` is not a valid lowered name."),
                 span,
                 "invalid lowered name",
             )
             .with_cause(
-                "A pinned backend name must be a plain Rust identifier (letters, digits, and underscores, not starting with a digit).",
+                "A pinned lowered name must be a plain identifier (ASCII letters, digits, and underscores, not starting with a digit) and must not be a reserved word such as `fn`, `match`, or `self`.",
             ),
         );
     }
@@ -68,7 +68,7 @@ fn check_lowered_name_conflicts(analyzer: &mut Analyzer<'_>) {
                 "lowered name conflict",
             )
             .with_cause(
-                "Two declarations would lower to the same Rust symbol; a `#lower_name(\"...\")` pin must be unique.",
+                "Two declarations would get the same lowered symbol name; a `#lower_name(\"...\")` pin must be unique.",
             )
             .with_fix(
                 "rename_lowered",

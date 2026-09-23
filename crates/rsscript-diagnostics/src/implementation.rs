@@ -415,7 +415,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::UNINFERABLE_BINDING_TYPE,
         title: "binding type cannot be inferred",
-        explanation: "A `let` binding whose value is a bare `Ok(...)`, `Err(...)`, or `None` leaves a type parameter open (the `Result` error type, the `Result` ok type, or the `Option` value type). RSScript normally resolves that parameter from how the binding is later used; when the binding is never used, nothing can constrain it, so the type is genuinely ambiguous and the program would not lower to valid Rust. The checker reports this in RSScript — instead of letting it surface as a backend `type annotations needed` error — and the fix is to add a type annotation (e.g. `let v: Result<Int, String> = Ok(value)`) or to remove the unused binding.",
+        explanation: "A `let` binding whose value is a bare `Ok(...)`, `Err(...)`, or `None` leaves a type parameter open (the `Result` error type, the `Result` ok type, or the `Option` value type). RSScript normally resolves that parameter from how the binding is later used; when the binding is never used, nothing can constrain it, so the type is genuinely ambiguous, and every binding's type must be settled before the program is built. The checker reports this against the RSScript source, and the fix is to add a type annotation (e.g. `let v: Result<Int, String> = Ok(value)`) or to remove the unused binding.",
     },
     DiagnosticExplanation {
         code: code::ANALYSIS_INCOMPLETE,
@@ -440,7 +440,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::UNSUPPORTED_SYNTAX,
         title: "unsupported syntax",
-        explanation: "The frontend parser could not lower this source construct into the supported RSScript AST. The checker reports this before Rust lowering so unsupported source does not become generated Rust `todo!()` code. The same code also carries the structured-concurrency contract, where the label says which rule was broken. The shape those labels are asking for is one spelling: a child task is `async let handle = work(id: 1)` as a direct statement of `task_group { ... }`, not `spawn`, which is reserved and not executable; every named handle is consumed exactly once by `await handle?`, also a direct statement of the same group and after the `async let`; a child with no result is `async let _ = work(id: 1)`, which the group drains before returning; and a `select` arm is `binding = await <operation> => { body }`, awaiting an operation rather than an `async let` handle — the binding is required (`_` when the value is unused), and a `select` left with no arms has nothing to wait on.",
+        explanation: "The frontend parser could not lower this source construct into the supported RSScript AST. The checker reports this before the program is built, so unsupported source is rejected rather than compiled into something that cannot run. The same code also carries the structured-concurrency contract, where the label says which rule was broken. The shape those labels are asking for is one spelling: a child task is `async let handle = work(id: 1)` as a direct statement of `task_group { ... }`, not `spawn`, which is reserved and not executable; every named handle is consumed exactly once by `await handle?`, also a direct statement of the same group and after the `async let`; a child with no result is `async let _ = work(id: 1)`, which the group drains before returning; and a `select` arm is `binding = await <operation> => { body }`, awaiting an operation rather than an `async let` handle — the binding is required (`_` when the value is unused), and a `select` left with no arms has nothing to wait on.",
     },
     DiagnosticExplanation {
         code: code::LOOP_CONTROL_OUTSIDE_LOOP,
@@ -450,7 +450,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::LOWER_NAME_CONFLICT,
         title: "lowered name conflict",
-        explanation: "A `#lower_name(\"...\")` pin must be a valid Rust identifier and must not collide with any other declaration's lowered backend name, so generated symbols stay unique.",
+        explanation: "A `#lower_name(\"...\")` pin must be a plain identifier (ASCII letters, digits, and underscores, not starting with a digit, and not a reserved word such as `fn`, `match`, or `self`) and must not collide with any other declaration's lowered name, so lowered symbols stay unique.",
     },
     DiagnosticExplanation {
         code: code::READ_BEFORE_ASSIGNMENT,
@@ -500,17 +500,17 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::UNKNOWN_TYPE,
         title: "unknown type",
-        explanation: "Every type used in a signature or field must be a built-in type, a core/runtime type known to the frontend, a generic parameter in scope, or a declared source/interface type. Unknown types are rejected before Rust lowering.",
+        explanation: "Every type used in a signature or field must be a built-in type, a core/runtime type known to the frontend, a generic parameter in scope, or a declared source/interface type. Unknown types are rejected by the checker, before the program is built.",
     },
     DiagnosticExplanation {
         code: code::UNKNOWN_FIELD,
         title: "unknown field",
-        explanation: "Field accesses must resolve against the RSScript type known for the base expression. Unknown fields are rejected by the frontend instead of being deferred to generated Rust diagnostics.",
+        explanation: "Field accesses must resolve against the RSScript type known for the base expression. Unknown fields are rejected by the checker, before the program is built.",
     },
     DiagnosticExplanation {
         code: code::UNKNOWN_BINDING,
         title: "unknown binding",
-        explanation: "Value identifiers must resolve to a visible parameter, local binding, with-bound resource, or pattern binding before Rust lowering.",
+        explanation: "Value identifiers must resolve to a visible parameter, local binding, with-bound resource, or pattern binding during checking, before the program is built.",
     },
     DiagnosticExplanation {
         code: code::MESSAGE_PAYLOAD_NOT_TRANSFERABLE,
@@ -550,7 +550,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::INTEGER_LITERAL_OUT_OF_RANGE,
         title: "integer literal out of range",
-        explanation: "RSScript `Int` is a 64-bit signed integer. An integer literal that does not fit in i64 is rejected at the frontend so it never reaches the VM (runtime error) or the compiled backend (rustc error) — review-critical failures surface as checker diagnostics, not backend surprises.",
+        explanation: "RSScript `Int` is a 64-bit signed integer. An integer literal that does not fit in i64 is rejected by the checker, so it never reaches execution as a runtime error — review-critical failures surface as checker diagnostics, not execution surprises.",
     },
     DiagnosticExplanation {
         code: code::UNNAMED_ARGUMENT,
@@ -590,12 +590,12 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::RETURN_TYPE_MISMATCH,
         title: "return type mismatch",
-        explanation: "When both sides are known, a returned expression must match the function's declared return type before Rust lowering. Falling through a non-Unit function is a Unit return mismatch. Result and Option constructors are checked against their success, error, or Some payload types.",
+        explanation: "When both sides are known, a returned expression must match the function's declared return type; the checker enforces this before the program is built. Falling through a non-Unit function is a Unit return mismatch. Result and Option constructors are checked against their success, error, or Some payload types.",
     },
     DiagnosticExplanation {
         code: code::CONTROL_FLOW_TYPE_MISMATCH,
         title: "control-flow type mismatch",
-        explanation: "`if` and `while` conditions must be `Bool`, and v0.7 `match` scrutinees must be `Option<T>`, `Result<T, E>`, or a declared sum type with matching arm variants before Rust lowering.",
+        explanation: "`if` and `while` conditions must be `Bool`, and v0.7 `match` scrutinees must be `Option<T>`, `Result<T, E>`, or a declared sum type with matching arm variants; the checker enforces this before the program is built.",
     },
     DiagnosticExplanation {
         code: code::OPERATOR_TYPE_MISMATCH,
@@ -605,12 +605,12 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::DERIVE_FIELD_UNSUPPORTED,
         title: "derive requirement not satisfied",
-        explanation: "A compiler-owned derive expands to generated Rust, so every field must support it. `Eq`, `Ord`, and `Hash` require equatable/orderable/hashable fields: `Float` fields, `handle`/`weak` fields (which lower to `Managed<T>`, implementing only `Clone`/`Debug`), `Map`/`Set` fields for `Ord`/`Hash`, and fields whose type does not derive the same trait are rejected. The checker recurses through `List`/`Option`/`Result` and `Map`/`Set` element types, and because a `HashMap`/`HashSet` key or element must be `Hash`, an `Eq`-derived `Map`/`Set` requires `Eq + Hash` keys/elements. `JsonEncode`/`JsonDecode` require fields whose type also derives JSON encoding/decoding; `JsonDecode` additionally rejects non-`Eq`/`Hash` `Map` keys and `Set` elements (such as `Float`). Generic type parameters are accepted as ordinary fields — the derive adds the matching `T: Trait` bound — but rejected in a `Map`-key/`Set`-element position, where the required `Hash` bound cannot be expressed. The checker reports this before lowering so the requirement is explained in RSScript instead of leaking as a generated-Rust trait-bound error.",
+        explanation: "A compiler-owned derive defines its operation field by field, so every field must support it. `Eq`, `Ord`, and `Hash` require equatable/orderable/hashable fields: `Float` fields, `handle`/`weak` fields (a managed reference can only be copied and debug-printed, not compared, ordered, or hashed), `Map`/`Set` fields for `Ord`/`Hash`, and fields whose type does not derive the same trait are rejected. The checker recurses through `List`/`Option`/`Result` and `Map`/`Set` element types, and because a `Map` key or `Set` element must be hashable, an `Eq`-derived `Map`/`Set` requires `Eq + Hash` keys/elements. `JsonEncode`/`JsonDecode` require fields whose type also derives JSON encoding/decoding; `JsonDecode` additionally rejects non-`Eq`/`Hash` `Map` keys and `Set` elements (such as `Float`). Generic type parameters are accepted as ordinary fields — the derive then requires the matching trait of each type argument — but rejected in a `Map`-key/`Set`-element position, where the required `Hash` cannot be stated for a parameter. The checker reports this before the program is built, so the requirement is explained against the RSScript declaration.",
     },
     DiagnosticExplanation {
         code: code::RESOURCE_DERIVE_UNSUPPORTED,
         title: "unsupported resource derive",
-        explanation: "Resources are move-only RAII values that default to `Debug` only. They accept only the implicit `Debug` and the review-only `Schema`/`ReviewSchema` markers. Value derives such as `Clone`, `Eq`, `Ord`, `Hash`, `JsonEncode`, and `JsonDecode` would expand into generated Rust that copies or compares the resource, which contradicts its move-only model. This is a resource-derive policy enforced by RSScript — the Rust backend could expand some of these derives, but RSScript rejects them to keep resource ownership explicit. Model the data as a `struct` if you need value semantics.",
+        explanation: "Resources are move-only RAII values that default to `Debug` only. They accept only the implicit `Debug` and the review-only `Schema`/`ReviewSchema` markers. Value derives such as `Clone`, `Eq`, `Ord`, `Hash`, `JsonEncode`, and `JsonDecode` would copy or compare the resource, which contradicts its move-only model. RSScript rejects them to keep resource ownership explicit. Model the data as a `struct` if you need value semantics.",
     },
     DiagnosticExplanation {
         code: code::MANAGED_TO_LOCAL,
@@ -665,7 +665,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::ASSIGNMENT_TYPE_MISMATCH,
         title: "assignment type mismatch",
-        explanation: "When both sides are known, the value assigned to a place must match the place's type. Like the other type checks (`RS0207`/`RS0208`), this is checked before Rust lowering so an `Int = String` style error is reported in RSScript instead of leaking from rustc. Assignments whose value type cannot be determined are left to the existing checks.",
+        explanation: "When both sides are known, the value assigned to a place must match the place's type. Like the other type checks (`RS0207`/`RS0208`), this is checked before the program is built, so an `Int = String` style error is reported against the RSScript source. Assignments whose value type cannot be determined are left to the existing checks.",
     },
     DiagnosticExplanation {
         code: code::MANAGED_FIELD_SPLIT_CONFLICT,
@@ -804,13 +804,13 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     },
     DiagnosticExplanation {
         code: code::RUSTC_DIAGNOSTIC_MAPPED,
-        title: "mapped rustc diagnostic",
-        explanation: "A backend rustc diagnostic was translated through RSScript source-map metadata. Treat this as a compiler, runtime, native binding, or lowering issue unless the mapped RSScript source clearly violates the language rules.",
+        title: "mapped backend diagnostic (retired)",
+        explanation: "Retired. The archived Rust backend used this code for a backend compiler diagnostic mapped back to RSScript source. The current toolchain builds programs to verified bytecode and never emits it; the code stays reserved so it is not reused.",
     },
     DiagnosticExplanation {
         code: code::RUSTC_DIAGNOSTIC_UNMAPPABLE,
-        title: "unmappable rustc diagnostic",
-        explanation: "rustc reported a backend diagnostic whose generated Rust location could not be mapped back to RSScript source. The compiler should surface the generated Rust reference as secondary internal detail instead of exposing raw rustc output as the primary diagnostic.",
+        title: "unmappable backend diagnostic (retired)",
+        explanation: "Retired. The archived Rust backend used this code for a backend compiler diagnostic whose location could not be mapped back to RSScript source. The current toolchain builds programs to verified bytecode and never emits it; the code stays reserved so it is not reused.",
     },
     DiagnosticExplanation {
         code: code::RUNTIME_DIAGNOSTIC,

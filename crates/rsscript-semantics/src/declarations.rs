@@ -54,7 +54,7 @@ pub fn unknown_field_diagnostics(hir: &Hir) -> Vec<Diagnostic> {
                     access.span.clone(),
                     "unknown field",
                 )
-                .with_cause("RSScript field accesses must resolve before Rust lowering.")
+                .with_cause("RSScript field accesses must resolve against the base expression's type during checking, before the program is built.")
                 .with_fix(
                     "use_declared_field",
                     format!(
@@ -293,7 +293,7 @@ fn unknown_binding_diagnostic(name: &str, span: &rsscript_syntax::Span) -> Diagn
         span.clone(),
         "unknown binding",
     )
-    .with_cause("RSScript values must resolve before Rust lowering.")
+    .with_cause("Every RSScript value name must resolve to a visible binding during checking, before the program is built.")
     .with_fix(
         "declare_binding",
         format!("Declare `{name}` before using it or pass it as a parameter."),

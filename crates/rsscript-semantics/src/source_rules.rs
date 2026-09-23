@@ -306,7 +306,7 @@ pub fn by_value_callback_parameter_diagnostic(
         unsupported_syntax_diagnostic(
             span.clone(),
             "unsupported by-value callback parameter",
-            "A callback passed with `take` must use `owned Fn(...)` so the Rust representation is sized. Use `read Fn(...)`, `mut Fn(...)`, or `take owned Fn(...)`.",
+            "A callback passed with `take` moves the closure into the callee, so the parameter must say it owns it: `owned Fn(...)`. Use `read Fn(...)`, `mut Fn(...)`, or `take owned Fn(...)`.",
         )
     })
 }

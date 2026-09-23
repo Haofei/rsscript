@@ -150,7 +150,7 @@ fn unknown_type_name(ty: &TypeRef) -> Diagnostic {
 /// `TypeRef` solely to emit a diagnostic.
 pub fn unknown_type_name_diagnostic(name: &str, span: &rsscript_syntax::Span) -> Diagnostic {
     Diagnostic::error(code::UNKNOWN_TYPE, format!("unknown type `{name}`."), span.clone(), "unknown type")
-        .with_cause("RSScript type checking must resolve source-level types before Rust lowering.")
+        .with_cause("Every source-level type must resolve during checking, before the program is built.")
         .with_fix("declare_or_import_type", format!("Declare `{name}`, import an `.rssi` contract that declares it, or use a known core/runtime type."), "manual")
 }
 

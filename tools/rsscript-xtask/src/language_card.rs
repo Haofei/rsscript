@@ -1473,6 +1473,34 @@ mod tests {
         assert!(explanation.explanation.contains("backend lowering"));
     }
 
+    /// Diagnostic explanations state the RSScript rule, not the archived Rust
+    /// backend's. Only the two retired `rustc` mapping codes may mention that
+    /// backend, and only to say they are retired.
+    #[test]
+    fn no_diagnostic_explanation_describes_the_archived_backend() {
+        for diagnostic in diagnostics() {
+            let text = format!("{} {}", diagnostic.title, diagnostic.explanation);
+            if matches!(diagnostic.code.as_str(), "RS1101" | "RS1102") {
+                assert!(diagnostic.explanation.starts_with("Retired."), "{text}");
+                continue;
+            }
+            for stale in [
+                "Rust lowering",
+                "rustc",
+                "generated Rust",
+                "generated-Rust",
+                "Rust backend",
+                "valid Rust",
+            ] {
+                assert!(
+                    !text.contains(stale),
+                    "{} still says `{stale}`: {text}",
+                    diagnostic.code
+                );
+            }
+        }
+    }
+
     /// The signature index is generated from the interface sources themselves,
     /// so it can neither invent a function nor miss one.
     #[test]

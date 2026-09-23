@@ -16,7 +16,7 @@ pub fn callback_operator_type_mismatch_diagnostic(
         "operator type mismatch",
     )
     .with_cause(
-        "`noescape Fn(...)` callback parameter types apply inside callback expressions before Rust lowering.",
+        "`noescape Fn(...)` callback parameter types apply inside callback expressions, and the checker enforces them there.",
     )
     .with_fix(
         "use_typed_operator_operands",
@@ -39,7 +39,7 @@ pub fn callback_return_type_mismatch_diagnostic(
         "argument type mismatch",
     )
     .with_cause(
-        "`noescape Fn() -> T` callback return types are part of the call signature and must be checked before Rust lowering.",
+        "`noescape Fn() -> T` callback return types are part of the call signature, and the checker proves the callback's value matches.",
     )
     .with_fix(
         "match_callback_return_type",
@@ -84,7 +84,7 @@ pub fn callback_fresh_return_unknown_diagnostic(
         "argument type mismatch",
     )
     .with_cause(
-        "`noescape Fn() -> fresh T` callback returns must be proven fresh before Rust lowering.",
+        "`noescape Fn() -> fresh T` callback returns must be proven fresh by the checker.",
     )
     .with_fix(
         "return_fresh_callback_value",
@@ -107,7 +107,7 @@ pub fn callback_arity_mismatch_diagnostic(
         "argument type mismatch",
     )
     .with_cause(
-        "`noescape Fn(...) -> T` callback parameter counts are part of the call signature and must be checked before Rust lowering.",
+        "`noescape Fn(...) -> T` callback parameter counts are part of the call signature, and the checker requires the callback to match.",
     )
     .with_fix(
         "match_callback_parameter_count",
@@ -129,7 +129,7 @@ pub fn callback_call_arity_mismatch_diagnostic(
         "argument type mismatch",
     )
     .with_cause(
-        "`noescape Fn(...)` callback calls must match the callback parameter contract before Rust lowering.",
+        "`noescape Fn(...)` callback calls must match the callback parameter contract; the checker enforces this before the program is built.",
     )
     .with_fix(
         "match_callback_call_arity",
@@ -152,7 +152,7 @@ pub fn callback_call_argument_type_mismatch_diagnostic(
         "argument type mismatch",
     )
     .with_cause(
-        "`noescape Fn(...)` callback argument types are part of the callback contract and must be checked before Rust lowering.",
+        "`noescape Fn(...)` callback argument types are part of the callback contract, and the checker proves each argument matches.",
     )
     .with_fix(
         "match_callback_call_argument_type",
@@ -175,7 +175,7 @@ pub fn callback_call_site_argument_type_mismatch_diagnostic(
         "argument type mismatch",
     )
     .with_cause(
-        "`noescape Fn(...)` callback parameter types apply to ordinary calls inside callback expressions before Rust lowering.",
+        "`noescape Fn(...)` callback parameter types apply to ordinary calls inside callback expressions, and the checker enforces them there.",
     )
     .with_fix(
         "match_callback_body_call_argument_type",

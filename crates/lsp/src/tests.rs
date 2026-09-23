@@ -1438,7 +1438,7 @@ fn lsp_diagnostic_carries_related_causes_fixes_and_explanation() {
         },
         "unknown binding",
     )
-    .with_cause("RSScript values must resolve before Rust lowering.")
+    .with_cause("Every RSScript value name must resolve to a visible binding during checking, before the program is built.")
     .with_fix(
         "declare_binding",
         "Declare `missing` before using it.",
@@ -1467,7 +1467,7 @@ fn lsp_diagnostic_carries_related_causes_fixes_and_explanation() {
     assert_eq!(data["severity"], "error");
     assert_eq!(
         data["causes"][0],
-        "RSScript values must resolve before Rust lowering."
+        "Every RSScript value name must resolve to a visible binding during checking, before the program is built."
     );
     assert_eq!(data["fixes"][0]["kind"], "declare_binding");
     assert_eq!(data["fixes"][0]["applicability"], "manual");

@@ -26,7 +26,7 @@ pub fn local_assignment_type_mismatch_diagnostic(
         span,
         "assignment type mismatch",
     )
-    .with_cause("The assigned value's type must match the place's type before Rust lowering.")
+    .with_cause("The checker requires the assigned value's type to match the place's type.")
     .with_fix(
         "match_assignment_type",
         format!("Assign a `{target_type}` value to `{name}`."),
@@ -48,7 +48,7 @@ pub fn place_assignment_type_mismatch_diagnostic(
         "assignment type mismatch",
     )
     .with_cause(
-        "The assigned value's type must match the field or indexed element type before Rust lowering.",
+        "The checker requires the assigned value's type to match the field or indexed element type.",
     )
     .with_fix(
         "match_assignment_type",

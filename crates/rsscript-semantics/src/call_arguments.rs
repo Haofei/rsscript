@@ -445,7 +445,7 @@ pub fn return_type_mismatch_diagnostic(
         "return type mismatch",
     )
     .with_cause(
-        "RSScript return types are part of the review contract and must be checked before Rust lowering.",
+        "RSScript return types are part of the review contract, and the checker proves every returned value matches before the program is built.",
     )
     .with_fix(
         "match_return_type",
@@ -469,7 +469,7 @@ pub fn return_payload_type_mismatch_diagnostic(
         "return type mismatch",
     )
     .with_cause(
-        "Result and Option return constructors are checked against the declared return payload before Rust lowering.",
+        "Result and Option return constructors are checked against the declared return payload before the program is built.",
     )
     .with_fix(
         "match_return_payload_type",
