@@ -61,6 +61,7 @@ These are the forms most often written wrong. The right column is what `rss fmt`
 | `manage` moves a binding, never a literal (`RS0307`) | `local entry = "started"; record(entry: manage entry)` | `record(entry: manage "started")` |
 | an element is assigned through the index | `xs[index] = value` | `List.set(list: mut xs, index: index, value: value)` |
 | strings are joined by a call, never by `+` | `String.concat(left: head, right: tail)` | `head + tail` |
+| build a string by interpolation, not nested `concat` (each `{expr}` is a `String`; `{{` and `}}` are literal braces) | `$"{name} scored {String.from_int(value: score)}"` | `String.concat(left: name, right: String.concat(left: " scored ", right: String.from_int(value: score)))` |
 | closure literal | `local double = \|x\| { return x * 2 }` | `let double = fn(x: Int) -> Int { return x * 2 }` |
 | closure with an explicit capture list | `local add = fn(x) captures(read base) { return x + base }` | `local add = \|x\| captures(read base) { return x + base }` |
 | `with` binds its resource with `as` | `with File.open_read(path)? as file { }` | `with file = File.open_read(path)? { }` |
@@ -73,7 +74,7 @@ shape, exactly as `rss fmt` prints it and exactly as `rss check` accepts it: a
 `protocol` with an `impl` that maps an existing function into its slot, dynamic
 dispatch built by `Dyn.from`, a `let ... else` that leaves the block, and both
 closure spellings — `|x|` captures implicitly, `fn(x) captures(...)` lists what
-it captures.
+it captures. The string it formats is built by interpolation.
 
 ```rsscript
 protocol Formatter {
@@ -86,7 +87,7 @@ struct Point {
 }
 
 fn Point.format(self: Point) -> fresh String {
-    return String.from_int(value: self.x)
+    return $"({String.from_int(value: self.x)}, {String.from_int(value: self.y)})"
 }
 
 fn render(x: Int, y: Int) -> fresh String {
@@ -234,7 +235,7 @@ fn run(samples: read List<Int>) -> Result<Int, ChannelError> {
 
 fn record(total: Int) -> Result<Unit, JournalError> {
     with Journal.open(name: "run")? as journal {
-        Journal.write(journal: mut journal, line: String.from_int(value: total))
+        Journal.write(journal: mut journal, line: $"total {String.from_int(value: total)}")
     }
     return Ok(Unit)
 }
@@ -247,7 +248,7 @@ fn main() -> Unit {
         Ok(total) => {
             match record(total: total) {
                 Ok(_) => {
-                    Output.write(message: String.from_int(value: total))
+                    Output.write(message: $"recorded {String.from_int(value: total)}")
                 }
                 Err(error) => {
                     Output.error(message: JournalError.message(error: error))

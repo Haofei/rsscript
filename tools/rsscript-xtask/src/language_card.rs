@@ -244,6 +244,18 @@ fn canonical_surface_forms() -> Vec<CanonicalSurfaceForm> {
             right: "String.concat(left: head, right: tail)",
             wrong: "head + tail",
         },
+        // Models that have learned the row above write nested
+        // `String.concat(left: …, right: …)` chains three and four deep, because
+        // the card never showed the interpolated string the language has had
+        // all along. Each `{expr}` is a `String` — the parser desugars the
+        // literal to `String.format(template:, args: [..])`, whose `args` is a
+        // `List<String>` — and `{{`/`}}` are literal braces. `rss fmt` prints
+        // the interpolated form back as written.
+        CanonicalSurfaceForm {
+            form: "build a string by interpolation, not nested `concat` (each `{expr}` is a `String`; `{{` and `}}` are literal braces)",
+            right: "$\"{name} scored {String.from_int(value: score)}\"",
+            wrong: "String.concat(left: name, right: String.concat(left: \" scored \", right: String.from_int(value: score)))",
+        },
         // Measured on 2026-09-19: `fn(x: T) -> U { }` for `|x| { }` is the
         // *only* `RS0015` sub-class that survives sonnet's three-turn repair
         // loop — three candidates, all three of them this — and the three
@@ -640,7 +652,7 @@ shape, exactly as `rss fmt` prints it and exactly as `rss check` accepts it: a
 `protocol` with an `impl` that maps an existing function into its slot, dynamic
 dispatch built by `Dyn.from`, a `let ... else` that leaves the block, and both
 closure spellings — `|x|` captures implicitly, `fn(x) captures(...)` lists what
-it captures.
+it captures. The string it formats is built by interpolation.
 
 ```rsscript
 "#;
@@ -788,7 +800,7 @@ fn run(samples: read List<Int>) -> Result<Int, ChannelError> {
 
 fn record(total: Int) -> Result<Unit, JournalError> {
     with Journal.open(name: "run")? as journal {
-        Journal.write(journal: mut journal, line: String.from_int(value: total))
+        Journal.write(journal: mut journal, line: $"total {String.from_int(value: total)}")
     }
     return Ok(Unit)
 }
@@ -801,7 +813,7 @@ fn main() -> Unit {
         Ok(total) => {
             match record(total: total) {
                 Ok(_) => {
-                    Output.write(message: String.from_int(value: total))
+                    Output.write(message: $"recorded {String.from_int(value: total)}")
                 }
                 Err(error) => {
                     Output.error(message: JournalError.message(error: error))
@@ -986,7 +998,7 @@ struct Point {
 }
 
 fn Point.format(self: Point) -> fresh String {
-    return String.from_int(value: self.x)
+    return $"({String.from_int(value: self.x)}, {String.from_int(value: self.y)})"
 }
 
 fn render(x: Int, y: Int) -> fresh String {
@@ -1643,7 +1655,7 @@ mod tests {
     #[test]
     fn canonical_surface_forms_show_a_right_and_wrong_pair() {
         let forms = canonical_surface_forms();
-        assert_eq!(forms.len(), 16);
+        assert_eq!(forms.len(), 17);
         let section = canonical_surface_forms_section();
         for form in &forms {
             assert_ne!(form.right, form.wrong);
@@ -1703,6 +1715,50 @@ mod tests {
         );
     }
 
+    /// The interpolation row is checked the way the worked examples are: its
+    /// right spelling checks clean and is what `rss fmt` prints, and its wrong
+    /// spelling — a nested `concat` chain — is valid but is not rewritten into
+    /// it, so the row is advice about what to write, not about what the
+    /// formatter will fix.
+    #[test]
+    fn interpolation_row_checks_and_is_what_fmt_prints() {
+        let form = canonical_surface_forms()
+            .into_iter()
+            .find(|form| form.form.starts_with("build a string by interpolation"))
+            .expect("the interpolation row is present");
+        assert!(form.right.starts_with("$\""), "{}", form.right);
+        assert!(
+            form.wrong
+                .starts_with("String.concat(left: name, right: String.concat(")
+        );
+        for spelling in [form.right, form.wrong] {
+            let source = format!(
+                "fn describe(name: String, score: Int) -> fresh String {{\n    return {spelling}\n}}\n"
+            );
+            let diagnostics = rsscript_semantics::analyze_source("interpolation.rss", &source);
+            assert!(
+                diagnostics
+                    .iter()
+                    .all(|diagnostic| !diagnostic.severity.is_error()),
+                "`{spelling}` must check clean: {diagnostics:#?}"
+            );
+            let formatted = rsscript_syntax::format_source("interpolation.rss", &source);
+            if spelling == form.right {
+                assert_eq!(
+                    formatted, source,
+                    "`rss fmt` must print `{spelling}` as written"
+                );
+            } else {
+                assert!(
+                    formatted.contains("String.concat(") && !formatted.contains("$\""),
+                    "`rss fmt` leaves a `concat` chain a chain: {formatted}"
+                );
+            }
+        }
+        let section = canonical_surface_forms_section();
+        assert!(section.contains(&format!("`{}`", table_cell(form.right))));
+    }
+
     #[test]
     fn canonical_example_is_semantically_valid() {
         let diagnostics =
@@ -1744,6 +1800,7 @@ mod tests {
             "let Some(base) = value else {",
             "local add = |x| {",
             "local scale = fn(x) captures(read base) {",
+            "return $\"({String.from_int(value: self.x)}, {String.from_int(value: self.y)})\"",
         ] {
             assert!(example.contains(form), "the example must show `{form}`");
         }
@@ -1871,6 +1928,7 @@ mod tests {
             "                CancellationSource.cancel(source: mut source)",
             "        let sent = await produced?",
             "    with Journal.open(name: \"run\")? as journal {",
+            "line: $\"total {String.from_int(value: total)}\"",
             "        local value = sample",
             "        await Sender.send(sender: sender, value: take value)?",
             "    let data_rx = Channel.receiver(channel: mut data)?",

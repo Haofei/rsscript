@@ -1,3 +1,4 @@
+use crate::Span;
 use crate::ast::{
     BinaryOp, Block, CallArg, Callee, DataEffect, Expr, FieldDecl, FunctionDecl, GenericBound,
     GenericParam, Item, LetKind, MapLiteralEntry, MatchPattern, ObjectLiteralField, Param, Program,
@@ -531,7 +532,11 @@ impl Formatter {
                 self.expr_at(index, 0, indent);
                 self.out.push(']');
             }
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, span } => {
+                if let Some(interpolated) = inline_interpolated_string(callee, args, span) {
+                    self.out.push_str(&interpolated);
+                    return;
+                }
                 if self.tuple_literal(callee, args, indent) {
                     return;
                 }
@@ -1231,7 +1236,10 @@ fn inline_expr(expr: &Expr) -> Option<String> {
         Expr::Index { base, index, .. } => {
             Some(format!("{}[{}]", inline_expr(base)?, inline_expr(index)?))
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, span } => {
+            if let Some(interpolated) = inline_interpolated_string(callee, args, span) {
+                return Some(interpolated);
+            }
             if let Some(tuple) = inline_tuple_literal(callee, args) {
                 return Some(tuple);
             }
@@ -1253,6 +1261,103 @@ fn inline_expr(expr: &Expr) -> Option<String> {
         Expr::Await { value, .. } => Some(format!("await {}", inline_expr(value)?)),
         Expr::Closure { .. } | Expr::Match { .. } | Expr::Unknown(_) => None,
     }
+}
+
+/// Render the call an interpolated string desugars to back as `$"…{expr}…"`,
+/// or `None` if the call is anything else.
+///
+/// The parser turns `$"{name} scored {total}"` into
+/// `String.format(template: read "{} scored {}", args: read [name, total])`
+/// (`parser/expr.rs::parse_interpolated_string_expr`) and gives the call, both
+/// arguments, and the template literal the interpolated token's own span. A
+/// hand-written `String.format(...)` cannot have that shape — its template
+/// literal is a different token from its callee — so a written call is printed
+/// as a call and an interpolation as an interpolation. Without this, `rss fmt`
+/// rewrote every interpolated string into the call it desugars to.
+///
+/// The template keeps `{{`/`}}` escapes and backslash escapes as written, and
+/// each `{}` is one interpolated item, in order. A malformed interpolation, a
+/// placeholder count that disagrees with the items, or an item that cannot be
+/// printed on one line declines, and the call form is printed instead.
+fn inline_interpolated_string(callee: &Callee, args: &[CallArg], span: &Span) -> Option<String> {
+    let Callee::Qualified { namespace, name } = callee else {
+        return None;
+    };
+    if namespace != "String" || name != "format" {
+        return None;
+    }
+    let [template_arg, args_arg] = args else {
+        return None;
+    };
+    if template_arg.name.as_deref() != Some("template")
+        || args_arg.name.as_deref() != Some("args")
+        || template_arg.malformed
+        || args_arg.malformed
+        || template_arg.span != *span
+        || args_arg.span != *span
+    {
+        return None;
+    }
+    let Expr::Effect {
+        effect: DataEffect::Read,
+        value: template,
+        span: template_span,
+    } = &template_arg.value
+    else {
+        return None;
+    };
+    let Expr::String(template, literal_span) = template.as_ref() else {
+        return None;
+    };
+    let Expr::Effect {
+        effect: DataEffect::Read,
+        value: items,
+        ..
+    } = &args_arg.value
+    else {
+        return None;
+    };
+    let Expr::ArrayLiteral { items, .. } = items.as_ref() else {
+        return None;
+    };
+    if template_span != span || literal_span != span {
+        return None;
+    }
+
+    let chars = template.chars().collect::<Vec<_>>();
+    let mut items = items.iter();
+    let mut out = String::from("$\"");
+    let mut index = 0;
+    while index < chars.len() {
+        let next = chars.get(index + 1).copied();
+        match (chars[index], next) {
+            ('\\', Some(escaped)) => {
+                out.push('\\');
+                out.push(escaped);
+                index += 2;
+            }
+            ('{', Some('{')) | ('}', Some('}')) => {
+                out.push(chars[index]);
+                out.push(chars[index]);
+                index += 2;
+            }
+            ('{', Some('}')) => {
+                out.push('{');
+                out.push_str(&inline_expr(items.next()?)?);
+                out.push('}');
+                index += 2;
+            }
+            (ch, _) => {
+                out.push(ch);
+                index += 1;
+            }
+        }
+    }
+    if items.next().is_some() {
+        return None;
+    }
+    out.push('"');
+    Some(out)
 }
 
 /// Render a synthetic tuple constructor `__TupleN(item0: .., ..)` inline as
@@ -2069,6 +2174,24 @@ impl Writer for BufferWriter {
     write = BufferWriter.write
 }
 "#
+        );
+    }
+
+    /// An interpolated string is printed as one, not as the `String.format`
+    /// call it desugars to; `{{`/`}}`, backslash escapes, a nested string
+    /// literal, and an effect-wrapped item all survive, and the output is a
+    /// fixpoint. A hand-written `String.format` call stays a call.
+    #[test]
+    fn interpolated_strings_are_printed_as_written() {
+        let source = "fn f(name: String, n: Int) -> fresh String {\n    let a = $\"lit\\n{name} {{braces}}\"\n    let b = $\"{String.concat(left: \"x}\", right: name)}!\"\n    let c = $\"{read name}{String.from_int(value: n)}\"\n    let d = $\"plain\"\n    let e = String.format(template: \"{} and {}\", args: [name, name])\n    return e\n}\n";
+        let formatted = format_source("interpolation.rss", source);
+        assert_eq!(formatted, source, "interpolation must be a fixpoint");
+
+        let sugared = "fn f(name: String) -> fresh String {\n    return $\"a}b{name}\"\n}\n";
+        assert_eq!(
+            format_source("interpolation.rss", sugared),
+            "fn f(name: String) -> fresh String {\n    return $\"a}}b{name}\"\n}\n",
+            "a lone closing brace is printed as its canonical doubled escape"
         );
     }
 

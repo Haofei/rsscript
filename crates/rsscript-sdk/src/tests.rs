@@ -3689,6 +3689,20 @@ fn main() -> Int {
     }
 }
 
+/// An interpolated string builds its value from `String` pieces, in order, and
+/// `{{`/`}}` are literal braces. The language card now teaches this form in
+/// place of nested `String.concat` chains, so it has to build and run.
+#[test]
+fn interpolated_strings_build_and_run() {
+    let report = run_to_completion(
+        "main.rss",
+        "fn greet(name: String, count: Int) -> fresh String {\n    return $\"{name} has {String.from_int(value: count)} {{items}}\"\n}\n\nfn main() -> fresh String { return greet(name: \"ada\", count: 3) }",
+    );
+
+    assert_eq!(report.termination_reason(), TerminationReason::Completed);
+    assert_eq!(report.value(), Some("ada has 3 {items}"));
+}
+
 /// `RS0307` on a literal carries the rewrite, not only advice.
 ///
 /// The measured regression was a candidate following the card's "manage first"

@@ -1,0 +1,19 @@
+// `$"... {expr} ..."` builds a string from pieces. Each `{expr}` is a
+// `String`, `{{` and `}}` are literal braces, and `rss fmt` keeps the form.
+struct Point {
+    x: Int
+    y: Int
+}
+
+fn Point.describe(self: Point) -> fresh String {
+    return $"({String.from_int(value: self.x)}, {String.from_int(value: self.y)})"
+}
+
+fn greet(name: String, count: Int) -> fresh String {
+    return $"{name} has {String.from_int(value: count)} {{items}}"
+}
+
+fn main() -> Unit {
+    Output.write(message: greet(name: "ada", count: 3))
+    Output.write(message: Point.describe(self: Point(x: 1, y: 2)))
+}

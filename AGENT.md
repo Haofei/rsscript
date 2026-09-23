@@ -84,6 +84,18 @@ a worked program showing them together.
   `else` block must diverge. `Option` has no `unwrap`: the fallible readers are
   `Option.unwrap_or`, `Option.unwrap_or_else` and `Option.ok_or`.
 
+## Building strings
+
+Build a string from pieces with an interpolated string, `$"... {expr} ..."`,
+not a nested chain of `String.concat(left: ..., right: ...)` calls, and never
+with `+`. Each `{expr}` must be a `String`, so convert a number inside the
+braces with `String.from_int(value: n)`; `{{` and `}}` are literal braces.
+`rss fmt` prints the interpolated form back as written.
+
+| Write this | Not this |
+| --- | --- |
+| `$"{name} scored {String.from_int(value: score)}"` | `String.concat(left: name, right: String.concat(left: " scored ", right: String.from_int(value: score)))` |
+
 ## Ownership and lifetime
 
 - `read` observes an argument.
