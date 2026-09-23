@@ -120,3 +120,8 @@ required-features = ["execution"]
 
 [lints]
 workspace = true
+
+[[test]]
+name = "argument_order"
+path = "tests/argument_order.rs"
+required-features = ["execution"]

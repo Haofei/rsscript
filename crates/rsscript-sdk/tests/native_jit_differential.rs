@@ -174,7 +174,50 @@ const CASES: &[(&str, &str)] = &[
         "bool-match-comparison.rss",
         "fn classify(a: Int, b: Int) -> Int { match a < b { true => { return 1 } false => { return 0 } } } fn pick(n: Int) -> Int { let value = if n % 3 == 0 { 5 } else { 7 }; return value } fn main() -> Int { let mut i = 0; let mut total = 0; while i < 5000 { total = total + classify(a: i % 7, b: 3) + pick(n: i); i = i + 1 }; return total }",
     ),
+    // Labelled arguments written out of declaration order, with an omitted
+    // defaulted parameter declared between two supplied ones (ADR 0244).
+    // Lowering places each argument by the parameter it names, so the call
+    // instruction generated code sees is already in declaration order; this
+    // pins that the native engine consumes that order exactly as the
+    // interpreter does. `labelled_argument_order_runs_natively_with_the_declared_binding`
+    // below also pins the value both must compute.
+    ("labelled-argument-order.rss", LABELLED_ARGUMENT_ORDER),
 ];
+
+const LABELLED_ARGUMENT_ORDER: &str = "fn mix(left: Int, middle: Int = 7, right: Int) -> Int { return left * 100 + middle * 10 + right } fn sub(left: Int, right: Int) -> Int { return left - right } fn main() -> Int { let mut i = 0; let mut total = 0; while i < 2000 { total = total + mix(right: i % 10, left: 3) - mix(left: 3, right: i % 10) + mix(right: 1, middle: 2, left: 0) + sub(right: 3, left: 10); i = i + 1 }; return total }";
+
+#[test]
+fn labelled_argument_order_runs_natively_with_the_declared_binding() {
+    let built = Compiler
+        .compile("labelled-argument-order.rss", LABELLED_ARGUMENT_ORDER)
+        .expect("labelled argument source compiles");
+    let admitted = ArtifactVerifier
+        .verify(built)
+        .expect("labelled argument artifact verifies")
+        .admit_trusted_input();
+    let linked = Runtime::new(ProviderRegistry::default())
+        .link(&admitted)
+        .expect("labelled argument artifact links");
+    let limits = RunLimits::unbounded_for_trusted_host();
+    let interpreter = linked.execute(ExecutionRequest::default().limits(limits.clone()));
+    let native = linked.execute(ExecutionRequest::default().limits(limits).native_jit(
+        NativeJitOptions {
+            cost_model: NativeCostModel::Off,
+            collect_telemetry: true,
+            ..NativeJitOptions::default()
+        },
+    ));
+    // Each iteration adds `mix(0, 2, 1) = 21` and `sub(10, 3) = 7`; the two
+    // `mix` calls with the default cancel. A binding by written order would
+    // give `sub(3, 10) = -7` and shift `right` into `middle`.
+    let expected = WireValue::Int { value: 2000 * 28 };
+    assert_eq!(interpreter.wire_value(), Some(&expected));
+    assert_eq!(native.wire_value(), Some(&expected));
+    assert!(
+        native_telemetry(&native).compiled > 0,
+        "the hot loop runs as generated code"
+    );
+}
 
 #[test]
 fn native_engine_matches_the_verified_interpreter_corpus() {

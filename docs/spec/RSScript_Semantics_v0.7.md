@@ -1621,9 +1621,9 @@ identifier-only: `Point(compute())` is `RS0201`, and so is `Int.to_string(n)`
 unless the variable is called `value`. A same-name argument binds by name even
 in a private helper call, so the checker binds `scale(factor, reading)`'s
 `reading` to the parameter `reading` although it is written second; a bare
-identifier that names no parameter falls back to its position there. (Run time
-does not yet honour this binding for an argument written out of declaration
-order; see §12.2.) A `mut` or `take` argument is never
+identifier that names no parameter falls back to its position there. Run time
+honours the same binding: the argument reaches the parameter it names whatever
+position it is written in (§12.1.1, ADR 0244). A `mut` or `take` argument is never
 a bare identifier, so it is never a same-name argument.
 
 The remaining shape rules:
@@ -2572,6 +2572,22 @@ fn main() -> Unit {
 fn main() -> Unit {
     let bump: owned Fn(Int) -> Int = |x| { return x + 1 }
     Output.write(message: Int.to_string(value: bump(1)))
+    return Unit
+}
+```
+
+A closure value is called with **positional** arguments. Its type,
+`Fn(Int, Int) -> Int`, gives its parameters types and positions but no names,
+so a label on an argument to it names nothing and is `RS0203` (§12.1.1). The
+names in a closure literal (`|left, right|`) are the body's bindings, not
+labels a caller may use.
+
+**Rejected — `RS0203`**
+
+```rsscript
+fn main() -> Unit {
+    local subtract = |left, right| { return left - right }
+    Output.write(message: Int.to_string(value: subtract(right: 3, left: 10)))
     return Unit
 }
 ```
@@ -5086,8 +5102,9 @@ there is no private protocol for the rule to reject.
 
 **Evaluation order of call arguments**
 (`crates/rsscript-semantics/src/call_binding.rs::CallBinding::bind`, consumed by
-`crates/rsscript-lowering/src/mir/lowerer_calls.rs`, which sorts the lowered
-arguments by `evaluation_index`):
+`crates/rsscript-lowering/src/mir/lowerer_calls.rs::lower_arguments_by_parameter`,
+which lowers the arguments in `evaluation_index` order and places each one by
+its `parameter_index`; ADR 0244):
 
 > A call's arguments are evaluated left to right **as written at the call site**,
 > not in parameter-declaration order. Precisely: the receiver of a receiver-call
@@ -5097,11 +5114,24 @@ arguments by `evaluation_index`):
 
 Because labelled arguments may be written in any order, this is observable:
 `f(second: g(), first: h())` evaluates `g()` before `h()` even though `first` is
-declared first. The binding's `by_parameter` view is the ABI layout; its
-`evaluation_order` view is this language contract. Lowering should evaluate in
-the second order and place each value by the first; today it passes the values
-in evaluation order, which binds an out-of-order argument to the wrong
-parameter (§12.2).
+declared first. Evaluation order does not decide *binding*: each value is then
+passed to the parameter it names, so `g()`'s value is `second` and `h()`'s is
+`first`, and an omitted defaulted parameter's value lands in its declaration
+position, not after the explicit arguments. The binding's `by_parameter` view is
+the ABI layout; its `evaluation_order` view is this language contract. Lowering
+evaluates in the second order and places each value by the first, on every call
+path: user and generic functions, core intrinsics, external Provider calls
+(including the position a `mut` write-back returns to), protocol dispatch through
+`Dyn<P>`, receiver-call sugar, and the calls `async let` and a `select` arm
+spawn. `crates/rsscript-sdk/tests/argument_order.rs` calls a representative of
+each with every permutation of its argument order and checks both the result and
+the order of the arguments' side effects.
+
+A closure value is the exception, because its type `Fn(A, B) -> R` has no
+parameter names: its arguments bind by position, and a label on one is `RS0203`
+(`callbacks.rs::callback_call_label_diagnostic`, fixture
+`fail/closure-call-labelled-argument.rss`). Until ADR 0244 such a label was
+silently ignored.
 
 **`Int` overflow** (`reg_vm/value_ops.rs::eval_numeric_binary`): checked, not
 wrapping. `+`, `-`, `*`, `/`, `%` on `Int` trap on overflow with a language-level
@@ -5155,30 +5185,16 @@ where they belong, so a reader of an older draft can find what changed:
 * a `match` arm that binds the whole scrutinee — a bare name that is no declared
   case and does not start with an uppercase letter binds (§6.4, ADR 0242);
 * guarded `match` arms (ADR 0241) and struct patterns over a `struct` type,
-  which the checker accepted and the build refused — both lower now (§6.4).
+  which the checker accepted and the build refused — both lower now (§6.4);
+* arguments reaching the callee in evaluation order rather than parameter order
+  — `sub(right: 3, left: 10)` ran as `sub(left: 3, right: 10)`, and an omitted
+  defaulted parameter declared before a supplied one shifted the later
+  arguments. Every call path now evaluates as written and places by parameter
+  (§12.1.1, ADR 0244), and a label on a closure-value call, which nothing
+  bound, is `RS0203` (§5.9).
 
 What is left:
 
-* **Arguments reach the callee in evaluation order, not parameter order.**
-  §12.1.1 states the contract: a call's arguments are evaluated in the order
-  written and bound to parameters by name (`CallBinding` records both, as
-  `evaluation_index` and `parameter_index`). Lowering implements only the
-  first half. `lower_direct_call` (`crates/rsscript-lowering/src/mir/lowerer.rs`)
-  and the fixed-arity builtin cases sort the arguments by `evaluation_index`
-  and pass them in that order, and `MirInstruction::Call` carries no parameter
-  index to correct it. Every one of these checks clean, builds, and runs with
-  the wrong binding:
-  * `sub(right: 3, left: 10)` for `fn sub(left: Int, right: Int)` runs as
-    `sub(left: 3, right: 10)`, and a same-name argument written out of order
-    (`sub(right, left)`) is swapped the same way;
-  * `String.concat(right: "b", left: "a")` yields `"ba"`;
-  * an omitted defaulted parameter declared before a supplied one shifts the
-    later arguments: `fn sub(left: Int, middle: Int = 100, right: Int)` called
-    as `sub(left: 10, right: 3)` receives `middle = 3` and `right = 100`.
-
-  Record and sum-variant constructors place each argument by `parameter_index`
-  and are correct. The fix belongs in lowering: evaluate in `evaluation_index`
-  order, then place each value by `parameter_index`.
 * **A few checked programs still fail `rss build`.** The project rule is that a
   program the checker accepts builds, verifies, and runs. These shapes break it
   today, and in each case the fix belongs in the implementation (lower the form,
@@ -5264,7 +5280,7 @@ Per construct, with what the checker and `rss fmt` do today:
 | parameter effects in declarations | `bag: Bag` and `bag: read Bag` are the same signature (§4.6); `rss fmt` keeps whichever is written | always written: `read`, `mut`, or `take` on every parameter that has a default effect (step 1) | `rss fmt` could insert it: the default is syntactic (`TypeRef::default_data_effect`) |
 | call-site `read` | optional; `rss fmt` removes it | omitted: it is a closed default, and the declaration states it (step 2) | `rss fmt`, **already** |
 | argument labels | required on `pub`, core, interface, and protocol calls, except a same-name `read` argument (row below); a private helper call and receiver-call shorthand accept positional arguments; `rss fmt` never adds or removes a label | a label on every argument, except a same-name argument (step 1) | `rss fix --explicit` from the resolved signature; a lint for positional arguments |
-| argument punning `f(reading)` for `f(reading: reading)` | **implemented** for constructor fields and for every `read` parameter of any call: a bare identifier whose name equals a parameter's binds to that parameter by name, in any position (`call_binding.rs`, `hir/lower/bodies.rs`). A bare identifier that names no parameter is `RS0201` on a `pub` call but binds **by position** on a private helper call, so `scale(other, reading)` passes `other` as the first parameter whatever it is called. (Run time currently passes every argument in written order, §12.2, so an out-of-order same-name argument is not yet bound by name when the program runs) | allowed **only** when the variable's name equals the parameter's name (step 3); any other argument is labelled. *Proposed: this removes positional binding from private helper calls, which is the part not implemented* | a checker change for the restriction; `rss fix --explicit` labels the rest. Open decision 2 |
+| argument punning `f(reading)` for `f(reading: reading)` | **implemented** for constructor fields and for every `read` parameter of any call: a bare identifier whose name equals a parameter's binds to that parameter by name, in any position (`call_binding.rs`, `hir/lower/bodies.rs`). A bare identifier that names no parameter is `RS0201` on a `pub` call but binds **by position** on a private helper call, so `scale(other, reading)` passes `other` as the first parameter whatever it is called. Run time binds the same way (§12.1.1) | allowed **only** when the variable's name equals the parameter's name (step 3); any other argument is labelled. *Proposed: this removes positional binding from private helper calls, which is the part not implemented* | a checker change for the restriction; `rss fix --explicit` labels the rest. Open decision 2 |
 | closure captures | `\|x\| { … }` captures implicitly; `fn(x) captures(read base) { … }` declares the set, and `RS0805` checks it; the language card teaches `\|x\|` as the closure literal | `fn(x) captures(…)` whenever the closure captures anything; `\|x\|` only for a closure that captures nothing (step 1) | `rss fix --explicit` from the capture set the checker computes (`checks/body/closure_captures.rs`); a lint for implicit capture |
 | method calls | `Point.get(self: p)` and `p.get()` both check; receiver sugar desugars to the static call (§4.2); `rss fmt` keeps whichever is written | the namespaced call `Type.method(self: value, …)`, which §4.2 already calls canonical (step 1: the receiver's type is visible) | `rss fix --explicit`: it needs the inferred receiver type |
 | trailing `return Unit` | a `-> Unit` function may fall off its end (§4.7); `rss fmt` keeps a written `return Unit` and does not add one | omitted: a closed default (step 2) | `rss fmt` could remove it: it is syntactic |

@@ -956,6 +956,52 @@ fn receiver_argument(
     normalized
 }
 
+/// How a fixed-arity builtin needs one of its operands lowered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BuiltinOperandKind {
+    /// An ordinary value.
+    Value,
+    /// The checked `mut` place a mutating intrinsic writes through.
+    MutablePlace,
+    /// A value the intrinsic retains, with the caller's `read local` place
+    /// when there is one, so the lowering can emit the matching `Retain`.
+    Retained,
+}
+
+/// One lowered builtin operand, shaped by its `BuiltinOperandKind`.
+#[derive(Debug, Clone, Copy)]
+enum BuiltinOperand {
+    Value(ValueId),
+    Place(PlaceId),
+    Retained(ValueId, Option<PlaceId>),
+}
+
+impl BuiltinOperand {
+    fn value(self) -> ValueId {
+        match self {
+            Self::Value(value) | Self::Retained(value, _) => value,
+            Self::Place(_) => unreachable!("a builtin operand lowered as a place has no value"),
+        }
+    }
+
+    fn place(self) -> PlaceId {
+        match self {
+            Self::Place(place) => place,
+            Self::Value(_) | Self::Retained(..) => {
+                unreachable!("a builtin operand lowered as a value has no place")
+            }
+        }
+    }
+
+    fn retained(self) -> (ValueId, Option<PlaceId>) {
+        match self {
+            Self::Retained(value, place) => (value, place),
+            Self::Value(value) => (value, None),
+            Self::Place(_) => unreachable!("a builtin operand lowered as a place has no value"),
+        }
+    }
+}
+
 /// Which end of a `List<T>` slice pattern an element is counted from.
 ///
 /// A prefix element sits at a constant index. A suffix element sits at a

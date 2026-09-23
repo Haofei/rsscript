@@ -138,6 +138,34 @@ pub fn callback_call_arity_mismatch_diagnostic(
     )
 }
 
+/// A label on an argument to a closure value.
+///
+/// A closure value's type is `Fn(A, B) -> R`: its parameters have types and
+/// positions but no names, so a call through it binds by position. A label
+/// written there names nothing, and before this diagnostic it was silently
+/// ignored — `f(b: 3, a: 10)` passed `3` first whatever the closure literal
+/// called its parameters, the same wrong-parameter binding a labelled call
+/// must never produce. Refusing the label keeps every labelled argument in the
+/// language one that reaches the parameter it names.
+pub fn callback_call_label_diagnostic(callback_name: &str, label: &str, span: Span) -> Diagnostic {
+    Diagnostic::error(
+        code::UNKNOWN_ARGUMENT,
+        format!("call to closure `{callback_name}` labels an argument `{label}`."),
+        span,
+        "closure arguments are positional",
+    )
+    .with_cause(
+        "A closure value's parameters have no names — its type is `Fn(...)` — so its arguments bind by position and a label cannot choose a parameter.",
+    )
+    .with_fix(
+        "remove_closure_argument_label",
+        format!(
+            "Remove `{label}:` and write the arguments to `{callback_name}` in the closure's parameter order."
+        ),
+        "manual",
+    )
+}
+
 pub fn callback_call_argument_type_mismatch_diagnostic(
     callback_name: &str,
     index: usize,

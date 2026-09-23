@@ -1,0 +1,14 @@
+// expect: RS0203
+
+// A closure value's type is `Fn(Int, Int) -> Int`: its parameters have no
+// names, so its arguments bind by position. A label here would name nothing,
+// and it used to be ignored silently — `combine(right: 3, left: 10)` passed
+// `3` first. It is refused instead (ADR 0244).
+fn apply(combine: noescape Fn(Int, Int) -> Int) -> Int {
+    return combine(right: 3, left: 10)
+}
+
+fn main() -> Int {
+    local subtract = |left, right| { return left - right }
+    return subtract(right: 3, left: 10) + apply(combine: subtract)
+}

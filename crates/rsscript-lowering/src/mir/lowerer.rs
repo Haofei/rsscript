@@ -783,16 +783,19 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 }
             }
         };
-        let mut ordered = args.iter().collect::<Vec<_>>();
-        ordered.sort_by_key(|argument| argument.evaluation_index);
-        let mut arguments = Vec::with_capacity(ordered.len() + usize::from(receiver.is_some()));
+        // The receiver is parameter zero and is evaluated first; the explicit
+        // arguments are then evaluated as written and placed by parameter.
+        let mut arguments = Vec::with_capacity(args.len() + usize::from(receiver.is_some()));
         let mut retained_places = Vec::new();
+        let is_retained = |index: usize| {
+            signature
+                .params
+                .get(index)
+                .is_some_and(|parameter| signature.retained_params.contains(&parameter.name))
+        };
         if let Some(receiver) = receiver {
             let lowered = self.lower_direct_receiver_argument(receiver)?;
-            if signature
-                .params
-                .first()
-                .is_some_and(|parameter| signature.retained_params.contains(&parameter.name))
+            if is_retained(0)
                 && let MirCallArgument::BorrowRead(place) | MirCallArgument::BorrowMut(place) =
                     lowered
             {
@@ -800,19 +803,22 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
             }
             arguments.push(lowered);
         }
-        for argument in ordered {
-            let lowered = self.lower_direct_call_argument(&argument.value)?;
-            if argument
-                .parameter_index
-                .and_then(|index| signature.params.get(index))
-                .is_some_and(|parameter| signature.retained_params.contains(&parameter.name))
-                && let MirCallArgument::BorrowRead(place) | MirCallArgument::BorrowMut(place) =
-                    lowered
-            {
-                retained_places.push(place);
-            }
-            arguments.push(lowered);
-        }
+        let explicit = self.lower_arguments_by_parameter(
+            args,
+            usize::from(receiver.is_some()),
+            "direct checked HIR call with an unbound argument",
+            |this, parameter, argument| {
+                let lowered = this.lower_direct_call_argument(&argument.value)?;
+                if is_retained(parameter)
+                    && let MirCallArgument::BorrowRead(place) | MirCallArgument::BorrowMut(place) =
+                        lowered
+                {
+                    retained_places.push(place);
+                }
+                Ok(lowered)
+            },
+        )?;
+        arguments.extend(explicit);
         let destination = self.value();
         self.emit(MirInstruction::Call {
             destination,
@@ -840,10 +846,16 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
             destination: closure,
             place,
         });
-        let mut ordered = args.iter().collect::<Vec<_>>();
-        ordered.sort_by_key(|argument| argument.evaluation_index);
-        let arguments = ordered
-            .into_iter()
+        // A closure value's parameters have no names, so its arguments bind by
+        // position: written order is both the evaluation order and the
+        // parameter order. The checker refuses a label here (`RS0203`); one
+        // reaching lowering would be a label nothing bound, so it is refused
+        // rather than ignored.
+        if args.iter().any(|argument| argument.name.is_some()) {
+            return self.unsupported("labelled argument to a closure value");
+        }
+        let arguments = args
+            .iter()
             .map(|argument| self.lower_direct_call_argument(&argument.value))
             .collect::<Result<Vec<_>, _>>()?;
         let destination = self.value();
@@ -983,13 +995,10 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 });
             }
             "concat" if signature.namespace.as_deref() == Some("String") => {
-                if args.len() != 2 {
-                    return self.unsupported("String.concat with invalid checked call shape");
-                }
-                let mut ordered = args.iter().collect::<Vec<_>>();
-                ordered.sort_by_key(|argument| argument.evaluation_index);
-                let left = self.lower_expression(&ordered[0].value)?;
-                let right = self.lower_expression(&ordered[1].value)?;
+                let [left, right] = self.lower_builtin_operands::<2>(
+                    args,
+                    "String.concat with invalid checked call shape",
+                )?;
                 self.emit(MirInstruction::StringConcat {
                     destination,
                     left,
@@ -997,13 +1006,10 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 });
             }
             "get" if signature.namespace.as_deref() == Some("List") => {
-                if args.len() != 2 {
-                    return self.unsupported("List.get with invalid checked call shape");
-                }
-                let mut ordered = args.iter().collect::<Vec<_>>();
-                ordered.sort_by_key(|argument| argument.evaluation_index);
-                let list = self.lower_expression(&ordered[0].value)?;
-                let index = self.lower_expression(&ordered[1].value)?;
+                let [list, index] = self.lower_builtin_operands::<2>(
+                    args,
+                    "List.get with invalid checked call shape",
+                )?;
                 self.emit(MirInstruction::ListGet {
                     destination,
                     list,
@@ -1018,14 +1024,16 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 self.emit(MirInstruction::ListLen { destination, list });
             }
             "append" if signature.namespace.as_deref() == Some("List") => {
-                if args.len() != 2 {
-                    return self.unsupported("List.append with invalid checked call shape");
-                }
-                let mut ordered = args.iter().collect::<Vec<_>>();
-                ordered.sort_by_key(|argument| argument.evaluation_index);
-                let list = self.lower_mutable_builtin_place(&ordered[0].value)?;
-                let (values, retained_values) =
-                    self.lower_retained_builtin_value(&ordered[1].value)?;
+                let [list, values] = self.lower_builtin_operands_as(
+                    args,
+                    [
+                        BuiltinOperandKind::MutablePlace,
+                        BuiltinOperandKind::Retained,
+                    ],
+                    "List.append with invalid checked call shape",
+                )?;
+                let list = list.place();
+                let (values, retained_values) = values.retained();
                 self.emit(MirInstruction::ListAppend {
                     destination,
                     list,
@@ -1050,14 +1058,16 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 self.emit(MirInstruction::ListPop { destination, list });
             }
             "push" if signature.namespace.as_deref() == Some("List") => {
-                if args.len() != 2 {
-                    return self.unsupported("List.push with invalid checked call shape");
-                }
-                let mut ordered = args.iter().collect::<Vec<_>>();
-                ordered.sort_by_key(|argument| argument.evaluation_index);
-                let list = self.lower_mutable_builtin_place(&ordered[0].value)?;
-                let (value, retained_value) =
-                    self.lower_retained_builtin_value(&ordered[1].value)?;
+                let [list, value] = self.lower_builtin_operands_as(
+                    args,
+                    [
+                        BuiltinOperandKind::MutablePlace,
+                        BuiltinOperandKind::Retained,
+                    ],
+                    "List.push with invalid checked call shape",
+                )?;
+                let list = list.place();
+                let (value, retained_value) = value.retained();
                 self.emit(MirInstruction::ListPush {
                     destination,
                     list,
@@ -1127,13 +1137,13 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 self.emit(MirInstruction::ListSort { destination, list });
             }
             "sort_with" if signature.namespace.as_deref() == Some("List") => {
-                if args.len() != 2 {
-                    return self.unsupported("List.sort_with with invalid checked call shape");
-                }
-                let mut ordered = args.iter().collect::<Vec<_>>();
-                ordered.sort_by_key(|argument| argument.evaluation_index);
-                let list = self.lower_mutable_builtin_place(&ordered[0].value)?;
-                let compare = self.lower_expression(&ordered[1].value)?;
+                let [list, compare] = self.lower_builtin_operands_as(
+                    args,
+                    [BuiltinOperandKind::MutablePlace, BuiltinOperandKind::Value],
+                    "List.sort_with with invalid checked call shape",
+                )?;
+                let list = list.place();
+                let compare = compare.value();
                 self.emit(MirInstruction::ListSortWith {
                     destination,
                     list,
@@ -1152,13 +1162,13 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 });
             }
             "remove_at" if signature.namespace.as_deref() == Some("List") => {
-                if args.len() != 2 {
-                    return self.unsupported("List.remove_at with invalid checked call shape");
-                }
-                let mut ordered = args.iter().collect::<Vec<_>>();
-                ordered.sort_by_key(|argument| argument.evaluation_index);
-                let list = self.lower_mutable_builtin_place(&ordered[0].value)?;
-                let index = self.lower_expression(&ordered[1].value)?;
+                let [list, index] = self.lower_builtin_operands_as(
+                    args,
+                    [BuiltinOperandKind::MutablePlace, BuiltinOperandKind::Value],
+                    "List.remove_at with invalid checked call shape",
+                )?;
+                let list = list.place();
+                let index = index.value();
                 self.emit(MirInstruction::ListRemoveAt {
                     destination,
                     list,
@@ -1166,15 +1176,18 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 });
             }
             "set" if signature.namespace.as_deref() == Some("List") => {
-                if args.len() != 3 {
-                    return self.unsupported("List.set with invalid checked call shape");
-                }
-                let mut ordered = args.iter().collect::<Vec<_>>();
-                ordered.sort_by_key(|argument| argument.evaluation_index);
-                let list = self.lower_mutable_builtin_place(&ordered[0].value)?;
-                let index = self.lower_expression(&ordered[1].value)?;
-                let (value, retained_value) =
-                    self.lower_retained_builtin_value(&ordered[2].value)?;
+                let [list, index, value] = self.lower_builtin_operands_as(
+                    args,
+                    [
+                        BuiltinOperandKind::MutablePlace,
+                        BuiltinOperandKind::Value,
+                        BuiltinOperandKind::Retained,
+                    ],
+                    "List.set with invalid checked call shape",
+                )?;
+                let list = list.place();
+                let index = index.value();
+                let (value, retained_value) = value.retained();
                 self.emit(MirInstruction::ListSet {
                     destination,
                     list,
@@ -1193,14 +1206,16 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 self.emit(MirInstruction::SetClear { destination, set });
             }
             "insert" if signature.namespace.as_deref() == Some("Set") => {
-                if args.len() != 2 {
-                    return self.unsupported("Set.insert with invalid checked call shape");
-                }
-                let mut ordered = args.iter().collect::<Vec<_>>();
-                ordered.sort_by_key(|argument| argument.evaluation_index);
-                let set = self.lower_mutable_builtin_place(&ordered[0].value)?;
-                let (value, retained_value) =
-                    self.lower_retained_builtin_value(&ordered[1].value)?;
+                let [set, value] = self.lower_builtin_operands_as(
+                    args,
+                    [
+                        BuiltinOperandKind::MutablePlace,
+                        BuiltinOperandKind::Retained,
+                    ],
+                    "Set.insert with invalid checked call shape",
+                )?;
+                let set = set.place();
+                let (value, retained_value) = value.retained();
                 self.emit(MirInstruction::SetInsert {
                     destination,
                     set,
@@ -1211,13 +1226,13 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 }
             }
             "remove" if signature.namespace.as_deref() == Some("Set") => {
-                if args.len() != 2 {
-                    return self.unsupported("Set.remove with invalid checked call shape");
-                }
-                let mut ordered = args.iter().collect::<Vec<_>>();
-                ordered.sort_by_key(|argument| argument.evaluation_index);
-                let set = self.lower_mutable_builtin_place(&ordered[0].value)?;
-                let value = self.lower_expression(&ordered[1].value)?;
+                let [set, value] = self.lower_builtin_operands_as(
+                    args,
+                    [BuiltinOperandKind::MutablePlace, BuiltinOperandKind::Value],
+                    "Set.remove with invalid checked call shape",
+                )?;
+                let set = set.place();
+                let value = value.value();
                 self.emit(MirInstruction::SetRemove {
                     destination,
                     set,
@@ -1246,14 +1261,16 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 self.emit(MirInstruction::DequePopFront { destination, deque });
             }
             "push_back" if signature.namespace.as_deref() == Some("Deque") => {
-                if args.len() != 2 {
-                    return self.unsupported("Deque.push_back with invalid checked call shape");
-                }
-                let mut ordered = args.iter().collect::<Vec<_>>();
-                ordered.sort_by_key(|argument| argument.evaluation_index);
-                let deque = self.lower_mutable_builtin_place(&ordered[0].value)?;
-                let (value, retained_value) =
-                    self.lower_retained_builtin_value(&ordered[1].value)?;
+                let [deque, value] = self.lower_builtin_operands_as(
+                    args,
+                    [
+                        BuiltinOperandKind::MutablePlace,
+                        BuiltinOperandKind::Retained,
+                    ],
+                    "Deque.push_back with invalid checked call shape",
+                )?;
+                let deque = deque.place();
+                let (value, retained_value) = value.retained();
                 self.emit(MirInstruction::DequePushBack {
                     destination,
                     deque,
@@ -1264,14 +1281,16 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 }
             }
             "push_front" if signature.namespace.as_deref() == Some("Deque") => {
-                if args.len() != 2 {
-                    return self.unsupported("Deque.push_front with invalid checked call shape");
-                }
-                let mut ordered = args.iter().collect::<Vec<_>>();
-                ordered.sort_by_key(|argument| argument.evaluation_index);
-                let deque = self.lower_mutable_builtin_place(&ordered[0].value)?;
-                let (value, retained_value) =
-                    self.lower_retained_builtin_value(&ordered[1].value)?;
+                let [deque, value] = self.lower_builtin_operands_as(
+                    args,
+                    [
+                        BuiltinOperandKind::MutablePlace,
+                        BuiltinOperandKind::Retained,
+                    ],
+                    "Deque.push_front with invalid checked call shape",
+                )?;
+                let deque = deque.place();
+                let (value, retained_value) = value.retained();
                 self.emit(MirInstruction::DequePushFront {
                     destination,
                     deque,
@@ -1289,15 +1308,18 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 self.emit(MirInstruction::SortedMapClear { destination, map });
             }
             "insert" if signature.namespace.as_deref() == Some("SortedMap") => {
-                if args.len() != 3 {
-                    return self.unsupported("SortedMap.insert with invalid checked call shape");
-                }
-                let mut ordered = args.iter().collect::<Vec<_>>();
-                ordered.sort_by_key(|argument| argument.evaluation_index);
-                let map = self.lower_mutable_builtin_place(&ordered[0].value)?;
-                let (key, retained_key) = self.lower_retained_builtin_value(&ordered[1].value)?;
-                let (value, retained_value) =
-                    self.lower_retained_builtin_value(&ordered[2].value)?;
+                let [map, key, value] = self.lower_builtin_operands_as(
+                    args,
+                    [
+                        BuiltinOperandKind::MutablePlace,
+                        BuiltinOperandKind::Retained,
+                        BuiltinOperandKind::Retained,
+                    ],
+                    "SortedMap.insert with invalid checked call shape",
+                )?;
+                let map = map.place();
+                let (key, retained_key) = key.retained();
+                let (value, retained_value) = value.retained();
                 self.emit(MirInstruction::SortedMapInsert {
                     destination,
                     map,
@@ -1309,13 +1331,13 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 }
             }
             "remove" if signature.namespace.as_deref() == Some("SortedMap") => {
-                if args.len() != 2 {
-                    return self.unsupported("SortedMap.remove with invalid checked call shape");
-                }
-                let mut ordered = args.iter().collect::<Vec<_>>();
-                ordered.sort_by_key(|argument| argument.evaluation_index);
-                let map = self.lower_mutable_builtin_place(&ordered[0].value)?;
-                let key = self.lower_expression(&ordered[1].value)?;
+                let [map, key] = self.lower_builtin_operands_as(
+                    args,
+                    [BuiltinOperandKind::MutablePlace, BuiltinOperandKind::Value],
+                    "SortedMap.remove with invalid checked call shape",
+                )?;
+                let map = map.place();
+                let key = key.value();
                 self.emit(MirInstruction::SortedMapRemove {
                     destination,
                     map,
@@ -1330,14 +1352,16 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 self.emit(MirInstruction::SortedSetClear { destination, set });
             }
             "insert" if signature.namespace.as_deref() == Some("SortedSet") => {
-                if args.len() != 2 {
-                    return self.unsupported("SortedSet.insert with invalid checked call shape");
-                }
-                let mut ordered = args.iter().collect::<Vec<_>>();
-                ordered.sort_by_key(|argument| argument.evaluation_index);
-                let set = self.lower_mutable_builtin_place(&ordered[0].value)?;
-                let (value, retained_value) =
-                    self.lower_retained_builtin_value(&ordered[1].value)?;
+                let [set, value] = self.lower_builtin_operands_as(
+                    args,
+                    [
+                        BuiltinOperandKind::MutablePlace,
+                        BuiltinOperandKind::Retained,
+                    ],
+                    "SortedSet.insert with invalid checked call shape",
+                )?;
+                let set = set.place();
+                let (value, retained_value) = value.retained();
                 self.emit(MirInstruction::SortedSetInsert {
                     destination,
                     set,
@@ -1348,13 +1372,13 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 }
             }
             "remove" if signature.namespace.as_deref() == Some("SortedSet") => {
-                if args.len() != 2 {
-                    return self.unsupported("SortedSet.remove with invalid checked call shape");
-                }
-                let mut ordered = args.iter().collect::<Vec<_>>();
-                ordered.sort_by_key(|argument| argument.evaluation_index);
-                let set = self.lower_mutable_builtin_place(&ordered[0].value)?;
-                let value = self.lower_expression(&ordered[1].value)?;
+                let [set, value] = self.lower_builtin_operands_as(
+                    args,
+                    [BuiltinOperandKind::MutablePlace, BuiltinOperandKind::Value],
+                    "SortedSet.remove with invalid checked call shape",
+                )?;
+                let set = set.place();
+                let value = value.value();
                 self.emit(MirInstruction::SortedSetRemove {
                     destination,
                     set,
@@ -1372,13 +1396,13 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 });
             }
             "push" if signature.namespace.as_deref() == Some("StringBuilder") => {
-                if args.len() != 2 {
-                    return self.unsupported("StringBuilder.push with invalid checked call shape");
-                }
-                let mut ordered = args.iter().collect::<Vec<_>>();
-                ordered.sort_by_key(|argument| argument.evaluation_index);
-                let builder = self.lower_mutable_builtin_place(&ordered[0].value)?;
-                let value = self.lower_expression(&ordered[1].value)?;
+                let [builder, value] = self.lower_builtin_operands_as(
+                    args,
+                    [BuiltinOperandKind::MutablePlace, BuiltinOperandKind::Value],
+                    "StringBuilder.push with invalid checked call shape",
+                )?;
+                let builder = builder.place();
+                let value = value.value();
                 self.emit(MirInstruction::StringBuilderPush {
                     destination,
                     builder,
@@ -1406,13 +1430,8 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 });
             }
             "get" if signature.namespace.as_deref() == Some("Map") => {
-                if args.len() != 2 {
-                    return self.unsupported("Map.get with invalid checked call shape");
-                }
-                let mut ordered = args.iter().collect::<Vec<_>>();
-                ordered.sort_by_key(|argument| argument.evaluation_index);
-                let map = self.lower_expression(&ordered[0].value)?;
-                let key = self.lower_expression(&ordered[1].value)?;
+                let [map, key] = self
+                    .lower_builtin_operands::<2>(args, "Map.get with invalid checked call shape")?;
                 self.emit(MirInstruction::MapGet {
                     destination,
                     map,
@@ -1427,15 +1446,18 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 self.emit(MirInstruction::MapClear { destination, map });
             }
             "insert" if signature.namespace.as_deref() == Some("Map") => {
-                if args.len() != 3 {
-                    return self.unsupported("Map.insert with invalid checked call shape");
-                }
-                let mut ordered = args.iter().collect::<Vec<_>>();
-                ordered.sort_by_key(|argument| argument.evaluation_index);
-                let map = self.lower_mutable_builtin_place(&ordered[0].value)?;
-                let (key, retained_key) = self.lower_retained_builtin_value(&ordered[1].value)?;
-                let (value, retained_value) =
-                    self.lower_retained_builtin_value(&ordered[2].value)?;
+                let [map, key, value] = self.lower_builtin_operands_as(
+                    args,
+                    [
+                        BuiltinOperandKind::MutablePlace,
+                        BuiltinOperandKind::Retained,
+                        BuiltinOperandKind::Retained,
+                    ],
+                    "Map.insert with invalid checked call shape",
+                )?;
+                let map = map.place();
+                let (key, retained_key) = key.retained();
+                let (value, retained_value) = value.retained();
                 self.emit(MirInstruction::MapInsert {
                     destination,
                     map,
@@ -1447,15 +1469,18 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 }
             }
             "insert_old" if signature.namespace.as_deref() == Some("Map") => {
-                if args.len() != 3 {
-                    return self.unsupported("Map.insert_old with invalid checked call shape");
-                }
-                let mut ordered = args.iter().collect::<Vec<_>>();
-                ordered.sort_by_key(|argument| argument.evaluation_index);
-                let map = self.lower_mutable_builtin_place(&ordered[0].value)?;
-                let (key, retained_key) = self.lower_retained_builtin_value(&ordered[1].value)?;
-                let (value, retained_value) =
-                    self.lower_retained_builtin_value(&ordered[2].value)?;
+                let [map, key, value] = self.lower_builtin_operands_as(
+                    args,
+                    [
+                        BuiltinOperandKind::MutablePlace,
+                        BuiltinOperandKind::Retained,
+                        BuiltinOperandKind::Retained,
+                    ],
+                    "Map.insert_old with invalid checked call shape",
+                )?;
+                let map = map.place();
+                let (key, retained_key) = key.retained();
+                let (value, retained_value) = value.retained();
                 self.emit(MirInstruction::MapInsertOld {
                     destination,
                     map,
@@ -1467,13 +1492,13 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 }
             }
             "remove" if signature.namespace.as_deref() == Some("Map") => {
-                if args.len() != 2 {
-                    return self.unsupported("Map.remove with invalid checked call shape");
-                }
-                let mut ordered = args.iter().collect::<Vec<_>>();
-                ordered.sort_by_key(|argument| argument.evaluation_index);
-                let map = self.lower_mutable_builtin_place(&ordered[0].value)?;
-                let key = self.lower_expression(&ordered[1].value)?;
+                let [map, key] = self.lower_builtin_operands_as(
+                    args,
+                    [BuiltinOperandKind::MutablePlace, BuiltinOperandKind::Value],
+                    "Map.remove with invalid checked call shape",
+                )?;
+                let map = map.place();
+                let key = key.value();
                 self.emit(MirInstruction::MapRemove {
                     destination,
                     map,
@@ -1492,12 +1517,12 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                 } else {
                     Vec::new()
                 };
-                let mut ordered = args.iter().collect::<Vec<_>>();
-                ordered.sort_by_key(|argument| argument.evaluation_index);
-                let arguments = ordered
-                    .into_iter()
-                    .map(|argument| self.lower_direct_call_argument(&argument.value))
-                    .collect::<Result<Vec<_>, _>>()?;
+                let arguments = self.lower_arguments_by_parameter(
+                    args,
+                    0,
+                    "builtin checked HIR call with an unbound argument",
+                    |this, _, argument| this.lower_direct_call_argument(&argument.value),
+                )?;
                 self.emit(MirInstruction::Call {
                     destination,
                     target: MirCallTarget::Builtin {

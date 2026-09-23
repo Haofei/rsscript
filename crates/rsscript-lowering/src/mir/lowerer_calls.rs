@@ -137,27 +137,107 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
         Ok(destination)
     }
 
-    /// Lower a fixed-arity builtin's operands in evaluation order.
+    /// Lower a call's arguments in the language's evaluation order and return
+    /// them in declaration (parameter) order.
     ///
-    /// Every closure-taking combinator has the same shape: a receiver value and
-    /// one or more callback values, each an ordinary expression. Sharing the
-    /// arity check and the evaluation-order sort keeps each combinator's case
-    /// to the instruction it emits, and keeps the arity contract in one place.
+    /// These are two different orders, and a call needs both. The arguments
+    /// are *evaluated* left to right as written at the call site, then each one
+    /// is *passed* to the parameter it names (`evaluation_index` and
+    /// `parameter_index` on the checked argument, both recorded by
+    /// `CallBinding`). So `sub(right: g(), left: h())` runs `g()` before `h()`
+    /// and still passes `h()`'s value as `left`, and an omitted defaulted
+    /// parameter's synthesized argument lands in its declaration position,
+    /// not after the explicit ones. Every argument list a call instruction
+    /// carries is in parameter order, because that is the order the callee's
+    /// ABI, its parameter modes, and `mut` write-back all index by.
+    ///
+    /// `first_parameter` is the parameter index of the first slot the
+    /// arguments fill: 1 when a receiver-call's receiver is lowered separately
+    /// as parameter zero, otherwise 0. Every slot must be filled exactly once;
+    /// a checked call that does not do so is refused rather than guessed at,
+    /// since guessing is how an argument reaches the wrong parameter.
+    pub(super) fn lower_arguments_by_parameter<T>(
+        &mut self,
+        args: &[checked::HirCallArg],
+        first_parameter: usize,
+        construct: &'static str,
+        mut lower: impl FnMut(&mut Self, usize, &checked::HirCallArg) -> Result<T, MirLoweringError>,
+    ) -> Result<Vec<T>, MirLoweringError> {
+        let mut ordered = args.iter().collect::<Vec<_>>();
+        ordered.sort_by_key(|argument| argument.evaluation_index);
+        let mut slots = args.iter().map(|_| None).collect::<Vec<Option<T>>>();
+        for argument in ordered {
+            let Some(parameter) = argument.parameter_index else {
+                return self.unsupported(construct);
+            };
+            let Some(slot) = parameter
+                .checked_sub(first_parameter)
+                .filter(|slot| *slot < slots.len() && slots[*slot].is_none())
+            else {
+                return self.unsupported(construct);
+            };
+            slots[slot] = Some(lower(self, parameter, argument)?);
+        }
+        slots
+            .into_iter()
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| MirLoweringError::Unsupported {
+                function: self.function_name.to_owned(),
+                construct,
+            })
+    }
+
+    /// Lower a fixed-arity builtin's operands: evaluated in the order written,
+    /// returned in parameter order (see `lower_arguments_by_parameter`).
+    ///
+    /// Each operand is lowered as its parameter needs: an ordinary value, the
+    /// checked mutable place of a mutating intrinsic's collection, or a value
+    /// the intrinsic retains. `kinds` is indexed by parameter, so a case names
+    /// its shape once, in declaration order, and never has to know which order
+    /// the caller wrote the arguments in.
+    pub(super) fn lower_builtin_operands_as<const N: usize>(
+        &mut self,
+        args: &[checked::HirCallArg],
+        kinds: [BuiltinOperandKind; N],
+        construct: &'static str,
+    ) -> Result<[BuiltinOperand; N], MirLoweringError> {
+        if args.len() != N {
+            return self.unsupported(construct);
+        }
+        let operands =
+            self.lower_arguments_by_parameter(args, 0, construct, |this, parameter, argument| {
+                match kinds[parameter] {
+                    BuiltinOperandKind::Value => this
+                        .lower_expression(&argument.value)
+                        .map(BuiltinOperand::Value),
+                    BuiltinOperandKind::MutablePlace => this
+                        .lower_mutable_builtin_place(&argument.value)
+                        .map(BuiltinOperand::Place),
+                    BuiltinOperandKind::Retained => this
+                        .lower_retained_builtin_value(&argument.value)
+                        .map(|(value, place)| BuiltinOperand::Retained(value, place)),
+                }
+            })?;
+        operands
+            .try_into()
+            .map_err(|_| MirLoweringError::Unsupported {
+                function: self.function_name.to_owned(),
+                construct,
+            })
+    }
+
+    /// Lower a fixed-arity builtin whose operands are all ordinary values.
+    ///
+    /// Every closure-taking combinator has this shape: a receiver value and
+    /// one or more callback values, each an ordinary expression.
     pub(super) fn lower_builtin_operands<const N: usize>(
         &mut self,
         args: &[checked::HirCallArg],
         construct: &'static str,
     ) -> Result<[ValueId; N], MirLoweringError> {
-        if args.len() != N {
-            return self.unsupported(construct);
-        }
-        let mut ordered = args.iter().collect::<Vec<_>>();
-        ordered.sort_by_key(|argument| argument.evaluation_index);
-        let mut operands = [ValueId::new(0); N];
-        for (slot, argument) in operands.iter_mut().zip(ordered) {
-            *slot = self.lower_expression(&argument.value)?;
-        }
-        Ok(operands)
+        let operands =
+            self.lower_builtin_operands_as(args, [BuiltinOperandKind::Value; N], construct)?;
+        Ok(operands.map(BuiltinOperand::value))
     }
 
     /// A mutating builtin must carry the checked mutable place directly. This
@@ -420,18 +500,17 @@ impl<'source, 'types, 'closures> CheckedHirLowerer<'source, 'types, 'closures> {
                     construct: "direct async checked HIR call target",
                 })?
         };
-        let mut ordered = args.iter().collect::<Vec<_>>();
-        ordered.sort_by_key(|argument| argument.evaluation_index);
-        let mut arguments = Vec::with_capacity(ordered.len() + usize::from(receiver.is_some()));
+        let mut arguments = Vec::with_capacity(args.len() + usize::from(receiver.is_some()));
         if let Some(receiver) = receiver {
             arguments.push(self.lower_direct_receiver_argument(receiver)?);
         }
-        arguments.extend(
-            ordered
-                .into_iter()
-                .map(|argument| self.lower_direct_call_argument(&argument.value))
-                .collect::<Result<Vec<_>, _>>()?,
-        );
+        let explicit = self.lower_arguments_by_parameter(
+            args,
+            usize::from(receiver.is_some()),
+            "async checked HIR call with an unbound argument",
+            |this, _, argument| this.lower_direct_call_argument(&argument.value),
+        )?;
+        arguments.extend(explicit);
         let task = self.task();
         self.emit(MirInstruction::Spawn {
             task,

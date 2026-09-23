@@ -130,7 +130,8 @@ pub use call_arguments::{
 pub use call_binding::{BoundArgument, BoundArgumentSource, CallBinding, CallBindingIssue};
 pub use callbacks::{
     callback_arity_mismatch_diagnostic, callback_call_argument_type_mismatch_diagnostic,
-    callback_call_arity_mismatch_diagnostic, callback_call_site_argument_type_mismatch_diagnostic,
+    callback_call_arity_mismatch_diagnostic, callback_call_label_diagnostic,
+    callback_call_site_argument_type_mismatch_diagnostic,
     callback_fresh_return_not_clean_diagnostic, callback_fresh_return_unknown_diagnostic,
     callback_operator_type_mismatch_diagnostic, callback_return_type_mismatch_diagnostic,
 };

@@ -1102,6 +1102,17 @@ fn check_call_args(
         callback_bindings,
         callable_closure_bindings,
     ) {
+        for arg in args {
+            if let Some(label) = &arg.name {
+                analyzer
+                    .diagnostics
+                    .push(rsscript_semantics::callback_call_label_diagnostic(
+                        &call_name,
+                        label,
+                        arg.span.clone(),
+                    ));
+            }
+        }
         check_callback_call_args(analyzer, callee, args, callback_bindings);
         return;
     }

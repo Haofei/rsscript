@@ -301,9 +301,12 @@ of the contract.
 - A call's arguments are evaluated left to right **as written at the call site**,
   not in parameter-declaration order: the receiver first, then every explicit
   argument in source order whatever parameter it names, then each omitted
-  defaulted parameter's default expression in declaration order
-  (`crates/rsscript-semantics/src/call_binding.rs`; lowering consumes the
-  resulting `evaluation_index`).
+  defaulted parameter's default expression in declaration order. Each value is
+  then passed to the parameter it names, so `sub(right: 3, left: 10)` is
+  `sub(left: 10, right: 3)` (`crates/rsscript-semantics/src/call_binding.rs`
+  records both orders; lowering evaluates by `evaluation_index` and places by
+  `parameter_index`, ADR 0244). A closure value's parameters have no names, so
+  its arguments are positional and a label on one is `RS0203`.
 - `+`, `-`, `*`, `/`, `%` on `Int` are **checked**: overflow, division by zero,
   and modulo by zero are language-level runtime errors, never wrapping and never
   a host panic (`crates/rsscript-vm/src/reg_vm/value_ops.rs`). `Int` is 64-bit
@@ -362,7 +365,7 @@ Conformance anchors:
 | wake order after an event | `crates/rsscript-vm/src/reg_vm/scheduler.rs::one_event_wakes_parked_tasks_in_creation_order` |
 | the entry-point signature | `crates/rsscript-vm/src/reg_vm/scheduler.rs::run_program` (implementation; no dedicated test yet) |
 | checked `Int` arithmetic | `crates/rsscript-vm/src/reg_vm/value_ops.rs::eval_numeric_binary` |
-| call-argument evaluation order | `crates/rsscript-semantics/src/call_binding.rs` (module tests) |
+| call-argument evaluation order and binding | `crates/rsscript-semantics/src/call_binding.rs` (module tests), `crates/rsscript-sdk/tests/argument_order.rs` |
 | exactly-once resource cleanup on every terminal path | `crates/rsscript-sdk/tests/execution_state_corpus.rs` |
 
 The optional native JIT consumes an in-process, non-serialized IR and is released
