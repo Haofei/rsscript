@@ -1,7 +1,5 @@
 # RSScript Language Specification
 
-Status: breaking platform-neutral language revision.
-
 ## 1. Scope and invariants
 
 This specification defines RSScript's syntax, types, ownership, lifetime and
@@ -19,6 +17,16 @@ Parsing and compilation therefore take exactly two inputs: the source and the
 interfaces it declares. External implementation selection happens after
 compilation.
 
+Each construct has one spelling. The language keeps no compatibility aliases:
+a removed spelling is rejected, not accepted as a synonym.
+
+Examples are complete files. Each is labelled **Accepted**, or
+**Rejected — `CODE`** with the diagnostic it emits, and
+`crates/rsscript-sdk/tests/spec_examples.rs` checks every one; an
+`rsscript-interface` block is a companion interface for the examples after it
+in its section. [RSScript Semantics v0.7](RSScript_Semantics_v0.7.md) states
+the same conventions and carries the detail this document leaves out.
+
 ## 2. Files and declarations
 
 `.rss` files are implementation files. Every ordinary function declared in an
@@ -26,12 +34,29 @@ implementation file has a body. `.rssi` files are interfaces; their functions ar
 bodyless declarations. A bodyless interface function is an external symbol, not
 a distinct function kind in the language AST.
 
+```rsscript-interface
+struct Image {
+    width: Int,
+    height: Int
+}
+
+pub fn Image.resize(image: take Image, width: Int) -> fresh Image
+```
+
+**Accepted** — an implementation file checked against that interface
+
 ```rsscript
 module image.pipeline
-use collections.list.*
 
-pub fn resize(image: take Image, width: Int) -> fresh Image {
-    return Image.resize(image: take image, width: width)
+pub fn thumbnail(image: take Image) -> fresh Image {
+    return Image.resize(image: take image, width: 128)
+}
+
+fn main() -> Unit {
+    local image = Image(width: 640, height: 480)
+    let small = thumbnail(image: take image)
+    Output.write(message: Int.to_string(value: small.width))
+    return Unit
 }
 ```
 
@@ -53,6 +78,8 @@ function types.
 
 Protocols define explicit method contracts. `Dyn<P>` is the dynamic protocol
 dispatch type for protocol `P`; it does not represent permission or authority.
+
+**Accepted**
 
 ```rsscript
 protocol Render {
@@ -88,11 +115,24 @@ records owned function/value forms where specified by the type system.
 Retention is the only source declaration contract in this family because it
 affects escape checking. It is represented directly on a function declaration.
 
+**Accepted**
+
 ```rsscript
-fn Cache.put(cache: mut Cache, value: read Value) -> Unit
+class Cache {
+    values: List<String>
+}
+
+fn Cache.put(cache: mut Cache, value: String) -> Unit
     retains(value)
 {
-    Cache.store(cache: mut cache, value)
+    List.push(list: mut cache.values, value: value)
+    return Unit
+}
+
+fn main() -> Unit {
+    let cache = Cache(values: [])
+    Cache.put(cache: mut cache, value: "entry")
+    return Unit
 }
 ```
 
@@ -114,9 +154,36 @@ its fields, and its `drop` body, but may not construct one — every resource is
 produced by a bodyless function declared in an interface, which is where the
 host's cleanup contract exists.
 
+```rsscript-interface
+resource Connection {
+    id: Int
+}
+
+pub fn Connection.open(address: String) -> Connection
+
+pub fn Connection.send(connection: mut Connection, message: String) -> Unit
+```
+
+**Accepted** — the interface produces the resource; `with` bounds its lifetime
+
 ```rsscript
-with Stream.open(config) as stream {
-    Stream.consume(stream: mut stream)
+fn greet(address: String) -> Unit {
+    with Connection.open(address: address) as connection {
+        Connection.send(connection: mut connection, message: "hello")
+    }
+    return Unit
+}
+```
+
+**Rejected — `RS0702`** — an implementation file cannot construct a resource
+
+```rsscript
+resource Handle {
+    id: Int
+}
+
+fn make(id: Int) -> Handle {
+    return Handle(id: id)
 }
 ```
 
@@ -272,8 +339,10 @@ choice or runtime limits:
   only decides between arms that are already ready; it is not a priority over
   arms that are not.
 - Tasks start in creation order from a FIFO ready queue and run one at a time.
-  The order in which several tasks unblocked by the same event resume is **not**
-  specified, and no fairness bound is promised.
+  When one event makes several parked tasks runnable, they resume in creation
+  order, deterministically
+  (`crates/rsscript-vm/src/reg_vm/scheduler.rs::satisfy_waiters`). No fairness
+  bound is promised: a task runs until it suspends or completes.
 
 Provider descriptors additionally state whether an external function is
 cooperative, abort-safe, or not cancellation-aware, and whether it may block.
@@ -289,7 +358,9 @@ Conformance anchors:
 | resource escape from a `with` scope, and resource producers | `crates/rsscript-semantics/src/resource_flow.rs`, `crates/rsscript-semantics/src/resource_producers.rs` |
 | structured task lifecycle at runtime (created / completed / cancelled / peak-live counts) | `crates/rsscript-sdk/src/tests.rs::execution_usage_reports_structured_task_lifecycle` |
 | scheduler cancellation | `crates/rsscript-vm/src/reg_vm/scheduler.rs` (module tests) |
-| `select` tie-breaking and the entry-point signature | `crates/rsscript-vm/src/reg_vm/scheduler.rs::resolve_wait`, `::run_program` (implementation; no dedicated module test yet) |
+| `select` tie-breaking | `crates/rsscript-vm/src/reg_vm/scheduler.rs::a_select_with_several_finished_arms_picks_the_earliest_written_one`, `crates/rsscript-sdk/src/tests.rs::select_tie_breaking_picks_the_first_written_ready_arm` |
+| wake order after an event | `crates/rsscript-vm/src/reg_vm/scheduler.rs::one_event_wakes_parked_tasks_in_creation_order` |
+| the entry-point signature | `crates/rsscript-vm/src/reg_vm/scheduler.rs::run_program` (implementation; no dedicated test yet) |
 | checked `Int` arithmetic | `crates/rsscript-vm/src/reg_vm/value_ops.rs::eval_numeric_binary` |
 | call-argument evaluation order | `crates/rsscript-semantics/src/call_binding.rs` (module tests) |
 | exactly-once resource cleanup on every terminal path | `crates/rsscript-sdk/tests/execution_state_corpus.rs` |
@@ -298,12 +369,6 @@ The optional native JIT consumes an in-process, non-serialized IR and is release
 in lockstep with the VM. It is not an Artifact format and carries no independent
 compatibility promise. Its only FFI boundary is the explicitly versioned call
 frame described in [`native-jit-contract.md`](native-jit-contract.md).
-
-## 12. Removed surface
-
-This revision intentionally provides no compatibility aliases or legacy artifact
-reader for the removed language surface. Old sources must be migrated to ordinary
-declarations, structured `retains(param)`, `Dyn<P>`, and explicit host packages.
 
 ## See also
 

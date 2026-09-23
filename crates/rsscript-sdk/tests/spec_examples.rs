@@ -38,7 +38,10 @@ use rsscript_semantics::{analyze_source_with_interfaces, standard_package_interf
 use rsscript_syntax::lint_source;
 
 /// The documents whose examples are checked, relative to the repository root.
-const DOCUMENTS: &[&str] = &["docs/spec/RSScript_Semantics_v0.7.md"];
+const DOCUMENTS: &[&str] = &[
+    "docs/spec/RSScript_v0.7_Spec.md",
+    "docs/spec/RSScript_Semantics_v0.7.md",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Expectation {

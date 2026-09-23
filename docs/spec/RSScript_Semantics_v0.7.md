@@ -29,8 +29,8 @@ Three conventions are used throughout.
   `rsscript-lint` and are checked with `rss check --lint`. Fragments that are
   not complete files use a plain fence.
   `crates/rsscript-sdk/tests/spec_examples.rs` extracts every labelled example
-  from this document and fails if one no longer behaves as labelled, or if an
-  `rsscript` block has no label. A label is a claim about the checker; an
+  from this document and from the normative specification, and fails if one no
+  longer behaves as labelled or if an `rsscript` block has no label. A label is a claim about the checker; an
   accepted example that does not yet build is listed in §12.2.
 * **"Unspecified".** Where behaviour could not be confirmed from the
   implementation or from a passing test, this document says *unspecified*
