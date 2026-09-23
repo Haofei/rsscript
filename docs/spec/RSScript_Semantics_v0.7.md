@@ -4374,6 +4374,33 @@ Both rules exist so source inside `select { ... }` can never be discarded
 silently (`parser/stmt.rs::parse_select_arms` records what it cannot read in
 `SelectStmt::malformed_arm_spans`, and `source_bodies.rs` reports it).
 
+The binding has the type of the awaited operation's result — `got = await
+Receiver.recv(receiver: rx)?` binds an `Option<T>` — and is in scope only in its
+arm's body, where it shadows an outer binding of the same name. Every checker
+that tracks a local's type sees it: passing it where another type is expected is
+`RS0207`, returning it `RS0208`, and assigning it to a `let mut` of another type
+`RS0313` (`analyzer/assign.rs`; fixture `fail/select-arm-binding-assignment-type.rss`).
+
+**Rejected — `RS0313`**
+
+```rsscript
+async fn maybe(value: Int) -> Option<Int> {
+    return Some(value)
+}
+
+fn main() -> Int {
+    let mut winner = 0
+    task_group {
+        select {
+            got = await maybe(value: 2) => {
+                winner = got
+            }
+        }
+    }
+    return winner
+}
+```
+
 Each arm's *operation* is checked in an async context regardless of the enclosing
 function, while each arm's *body* is ordinary code in the enclosing context
 (`await_placement.rs::collect_statement`). A `select` body is an independent
@@ -5212,6 +5239,15 @@ What is left:
     (§9.5, "async checked HIR for loop"), and the §9.5 channel round trip, which
     lowers but fails Artifact verification ("typed call parameter disagrees with
     its argument register").
+* **A nested binding that reuses an outer name overwrites the outer binding at
+  run time.** The checker scopes a `let` in a nested block, a `match` or
+  `select` arm binding, and a `for` binding to their block, but MIR lowering
+  keeps one storage place per name per function, so after the block the outer
+  name reads the inner value: `let x = 1` then `if true { let x = 2 }` then
+  `return x` checks clean and returns `2`, and a `match` arm or `for` binding
+  named like an outer local clobbers it the same way. When the two types differ
+  the read fails at run time instead ("reg VM expected String, got `1`"). The
+  fix belongs in lowering: a place per binding, not per name.
 * **An unannotated `let` closure cannot be called.** `let f = || { … }` gives
   `f` no type (§3.2), so `f()` is `RS0206` although the same closure bound with
   `local`, or with an annotation, is callable (§5.9).

@@ -190,7 +190,21 @@ impl<'a> AssignChecker<'a> {
             Stmt::Select(stmt) => {
                 for arm in &stmt.arms {
                     self.expr(&arm.operation);
+                    // The arm binding holds the awaited operation's result, so
+                    // it has that result's type. Unbound, an assignment from
+                    // it (`winner = got`) went unchecked, and a binding that
+                    // shadowed an outer name was checked as the outer one.
+                    self.push_scope();
+                    if arm.binding != "_" {
+                        let type_name = self.infer_type(&arm.operation);
+                        self.insert(
+                            arm.binding.clone(),
+                            AssignBinding::ImmutableLocal,
+                            type_name,
+                        );
+                    }
                     self.block(&arm.body);
+                    self.pop_scope();
                 }
             }
             Stmt::LetElse(stmt) => {

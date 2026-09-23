@@ -1,0 +1,21 @@
+// expect: RS0313
+
+// A `select` arm binding holds its awaited operation's result, so it has that
+// result's type: here `Option<Int>`, which cannot be assigned to an `Int`. The
+// binding used to be left out of the assignment check's scope, so this checked
+// clean and failed at run time.
+async fn maybe(value: Int) -> Option<Int> {
+    return Some(value)
+}
+
+fn main() -> Int {
+    let mut winner = 0
+    task_group {
+        select {
+            got = await maybe(value: 2) => {
+                winner = got
+            }
+        }
+    }
+    return winner
+}

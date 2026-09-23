@@ -1,0 +1,22 @@
+// A `select` arm binding is typed from its awaited operation and shadows an
+// outer binding of the same name inside the arm: `got` is the `Int` result
+// there, not the outer `String`, so assigning it to an `Int` checks. (The
+// outer `got` is not read after the `select`: a nested binding that reuses an
+// outer name currently overwrites it at run time, §12.2.)
+async fn ready(value: Int) -> Int {
+    return value
+}
+
+fn main() -> Int {
+    let got = "outer"
+    Output.write(message: got)
+    let mut winner = 0
+    task_group {
+        select {
+            got = await ready(value: 7) => {
+                winner = got
+            }
+        }
+    }
+    return winner
+}
