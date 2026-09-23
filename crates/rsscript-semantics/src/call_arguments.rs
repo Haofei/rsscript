@@ -149,7 +149,7 @@ pub fn call_argument_diagnostics(
                     arg.span.clone(),
                     "argument must be named",
                 )
-                .with_cause("Public, core, native, constructor, and protocol calls require named arguments. Constructor shorthand is only allowed for a bare identifier that matches a field name; positional arguments are only allowed for private helper calls and receiver-call shorthand.")
+                .with_cause("Public, core, interface, constructor, and protocol calls require named arguments. Two shorthands bind a bare identifier by name instead: one named like a `read` parameter binds to that parameter in any call (`Int.to_string(value)`), and in a constructor one named like a field binds to that field (`Point(x)`). Positional arguments are allowed only in private helper calls and receiver-call shorthand.")
                 .with_fix(
                     "add_argument_name",
                     "Write the argument as `name: value`.",

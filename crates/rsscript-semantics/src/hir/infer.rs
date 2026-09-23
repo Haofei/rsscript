@@ -620,10 +620,11 @@ pub(super) fn infer_arg_expr_type(
         // (`(a + b, "x")` -> `A = Int`).
         Expr::Binary { .. } => infer_hir_expr_type(hir, expr, value_types),
         // An element read off a typed container proves the element type
-        // (`(xs[0], xs[1])` with `xs: List<Int>` -> `A = B = Int`). This is
-        // deliberately local to argument-position inference: the checker does
-        // not give `let x = xs[0]` a type, and widening that is a separate
-        // change with a much larger blast radius.
+        // (`(xs[0], xs[1])` with `xs: List<Int>` -> `A = B = Int`). This is the
+        // rule `infer_hir_expr_type` applies too, so `let x = xs[0]` is an
+        // `Int` as well; here the base goes through argument-position
+        // inference, so a base only that inference can type still proves its
+        // element.
         Expr::Index { base, .. } => {
             indexed_element_type(&infer_arg_expr_type(hir, base, value_types)?)
         }
