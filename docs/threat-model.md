@@ -56,10 +56,10 @@ Artifact Bundle again in the child, accepts no dynamic Provider or library path,
 and applies process-tree and resource limits. Its opt-in Linux reference
 profiles can additionally require `no_new_privs`, user/mount/network namespaces,
 a Landlock ABI-v5 filesystem allowlist rooted at a parent-owned path, or a
-narrow Linux x86-64 seccomp deny-list. A separate cgroup-v2 profile creates a
-child boundary only where the parent has explicit controller delegation. A
-missing kernel feature, denied control, or unavailable cgroup delegation
-rejects that profile; it never falls back to the ambient boundary.
+narrow Linux x86-64/AArch64 seccomp deny-list. A separate cgroup-v2 profile
+creates a child boundary only where the parent has explicit controller
+delegation. A missing kernel feature, denied control, or unavailable cgroup
+delegation rejects that profile; it never falls back to the ambient boundary.
 
 These profiles are defense in depth rather than a complete container. A
 deployment that requires filesystem, network, identity, namespace, or syscall

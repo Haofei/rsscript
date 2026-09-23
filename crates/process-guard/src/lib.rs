@@ -260,11 +260,17 @@ pub const fn strict_isolation_support(control: StrictIsolationControl) -> LimitS
             | StrictIsolationControl::MountNamespace
             | StrictIsolationControl::NetworkNamespace => LimitSupport::Enforced,
             StrictIsolationControl::SeccompFilter => {
-                #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+                #[cfg(all(
+                    target_os = "linux",
+                    any(target_arch = "x86_64", target_arch = "aarch64")
+                ))]
                 {
                     LimitSupport::Enforced
                 }
-                #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+                #[cfg(not(all(
+                    target_os = "linux",
+                    any(target_arch = "x86_64", target_arch = "aarch64")
+                )))]
                 {
                     LimitSupport::Unsupported
                 }
@@ -585,79 +591,157 @@ fn close_raw_fd(descriptor: i64) -> io::Result<()> {
     }
 }
 
-/// Install the runner's narrow seccomp filter for the current Linux process.
+/// The system-call ABIs the runner seccomp filter has a reference layout for.
 ///
-/// The filter rejects ambient network socket creation/use and process-control
-/// syscalls while leaving ordinary runtime, allocator, and dynamic-loader
-/// syscalls available. It is intentionally a defence-in-depth deny-list, not
-/// a claim of complete syscall or container isolation. The caller must select
-/// it explicitly and treat an unsupported kernel as a hard error.
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-pub fn install_current_process_runner_seccomp_filter() -> io::Result<()> {
-    const BPF_LD_W_ABS: u16 = 0x20;
-    const BPF_JMP_JEQ_K: u16 = 0x15;
-    const BPF_RET_K: u16 = 0x06;
-    const SECCOMP_MODE_FILTER: libc::c_ulong = 1;
-    const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
-    const SECCOMP_DATA_NR_OFFSET: u32 = 0;
-    const DENY_ERRNO: u32 = SECCOMP_RET_ERRNO | (libc::EPERM as u32);
+/// The filter's syscall numbers come from `libc::SYS_*`, which are per
+/// architecture, and its first check pins the architecture's own audit value,
+/// so each listed target gets a filter written for that target.
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+mod runner_seccomp {
+    /// A `struct sock_filter` instruction (`linux/filter.h`).
+    #[repr(C)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(super) struct SeccompFilter {
+        pub(super) code: u16,
+        pub(super) jt: u8,
+        pub(super) jf: u8,
+        pub(super) k: u32,
+    }
+
+    /// A `struct sock_fprog` (`linux/filter.h`).
+    #[repr(C)]
+    pub(super) struct SeccompProgram {
+        pub(super) length: u16,
+        pub(super) filter: *const SeccompFilter,
+    }
+
+    // Every opcode, action, and offset below is taken from `libc`'s
+    // transcription of the kernel UAPI headers rather than written by hand;
+    // the audit flag bits and the x32 bit, which `libc` does not export for
+    // these targets, are the only spelled-out values, and the unit tests pin
+    // the resulting audit arch values.
+    // A hand-written `SECCOMP_MODE_FILTER = 1` once asked `prctl` for
+    // `SECCOMP_MODE_STRICT` (1) instead of `SECCOMP_MODE_FILTER` (2): the
+    // kernel then ignored the program and SIGKILLed the child on its next
+    // syscall, before `execve` completed.
+    pub(super) const SECCOMP_MODE_FILTER: libc::c_ulong =
+        libc::SECCOMP_MODE_FILTER as libc::c_ulong;
+    pub(super) const BPF_LD_W_ABS: u16 = (libc::BPF_LD | libc::BPF_W | libc::BPF_ABS) as u16;
+    pub(super) const BPF_JMP_JEQ_K: u16 = (libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K) as u16;
+    #[cfg(target_arch = "x86_64")]
+    pub(super) const BPF_JMP_JGE_K: u16 = (libc::BPF_JMP | libc::BPF_JGE | libc::BPF_K) as u16;
+    pub(super) const BPF_RET_K: u16 = (libc::BPF_RET | libc::BPF_K) as u16;
+    pub(super) const SECCOMP_DATA_NR_OFFSET: u32 =
+        std::mem::offset_of!(libc::seccomp_data, nr) as u32;
+    pub(super) const SECCOMP_DATA_ARCH_OFFSET: u32 =
+        std::mem::offset_of!(libc::seccomp_data, arch) as u32;
+    pub(super) const RET_ALLOW: u32 = libc::SECCOMP_RET_ALLOW;
+    pub(super) const RET_DENY: u32 = libc::SECCOMP_RET_ERRNO | (libc::EPERM as u32);
+    pub(super) const RET_KILL_PROCESS: u32 = libc::SECCOMP_RET_KILL_PROCESS;
+
+    // `linux/audit.h`: AUDIT_ARCH_<arch> = EM_<arch> | __AUDIT_ARCH_64BIT |
+    // __AUDIT_ARCH_LE. `libc` exports the ELF machine numbers, not the audit
+    // values, so the two flag bits are spelled out here.
+    const AUDIT_ARCH_64BIT: u32 = 0x8000_0000;
+    const AUDIT_ARCH_LE: u32 = 0x4000_0000;
+    #[cfg(target_arch = "x86_64")]
+    pub(super) const AUDIT_ARCH: u32 = libc::EM_X86_64 as u32 | AUDIT_ARCH_64BIT | AUDIT_ARCH_LE;
+    #[cfg(target_arch = "aarch64")]
+    pub(super) const AUDIT_ARCH: u32 = libc::EM_AARCH64 as u32 | AUDIT_ARCH_64BIT | AUDIT_ARCH_LE;
+    /// `asm/unistd.h`'s `__X32_SYSCALL_BIT`. `libc` exports it only when
+    /// compiling for the x32 target itself.
+    #[cfg(target_arch = "x86_64")]
+    pub(super) const X32_SYSCALL_BIT: u32 = 0x4000_0000;
+
+    /// Keep this list deliberately small and auditable. The pre-exec installer
+    /// must leave `execve` and the dynamic loader's ordinary syscalls available
+    /// so the runner can start; the filter instead removes socket entry points
+    /// and kernel interfaces that would widen process authority after launch.
+    pub(super) const DENIED: [libc::c_long; 19] = [
+        libc::SYS_socket,
+        libc::SYS_socketpair,
+        libc::SYS_connect,
+        libc::SYS_bind,
+        libc::SYS_listen,
+        libc::SYS_accept,
+        libc::SYS_accept4,
+        libc::SYS_sendto,
+        libc::SYS_sendmsg,
+        libc::SYS_recvfrom,
+        libc::SYS_recvmsg,
+        libc::SYS_shutdown,
+        libc::SYS_ptrace,
+        libc::SYS_bpf,
+        libc::SYS_perf_event_open,
+        libc::SYS_kexec_load,
+        libc::SYS_init_module,
+        libc::SYS_finit_module,
+        libc::SYS_delete_module,
+    ];
+
+    /// Instructions before the deny list: the architecture pin, the syscall
+    /// number load, and on x86-64 the x32-ABI rejection.
+    #[cfg(target_arch = "x86_64")]
+    const PREAMBLE: usize = 6;
+    #[cfg(target_arch = "aarch64")]
+    const PREAMBLE: usize = 4;
+    pub(super) const LENGTH: usize = PREAMBLE + 2 * DENIED.len() + 1;
 
     const fn instruction(code: u16, jt: u8, jf: u8, k: u32) -> SeccompFilter {
         SeccompFilter { code, jt, jf, k }
     }
-    const fn deny(syscall: libc::c_long) -> [SeccompFilter; 2] {
-        [
-            instruction(BPF_JMP_JEQ_K, 0, 1, syscall as u32),
-            instruction(BPF_RET_K, 0, 0, DENY_ERRNO),
-        ]
+
+    const fn program() -> [SeccompFilter; LENGTH] {
+        let mut filter = [instruction(0, 0, 0, 0); LENGTH];
+        // A syscall made through another ABI carries another audit arch and
+        // other numbers (x86-64's `int 0x80` i386 entry, for one), so the deny
+        // list below would not describe it. Such a call kills the process.
+        filter[0] = instruction(BPF_LD_W_ABS, 0, 0, SECCOMP_DATA_ARCH_OFFSET);
+        filter[1] = instruction(BPF_JMP_JEQ_K, 1, 0, AUDIT_ARCH);
+        filter[2] = instruction(BPF_RET_K, 0, 0, RET_KILL_PROCESS);
+        filter[3] = instruction(BPF_LD_W_ABS, 0, 0, SECCOMP_DATA_NR_OFFSET);
+        // x32 syscalls share x86-64's audit arch but set `__X32_SYSCALL_BIT`
+        // in the number, so an x32 `socket` would not equal `SYS_socket`.
+        // Every such number is denied.
+        #[cfg(target_arch = "x86_64")]
+        {
+            filter[4] = instruction(BPF_JMP_JGE_K, 0, 1, X32_SYSCALL_BIT);
+            filter[5] = instruction(BPF_RET_K, 0, 0, RET_DENY);
+        }
+        let mut at = PREAMBLE;
+        let mut index = 0;
+        while index < DENIED.len() {
+            filter[at] = instruction(BPF_JMP_JEQ_K, 0, 1, DENIED[index] as u32);
+            filter[at + 1] = instruction(BPF_RET_K, 0, 0, RET_DENY);
+            at += 2;
+            index += 1;
+        }
+        filter[at] = instruction(BPF_RET_K, 0, 0, RET_ALLOW);
+        filter
     }
 
-    // Keep this list deliberately small and auditable. The pre-exec installer
-    // must leave `execve` and the dynamic loader's ordinary syscalls available
-    // so the runner can start; the filter instead removes socket entry points
-    // and kernel interfaces that would widen process authority after launch.
-    const FILTER: [SeccompFilter; 40] = [
-        instruction(BPF_LD_W_ABS, 0, 0, SECCOMP_DATA_NR_OFFSET),
-        deny(libc::SYS_socket)[0],
-        deny(libc::SYS_socket)[1],
-        deny(libc::SYS_socketpair)[0],
-        deny(libc::SYS_socketpair)[1],
-        deny(libc::SYS_connect)[0],
-        deny(libc::SYS_connect)[1],
-        deny(libc::SYS_bind)[0],
-        deny(libc::SYS_bind)[1],
-        deny(libc::SYS_listen)[0],
-        deny(libc::SYS_listen)[1],
-        deny(libc::SYS_accept)[0],
-        deny(libc::SYS_accept)[1],
-        deny(libc::SYS_accept4)[0],
-        deny(libc::SYS_accept4)[1],
-        deny(libc::SYS_sendto)[0],
-        deny(libc::SYS_sendto)[1],
-        deny(libc::SYS_sendmsg)[0],
-        deny(libc::SYS_sendmsg)[1],
-        deny(libc::SYS_recvfrom)[0],
-        deny(libc::SYS_recvfrom)[1],
-        deny(libc::SYS_recvmsg)[0],
-        deny(libc::SYS_recvmsg)[1],
-        deny(libc::SYS_shutdown)[0],
-        deny(libc::SYS_shutdown)[1],
-        deny(libc::SYS_ptrace)[0],
-        deny(libc::SYS_ptrace)[1],
-        deny(libc::SYS_bpf)[0],
-        deny(libc::SYS_bpf)[1],
-        deny(libc::SYS_perf_event_open)[0],
-        deny(libc::SYS_perf_event_open)[1],
-        deny(libc::SYS_kexec_load)[0],
-        deny(libc::SYS_kexec_load)[1],
-        deny(libc::SYS_init_module)[0],
-        deny(libc::SYS_init_module)[1],
-        deny(libc::SYS_finit_module)[0],
-        deny(libc::SYS_finit_module)[1],
-        deny(libc::SYS_delete_module)[0],
-        deny(libc::SYS_delete_module)[1],
-        instruction(BPF_RET_K, 0, 0, 0x7fff_0000),
-    ];
+    /// A `static`, not a `const`, so the pointer handed to `prctl` names one
+    /// fixed address rather than relying on constant promotion.
+    pub(super) static FILTER: [SeccompFilter; LENGTH] = program();
+}
+
+/// Install the runner's narrow seccomp filter for the current Linux process.
+///
+/// The filter pins the target's own syscall ABI, then rejects ambient network
+/// socket creation/use and process-control syscalls with `EPERM` while leaving
+/// ordinary runtime, allocator, and dynamic-loader syscalls available. It is
+/// intentionally a defence-in-depth deny-list, not a claim of complete syscall
+/// or container isolation. The caller must select it explicitly and treat an
+/// unsupported kernel as a hard error.
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+pub fn install_current_process_runner_seccomp_filter() -> io::Result<()> {
+    use runner_seccomp::{FILTER, SECCOMP_MODE_FILTER, SeccompProgram};
 
     // SAFETY: PR_GET_NO_NEW_PRIVS takes only integer arguments (no pointers), so
     // this prctl FFI call has no memory-safety preconditions; it merely reads the
@@ -673,9 +757,9 @@ pub fn install_current_process_runner_seccomp_filter() -> io::Result<()> {
         length: u16::try_from(FILTER.len()).expect("static filter length fits u16"),
         filter: FILTER.as_ptr(),
     };
-    // SAFETY: `program` points to the fixed, bounded BPF program above for the
-    // duration of the syscall. The kernel validates every instruction before
-    // installing this irreversible filter.
+    // SAFETY: `program` points to the fixed, bounded BPF program in a `static`
+    // for the duration of the syscall. The kernel validates every instruction
+    // before installing this irreversible filter.
     if unsafe {
         libc::prctl(
             libc::PR_SET_SECCOMP,
@@ -699,30 +783,16 @@ pub fn install_current_process_runner_seccomp_filter() -> io::Result<()> {
     }
 }
 
-/// The reference BPF layout is currently implemented only for Linux x86-64.
-#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+/// The reference BPF layout is implemented only for Linux x86-64 and AArch64.
+#[cfg(not(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+)))]
 pub fn install_current_process_runner_seccomp_filter() -> io::Result<()> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
-        "runner seccomp filter is available only on Linux x86-64",
+        "runner seccomp filter is available only on Linux x86-64 and AArch64",
     ))
-}
-
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct SeccompFilter {
-    code: u16,
-    jt: u8,
-    jf: u8,
-    k: u32,
-}
-
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-#[repr(C)]
-struct SeccompProgram {
-    length: u16,
-    filter: *const SeccompFilter,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1805,7 +1875,10 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    #[cfg(not(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )))]
     #[test]
     fn unavailable_strict_control_fails_before_child_spawn() {
         let mut command = if cfg!(windows) {
@@ -2009,6 +2082,108 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Run the runner filter's BPF program over one `(arch, nr)` pair the way
+    /// the kernel would. The program uses four opcodes; any other is a bug in
+    /// the program, not an input this evaluator should model.
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    fn evaluate_runner_seccomp_filter(arch: u32, nr: u32) -> u32 {
+        use super::runner_seccomp::*;
+
+        let mut accumulator = 0;
+        let mut pc = 0;
+        loop {
+            let instruction = FILTER
+                .get(pc)
+                .copied()
+                .unwrap_or_else(|| panic!("filter fell off its end at {pc}"));
+            let taken = match instruction.code {
+                BPF_LD_W_ABS => {
+                    accumulator = match instruction.k {
+                        SECCOMP_DATA_NR_OFFSET => nr,
+                        SECCOMP_DATA_ARCH_OFFSET => arch,
+                        offset => panic!("unexpected seccomp_data offset {offset}"),
+                    };
+                    pc += 1;
+                    continue;
+                }
+                BPF_JMP_JEQ_K => accumulator == instruction.k,
+                #[cfg(target_arch = "x86_64")]
+                BPF_JMP_JGE_K => accumulator >= instruction.k,
+                BPF_RET_K => return instruction.k,
+                code => panic!("unexpected BPF opcode {code:#x}"),
+            };
+            let offset = if taken {
+                instruction.jt
+            } else {
+                instruction.jf
+            };
+            pc += 1 + usize::from(offset);
+        }
+    }
+
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    #[test]
+    fn runner_seccomp_program_pins_the_abi_and_denies_exactly_its_list() {
+        use super::runner_seccomp::*;
+
+        // `prctl(PR_SET_SECCOMP, 1, ..)` is SECCOMP_MODE_STRICT, which ignores
+        // the program and SIGKILLs the caller on its next syscall.
+        assert_eq!(SECCOMP_MODE_FILTER, 2);
+        assert_eq!(FILTER.len(), LENGTH);
+        for syscall in DENIED {
+            let nr = u32::try_from(syscall).expect("syscall numbers are small");
+            assert_eq!(
+                evaluate_runner_seccomp_filter(AUDIT_ARCH, nr),
+                RET_DENY,
+                "syscall {syscall} must be denied"
+            );
+        }
+        for syscall in [
+            libc::SYS_read,
+            libc::SYS_write,
+            libc::SYS_openat,
+            libc::SYS_mmap,
+            libc::SYS_execve,
+            libc::SYS_prctl,
+            libc::SYS_prlimit64,
+            libc::SYS_getpid,
+            libc::SYS_exit_group,
+        ] {
+            let nr = u32::try_from(syscall).expect("syscall numbers are small");
+            assert_eq!(
+                evaluate_runner_seccomp_filter(AUDIT_ARCH, nr),
+                RET_ALLOW,
+                "syscall {syscall} must stay available"
+            );
+        }
+        // Another ABI's audit arch (here i386's, EM_386 | __AUDIT_ARCH_LE) is
+        // killed whatever the number, including ones the native ABI allows.
+        let foreign = 3 | 0x4000_0000;
+        for nr in [0, 41, 102, 359] {
+            assert_eq!(
+                evaluate_runner_seccomp_filter(foreign, nr),
+                RET_KILL_PROCESS
+            );
+        }
+        #[cfg(target_arch = "x86_64")]
+        {
+            let x32_socket = X32_SYSCALL_BIT | u32::try_from(libc::SYS_socket).expect("small");
+            assert_eq!(
+                evaluate_runner_seccomp_filter(AUDIT_ARCH, x32_socket),
+                RET_DENY
+            );
+            assert_eq!(AUDIT_ARCH, 0xc000_003e, "linux/audit.h AUDIT_ARCH_X86_64");
+        }
+        #[cfg(target_arch = "aarch64")]
+        assert_eq!(AUDIT_ARCH, 0xc000_00b7, "linux/audit.h AUDIT_ARCH_AARCH64");
     }
 
     #[cfg(any(target_os = "linux", target_os = "android"))]
