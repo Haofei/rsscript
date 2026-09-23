@@ -612,6 +612,64 @@ mod tests {
         );
     }
 
+    /// Among `select` arms already finished when the `select` resolves, the
+    /// earliest-written arm wins.
+    ///
+    /// The arm order is rotated against task creation order, so the winning
+    /// arm is not always the lowest task id, and the arms are marked finished
+    /// last-written first, so marking order cannot decide it either. Each case
+    /// runs in a fresh VM, whose `tasks` map has fresh hash seeds.
+    #[test]
+    fn a_select_with_several_finished_arms_picks_the_earliest_written_one() {
+        for arm_count in 2..=6 {
+            for rotation in 0..arm_count {
+                let mut vm = RegVm::new(cancellation_unit(), vec![], HashMap::new());
+                let worker = Rc::clone(&vm.unit.functions[1]);
+                let selector = vm.create_task(Rc::clone(&worker), Vec::new());
+                let created = (0..arm_count)
+                    .map(|_| vm.create_task(Rc::clone(&worker), Vec::new()))
+                    .collect::<Vec<_>>();
+                let handles = (0..arm_count)
+                    .map(|arm| created[(arm + rotation) % arm_count])
+                    .collect::<Vec<_>>();
+                for (arm, handle) in handles.iter().enumerate().rev() {
+                    vm.tasks.get_mut(handle).expect("arm task").done =
+                        Some(VmValue::Int(100 + arm as i64));
+                }
+                vm.tasks.get_mut(&selector).expect("selector").wait = Some(Wait::Select {
+                    handles: handles.clone(),
+                    winner_dst: 1,
+                    value_dst: 2,
+                });
+                vm.ready_queue.clear();
+
+                vm.resolve_wait(selector)
+                    .expect("a finished arm resolves the select");
+
+                let saved = vm.tasks[&selector].saved.as_ref().expect("parked selector");
+                assert!(
+                    matches!(saved.stack[1], VmValue::Int(0)),
+                    "{arm_count} arms, rotation {rotation}: arm 0 must win, got index {:?}",
+                    saved.stack[1]
+                );
+                assert!(
+                    matches!(saved.stack[2], VmValue::Int(100)),
+                    "{arm_count} arms, rotation {rotation}: the winner's value must be arm 0's"
+                );
+                assert_eq!(
+                    vm.ready_queue.iter().copied().collect::<Vec<_>>(),
+                    [selector]
+                );
+                assert!(
+                    handles[1..]
+                        .iter()
+                        .all(|loser| !vm.tasks.contains_key(loser)),
+                    "every other arm is reaped"
+                );
+            }
+        }
+    }
+
     #[test]
     fn explicit_cancel_rejects_an_unknown_handle() {
         let mut vm = RegVm::new(cancellation_unit(), vec![], HashMap::new());

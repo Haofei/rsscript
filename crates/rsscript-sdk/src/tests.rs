@@ -3537,6 +3537,158 @@ fn a_binding_arm_returns_the_scrutinee() {
     );
 }
 
+/// `select` tie-breaking is by source order: among arms that have finished when
+/// the `select` resolves, the earliest-written arm wins.
+///
+/// `both_immediate` runs a two-arm `select` whose arms both complete without
+/// waiting, 32 times per run; `both_queued` fills both channels before the
+/// `select`, creating and filling the second-written arm's channel first so
+/// neither creation nor fill order favours the first arm; `only_second_ready`
+/// pins that source order is a tie-break and not a priority. The program runs
+/// in eight fresh VMs, each with its own hash seeds for the scheduler's task
+/// table, so an order that leaked from hashing would show up as a changed
+/// result.
+#[test]
+fn select_tie_breaking_picks_the_first_written_ready_arm() {
+    const SOURCE: &str = r#"
+async fn ready(value: Int) -> Int {
+    return value
+}
+
+// Both arms complete without waiting on anything.
+fn both_immediate() -> Int {
+    let mut winner = 0
+    task_group {
+        select {
+            first = await ready(value: 1) => { winner = first }
+            second = await ready(value: 2) => { winner = second }
+        }
+    }
+    return winner
+}
+
+// Both channels hold a value before the `select` starts. The right channel is
+// created and filled first, so creation order and fill order both favour the
+// second-written arm; source order still picks the first.
+async fn both_queued() -> Result<Int, ChannelError> {
+    let mut right = Channel.bounded<Int>(capacity: 1)?
+    let mut left = Channel.bounded<Int>(capacity: 1)?
+    let right_tx = Channel.sender(channel: right)
+    let left_tx = Channel.sender(channel: left)
+    let right_rx = Channel.receiver(channel: mut right)?
+    let left_rx = Channel.receiver(channel: mut left)?
+    local right_value = 2
+    local left_value = 1
+    await Sender.send(sender: right_tx, value: take right_value)?
+    await Sender.send(sender: left_tx, value: take left_value)?
+    let mut winner = 0
+    task_group {
+        select {
+            first = await Receiver.recv(receiver: left_rx)? => {
+                match first {
+                    Some(value) => { winner = value }
+                    None => { winner = 0 - 1 }
+                }
+            }
+            second = await Receiver.recv(receiver: right_rx)? => {
+                match second {
+                    Some(value) => { winner = value }
+                    None => { winner = 0 - 2 }
+                }
+            }
+        }
+    }
+    return Ok(winner)
+}
+
+// Source order is a tie-break, not a priority: an arm that is not ready never
+// beats one that is.
+async fn only_second_ready() -> Result<Int, ChannelError> {
+    let mut left = Channel.bounded<Int>(capacity: 1)?
+    let mut right = Channel.bounded<Int>(capacity: 1)?
+    let left_tx = Channel.sender(channel: left)
+    let right_tx = Channel.sender(channel: right)
+    let left_rx = Channel.receiver(channel: mut left)?
+    let right_rx = Channel.receiver(channel: mut right)?
+    local right_value = 2
+    await Sender.send(sender: right_tx, value: take right_value)?
+    let mut winner = 0
+    task_group {
+        select {
+            first = await Receiver.recv(receiver: left_rx)? => {
+                match first {
+                    Some(value) => { winner = value }
+                    None => { winner = 0 - 1 }
+                }
+            }
+            second = await Receiver.recv(receiver: right_rx)? => {
+                match second {
+                    Some(value) => { winner = value }
+                    None => { winner = 0 - 2 }
+                }
+            }
+        }
+    }
+    return Ok(winner)
+}
+
+fn races() -> Result<Int, ChannelError> {
+    let mut first_wins = 0
+    let mut round = 0
+    while round < 32 {
+        if both_immediate() == 1 {
+            first_wins = first_wins + 1
+        }
+        round = round + 1
+    }
+    let mut queued = 0
+    let mut not_ready = 0
+    task_group {
+        async let queued_race = both_queued()
+        async let second_race = only_second_ready()
+        queued = await queued_race?
+        not_ready = await second_race?
+    }
+    return Ok(first_wins * 100 + queued * 10 + not_ready)
+}
+
+fn main() -> Int {
+    match races() {
+        Ok(outcome) => { return outcome }
+        Err(_) => { return 0 - 1 }
+    }
+}
+"#;
+
+    // The channel API lives in the standard `async` package interface.
+    let snapshot = FrontendInputSnapshot::from_sources(
+        [("select-tie-break.rss", SOURCE)],
+        rsscript_semantics::standard_package_interfaces()
+            .iter()
+            .copied(),
+    );
+    let built = Compiler
+        .compile_snapshot(&snapshot)
+        .expect("select tie-break program compiles");
+    let admitted = admitted(built);
+    let linked = Runtime::default()
+        .link(&admitted)
+        .expect("link select tie-break program");
+    for run in 0..8 {
+        let report = linked.execute(ExecutionRequest::default());
+        assert_eq!(
+            report.termination_reason(),
+            TerminationReason::Completed,
+            "run {run}"
+        );
+        assert_eq!(
+            report.wire_value(),
+            Some(&provider::WireValue::Int { value: 3212 }),
+            "run {run}: 32 first-arm wins, the first-written queued arm (1), and the only ready arm (2)"
+        );
+    }
+}
+
 /// `RS0307` on a literal carries the rewrite, not only advice.
 ///
 /// The measured regression was a candidate following the card's "manage first"
